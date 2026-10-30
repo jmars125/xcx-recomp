@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "host.h"
 #include "vk.h"
 #include "platform/platform.h"
@@ -126,7 +127,13 @@ void rec_drain(void) {
 void rec_begin(VkCommandBuffer cb) {
     static int mode = -1;
     if (mode < 0) {
-        mode = rt_knob("VK_RECORDER", "1");
+        // Default off on AMD GPUs: with the recorder their drivers lost the device within the first frames or at menu
+        // opens, 1 boot in 3 on an RX 9070 XT, and XCX_VK_RECORDER=0 ended it for three users (issue #5); under RADV
+        // the kernel saw an illegal opcode at the end of a command buffer (issue #40). The cause is not found.
+        const char *set = cfg_get("XCX_VK_RECORDER");
+        mode = rt_knob("VK_RECORDER", vk_caps.amd ? "0" : "1");
+        if (!mode && vk_caps.amd && !(set && *set))
+            rt_log("vk_rec: no recorder thread on AMD GPUs (XCX_VK_RECORDER=1 turns it on)");
         if (mode) {
             plat_event_init(&wake_ev, 0, 0);
             rec_prio = plat_thread_priority_get();
