@@ -87,12 +87,6 @@ class Layout:
         return [str(p) for p in need if not p.exists()]
 
 
-def cache_dir():
-    """$XDG_CACHE_HOME, else ~/.cache: the Linux release runs from a read-only AppImage mount, so its temp goes here."""
-    xdg = os.environ.get('XDG_CACHE_HOME')
-    return Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / '.cache'
-
-
 def release_python(root):
     return root / 'python' / ('python.exe' if WIN else 'bin/python3')
 
@@ -118,7 +112,10 @@ def release_layout(root):
         runtime_lib=root / 'runtime' / 'libxcxrt.a',
         ninja=root / 'bin' / ('ninja' + EXE), hactool=root / 'bin' / ('hactool' + EXE),
         xlate=root / 'bin' / ('xcx_xlate' + EXE), dlls=release_dlls(root) if WIN else (root / 'bin' / 'libSDL3.so.0',),
-        ini_example=root / 'xcx.ini.example', temp=root / 'temp' if WIN else cache_dir() / 'xcx-setup',
+        ini_example=root / 'xcx.ini.example',
+        # Linux: None, the install folder's .setup-temp (installer/cli.py): the AppImage is mounted read-only, and on
+        # a Steam Deck /home is often too full for the generated C while the install folder is on the SD card
+        temp=root / 'temp' if WIN else None,
         sysroot=None if WIN else root / 'llvm' / 'sysroot')
 
 
