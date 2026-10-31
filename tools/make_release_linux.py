@@ -376,6 +376,12 @@ def build_python(out, llvm, sysroot):
 
 # ---- licences, AppImage entry ------------------------------------------------------------------------------------------
 
+def mng_license():
+    """MacNativeGames' licence: from refs/ when it is checked out, else the copy beside its vendored extractors."""
+    ref = MAIN_ROOT / 'refs' / 'MacNativeGames' / 'LICENSE'
+    return ref if ref.is_file() else ROOT / 'tools' / 'vendor' / 'macnativegames' / 'LICENSE'
+
+
 def collect_licenses(out, sysroot):
     lic = out / 'licenses'
     lic.mkdir(parents=True, exist_ok=True)
@@ -393,7 +399,7 @@ def collect_licenses(out, sysroot):
         (out / 'python' / 'lib' / f'python{sys_version(out)}' / 'LICENSE.txt', 'python-LICENSE.txt'),
         (ROOT / 'runtime' / 'shaders' / 'ffx' / 'LICENSE.txt', 'FidelityFX-FSR-LICENSE.txt'),
         (WORK / 'hactool-linux' / 'LICENSE', 'hactool-LICENSE.txt'),
-        (MAIN_ROOT / 'refs' / 'MacNativeGames' / 'LICENSE', 'MacNativeGames-LICENSE.txt'),
+        (mng_license(), 'MacNativeGames-LICENSE.txt'),
     ]
     for src, name in pairs:
         shutil.copy2(src, lic / name)
