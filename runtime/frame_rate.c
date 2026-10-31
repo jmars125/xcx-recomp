@@ -77,6 +77,10 @@ static int xcx_rate = -2;
 static _Atomic uint32_t *xcx_words;
 
 static void xcx_rate_store(double hz) {
+    static double stored;
+    if (hz == stored) return;
+    if ((hz == 30) != (stored == 30) && stored) rt_log("frame rate: %s", hz == 30 ? "cutscene, 30 fps" : "limit again");
+    stored = hz;
     float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(60.0 / hz);
     uint32_t r, p, t;
     memcpy(&r, &rate, 4);
@@ -88,6 +92,21 @@ static void xcx_rate_store(double hz) {
 }
 
 int frame_rate_paced(void) { return xcx_words != NULL; }
+
+// Cutscenes and pre-rendered movies run at 30 fps: their text and animation advance per frame (a movie's subtitles ran
+// ahead of the picture at 120 fps). A movie is a live host decoder (ov_movie.c movie_playing). The game's event state, a 32-bit field at
+// main+0x1fefaf4 (+0xcc of the object at main+0x1fefa28, getter main+0xcc5a0), is 0 in normal play and 2 or more
+// while a cutscene plays, as the 1.0.1 60FPS mod's cheat reads it (1.0.1 main+0x1ffeaf4). XCX_CUTSCENE_30=0 keeps the
+// limit in cutscenes.
+static int xcx_cutscene(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = cfg_get("XCX_CUTSCENE_30");
+        on = !e || strcmp(e, "0") != 0;
+    }
+    uint32_t state;
+    return on && (movie_playing() || (plat_mem_read(MOD_MAIN_BASE + 0x1fefaf4, &state, 4) && state >= 2));
+}
 
 void frame_step_init(void) {
     xcx_rate = rt_patch_set("xcx60");
@@ -169,7 +188,10 @@ uint64_t frame_step_cap_ns(void) {
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
-    if (xcx_words && !limit_hz) xcx_rate_store(hz);   // "display": the window's measured rate, which settles late
+    if (xcx_words) {
+        if (hz > 30 && xcx_cutscene()) hz = 30;
+        xcx_rate_store(hz);   // the cutscene cap, and for "display" the window's measured rate, which settles late
+    }
     return (uint64_t)(1e9 / hz + 0.5);
 }
 
