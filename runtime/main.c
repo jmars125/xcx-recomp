@@ -1,6 +1,6 @@
-// totk.exe entry: reserves the guest address space, parses the command line and runs one mode.
+// xcx.exe entry: reserves the guest address space, parses the command line and runs one mode.
 //
-//   totk.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
+//   xcx.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
 //     --selftest        layout, dispatch table and host-function registry; needs no game files
 //     --probe-loader    load and relocate the modules, check them against the measured 1.2.1 values
 //     --probe-kernel, --probe-ipc, --probe-services, --probe-fs    host probes
@@ -11,7 +11,7 @@
 //     --boot            run the game to the first NVN call
 //     --seconds S       run the game (implies --boot's start-up) until the world clock (game time since the loaded
 //                       save's first frame) passed S seconds, then exit 0 at that present
-//     --shot PNG        with --seconds: save that frame; env TOTK_GPU=null|vulkan selects the back end
+//     --shot PNG        with --seconds: save that frame; env XCX_GPU=null|vulkan selects the back end
 //     (no mode)         run the game
 //
 // Also here: the runtime services the generated code calls besides rt_dispatch and rt_svc (rt_brk, rt_udf,
@@ -36,9 +36,9 @@
 unsigned rt_trace;
 
 // Log file. A game run whose stderr is not a file already (started from Explorer, a shortcut or a console) also
-// writes its log to logs\totk.log next to totk.exe, so a player has one to attach to a report; run_game.py and
-// `2> file` keep their own file. Each start moves the earlier logs to totk.1.log .. totk.4.log. A file stops at 64 MiB
-// (TOTK_TRACE can write that much). Lines from before log_open wait in a static buffer: mem_init runs first so that
+// writes its log to logs\xcx.log next to xcx.exe, so a player has one to attach to a report; run_game.py and
+// `2> file` keep their own file. Each start moves the earlier logs to xcx.1.log .. xcx.4.log. A file stops at 64 MiB
+// (XCX_TRACE can write that much). Lines from before log_open wait in a static buffer: mem_init runs first so that
 // nothing else lands in the guest address space, and an earlier open would put the CRT's heap there.
 #define LOG_KEEP 5
 #define LOG_CAP (64ull << 20)
@@ -109,13 +109,13 @@ static void log_open(int game) {
     if (cut && (size_t)(cut - dir) + sizeof "\\logs" <= sizeof dir) {
         strcpy(cut, "\\logs");
         plat_file_mkdir_p(dir);
-        for (int i = LOG_KEEP - 1; i > 0; i--) {   // totk.3.log -> totk.4.log, ..., totk.log -> totk.1.log
-            if (i > 1) snprintf(from, sizeof from, "%s\\totk.%d.log", dir, i - 1);
-            else snprintf(from, sizeof from, "%s\\totk.log", dir);
-            snprintf(to, sizeof to, "%s\\totk.%d.log", dir, i);
+        for (int i = LOG_KEEP - 1; i > 0; i--) {   // xcx.3.log -> xcx.4.log, ..., xcx.log -> xcx.1.log
+            if (i > 1) snprintf(from, sizeof from, "%s\\xcx.%d.log", dir, i - 1);
+            else snprintf(from, sizeof from, "%s\\xcx.log", dir);
+            snprintf(to, sizeof to, "%s\\xcx.%d.log", dir, i);
             if (plat_file_exists(from)) plat_file_replace(from, to);
         }
-        snprintf(g_log_path, sizeof g_log_path, "%s\\totk.log", dir);
+        snprintf(g_log_path, sizeof g_log_path, "%s\\xcx.log", dir);
         g_log_file = plat_append_open(g_log_path);
     }
     if (!g_log_file) {
@@ -131,7 +131,7 @@ static void log_open(int game) {
 }
 
 static void parse_trace(void) {
-    const char *e = cfg_get("TOTK_TRACE");   // no default: nothing is traced when unset
+    const char *e = cfg_get("XCX_TRACE");   // no default: nothing is traced when unset
     if (!e) return;
     static const struct { const char *name; unsigned bit; } names[] = {
         {"svc", RT_TRACE_SVC}, {"host", RT_TRACE_HOSTCALL}, {"ipc", RT_TRACE_IPC}, {"fs", RT_TRACE_FS},
@@ -142,7 +142,7 @@ static void parse_trace(void) {
         int known = 0;
         for (unsigned i = 0; i < sizeof names / sizeof *names; i++)
             if (strlen(names[i].name) == n && !strncmp(p, names[i].name, n)) rt_trace |= names[i].bit, known = 1;
-        if (!known && n) rt_log("TOTK_TRACE: unknown item '%.*s' (svc, host, ipc, fs, gfx, perf, sched, audio, present, all)", (int)n, p);
+        if (!known && n) rt_log("XCX_TRACE: unknown item '%.*s' (svc, host, ipc, fs, gfx, perf, sched, audio, present, all)", (int)n, p);
         p += n + (p[n] == ',');
     }
 }
@@ -245,9 +245,66 @@ static int readable(uint64_t a, uint64_t n) {
     return a + n <= (uint64_t)(uintptr_t)mbi.BaseAddress + mbi.RegionSize;
 }
 
+// XCX_WATCH=<hex guest address>: a debugging write watchpoint. A thread makes the page read-only once it is committed;
+// the first writes to it are logged with the lifted function and guest call chain, the page is made writable for the
+// writer, and the thread arms it again 50 ms later (16 hits at most).
+static volatile uint64_t watch_page;
+static volatile LONG watch_hits, watch_armed;
+
+static DWORD WINAPI watch_thread(void *arg) {
+    (void)arg;
+    while (watch_hits < 16) {
+        if (!watch_armed) {
+            MEMORY_BASIC_INFORMATION mbi;
+            DWORD old;
+            if (VirtualQuery((void *)(uintptr_t)watch_page, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT &&
+                VirtualProtect((void *)(uintptr_t)watch_page, 4096, PAGE_READONLY, &old))
+                watch_armed = 1;
+        }
+        Sleep(watch_armed ? 1 : 50);
+    }
+    return 0;
+}
+
+static int watch_hit(EXCEPTION_POINTERS *ep) {
+    EXCEPTION_RECORD *r = ep->ExceptionRecord;
+    if (!watch_page || r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2 ||
+        r->ExceptionInformation[0] != 1 || (r->ExceptionInformation[1] & ~4095ull) != watch_page)
+        return 0;
+    DWORD old;
+    VirtualProtect((void *)(uintptr_t)watch_page, 4096, PAGE_READWRITE, &old);
+    char d[160];
+    uint64_t f = lifted_function((uintptr_t)ep->ContextRecord->Rip);
+    rt_logf("watch: write %#llx from host xcx.exe rip %p, lifted f_%llx = %s\n",
+            (unsigned long long)r->ExceptionInformation[1], (void *)ep->ContextRecord->Rip, (unsigned long long)f,
+            f ? ldr_describe(f, d, sizeof d) : "?");
+    void *bt[24];
+    USHORT nbt = RtlCaptureStackBackTrace(0, 24, bt, NULL);
+    uintptr_t exe = (uintptr_t)GetModuleHandleW(NULL);
+    for (USHORT i = 0; i < nbt; i++)
+        if ((uintptr_t)bt[i] - exe < (256u << 20)) rt_logf("  host xcx.exe+%#llx\n", (unsigned long long)((uintptr_t)bt[i] - exe));
+    Cpu *c = kern_cpu();
+    if (c) {
+        rt_logf("  lr %s\n", ldr_describe(c->x[30], d, sizeof d));
+        uint64_t fp = c->x[29];
+        for (int n = 0; n < 12 && fp && !(fp & 7) && readable(fp, 16); n++) {
+            uint64_t next = LD64(fp), lr = LD64(fp + 8);
+            rt_logf("  guest frame %2d: %s\n", n, ldr_describe(lr, d, sizeof d));
+            if (next <= fp || next - fp > (64u << 20)) break;
+            fp = next;
+        }
+    }
+    fflush(stderr);
+    InterlockedIncrement(&watch_hits);
+    Sleep(0);
+    watch_armed = 0;
+    return 1;
+}
+
 static LONG CALLBACK crash_handler(EXCEPTION_POINTERS *ep) {
     static volatile LONG busy;
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (watch_hit(ep)) return EXCEPTION_CONTINUE_EXECUTION;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW &&
         code != EXCEPTION_IN_PAGE_ERROR)
@@ -281,7 +338,7 @@ static LONG CALLBACK crash_handler(EXCEPTION_POINTERS *ep) {
     }
     if (InterlockedExchange(&busy, 1)) ExitProcess(71);
     char d[160];
-    rt_logf("FATAL: exception %#lx at host %p (totk.exe+%#llx)", code, (void *)rip,
+    rt_logf("FATAL: exception %#lx at host %p (xcx.exe+%#llx)", code, (void *)rip,
             (unsigned long long)(rip - (uintptr_t)mi.lpBaseOfDll));
     if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
         rt_logf(", %s address %#llx",
@@ -294,8 +351,9 @@ static LONG CALLBACK crash_handler(EXCEPTION_POINTERS *ep) {
     if (c) {
         for (int i = 0; i < 31; i++)
             rt_logf("  x%-2d %016llx%s", i, (unsigned long long)c->x[i], i % 4 == 3 ? "\n" : "");
-        rt_logf("  sp  %016llx\n  pc  %016llx  lr %s\n", (unsigned long long)c->sp, (unsigned long long)c->pc,
-                ldr_describe(c->x[30], d, sizeof d));
+        const char *hf = hostfn_name(c->pc);   // a crash inside a host function: c->pc is its synthetic address
+        rt_logf("  sp  %016llx\n  pc  %016llx%s%s  lr %s\n", (unsigned long long)c->sp, (unsigned long long)c->pc,
+                hf ? " host function " : "", hf ? hf : "", ldr_describe(c->x[30], d, sizeof d));
         uint64_t fp = c->x[29];
         for (int n = 0; n < 32 && fp && !(fp & 7) && readable(fp, 16); n++) {
             uint64_t next = LD64(fp), lr = LD64(fp + 8);
@@ -500,9 +558,9 @@ static int usage(const char *argv0) {
     return 2;
 }
 
-// Paths for a copied folder (tools/package_build.py). Per path: TOTK_EXEFS, TOTK_ROMFS, TOTK_PROFILE_DIR, else the
-// folder next to totk.exe (exefs, romfs, profile) if it exists, else the path baked in at build time. A relative
-// value is relative to totk.exe's folder.
+// Paths for a copied folder (tools/package_build.py). Per path: XCX_EXEFS, XCX_ROMFS, XCX_PROFILE_DIR, else the
+// folder next to xcx.exe (exefs, romfs, profile) if it exists, else the path baked in at build time. A relative
+// value is relative to xcx.exe's folder.
 static char pp_exefs[MAX_PATH * 2], pp_romfs[MAX_PATH * 2], pp_profile[MAX_PATH * 2];
 
 static const char *portable_path(const char *dir, const char *var, const char *sub, const char *must, char *out, size_t cap,
@@ -526,26 +584,31 @@ static void portable_paths(RtConfig *c) {
     char *cut = n && n < sizeof exe ? strrchr(exe, '\\') : NULL;
     if (!cut) return;
     *cut = 0;
-    c->exefs = portable_path(exe, "TOTK_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
-    c->romfs = portable_path(exe, "TOTK_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
-    c->profile = portable_path(exe, "TOTK_PROFILE_DIR", "profile", ".", pp_profile, sizeof pp_profile, c->profile);
+    c->exefs = portable_path(exe, "XCX_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
+    c->romfs = portable_path(exe, "XCX_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
+    c->profile = portable_path(exe, "XCX_PROFILE_DIR", "profile", ".", pp_profile, sizeof pp_profile, c->profile);
 }
 
 int main(int argc, char **argv) {
-    mem_init();   // first: claim the guest address space before anything else can land there; reads totk.ini
+    mem_init();   // first: claim the guest address space before anything else can land there; reads xcx.ini
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     AddVectoredExceptionHandler(0, crash_handler);
+    const char *watch = cfg_get("XCX_WATCH");
+    if (watch && *watch) {
+        watch_page = strtoull(watch, NULL, 16) & ~4095ull;
+        CloseHandle(CreateThread(NULL, 0, watch_thread, NULL, 0, NULL));
+    }
     parse_trace();
     prof_start();
     // Timed guest waits (kernel.c block_inner) sleep in whole milliseconds; at the default 15.6 ms tick a 1 ms wait
-    // costs a full tick. TOTK_TIMER_1MS=0 keeps the default for comparison.
-    if (cfg_bool("TOTK_TIMER_1MS")) timeBeginPeriod(1);
+    // costs a full tick. XCX_TIMER_1MS=0 keeps the default for comparison.
+    if (cfg_bool("XCX_TIMER_1MS")) timeBeginPeriod(1);
     cfg = (RtConfig){.exefs = rt_default_exefs, .romfs = rt_default_romfs, .profile = rt_default_profile,
-                     .gpu = cfg_get("TOTK_GPU")};
+                     .gpu = cfg_get("XCX_GPU")};
     portable_paths(&cfg);   // command-line paths below still win
     if (cfg.gpu && strcmp(cfg.gpu, "null") && strcmp(cfg.gpu, "vulkan")) {
-        rt_logf("TOTK_GPU must be null or vulkan, not '%s'\n", cfg.gpu);
+        rt_logf("XCX_GPU must be null or vulkan, not '%s'\n", cfg.gpu);
         return 2;
     }
     const char *mode = NULL;

@@ -14,7 +14,7 @@ Versions are the ones the build was verified with; newer patch releases are fine
 |---|---|---|---|
 | MSYS2 UCRT64 | clang/lld 23.1.3 | msys2.org installer to `C:\msys64`, packages below | compiling the generated C and the runtime |
 | Visual Studio Build Tools | 2026, C++ workload, Windows SDK 10.0.26100 | winget `Microsoft.VisualStudio.BuildTools` with `--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended` | the linker .NET NativeAOT calls |
-| .NET SDK | 10.0 | winget `Microsoft.DotNet.SDK.10` | the shader translator (`totk_xlate.exe`) |
+| .NET SDK | 10.0 | winget `Microsoft.DotNet.SDK.10` | the shader translator (`xcx_xlate.exe`) |
 | Vulkan SDK | 1.4.363 | winget `KhronosGroup.VulkanSDK` | validation layers, `vulkaninfo` |
 | uv | 0.13 | standalone installer from astral.sh | the two Python environments |
 | hactool | 1.4.0 @ `1d64a83` | `.venv\Scripts\python tools\build_hactool.py`, see below | NCA and update extraction |
@@ -72,13 +72,13 @@ From the repository root, in PowerShell. Every step that depends on the game ver
    .venv-py314\Scripts\python tools\extract.py
    ```
 
-4. Shader translator (once; no game files). This publishes `build\xlate\totk_xlate.exe`:
+4. Shader translator (once; no game files). This publishes `build\xlate\xcx_xlate.exe`:
 
    ```powershell
    .venv\Scripts\python tools\build_xlate.py
    ```
 
-5. Lift the modules to C, write the RomFS half of the frame-rate patches, then compile and link `build\<ver>\totk.exe`:
+5. Lift the modules to C, write the RomFS half of the frame-rate patches, then compile and link `build\<ver>\xcx.exe`:
 
    ```powershell
    .venv\Scripts\python recomp\gen.py --exefs build\extracted\<ver>\exefs --out generated\<ver> --patches recomp\patches-<ver>.txt
@@ -99,22 +99,22 @@ From the repository root, in PowerShell. Every step that depends on the game ver
 
    Without this step the first launch compiles shaders and pipelines during play and stutters until the caches fill.
    The AMD driver keeps its pipeline cache per exe path and holds a limited amount: preparing another build folder can
-   evict this one's. `totk.exe --warm-shaders` rebuilds it from the shader cache.
+   evict this one's. `xcx.exe --warm-shaders` rebuilds it from the shader cache.
 
 7. Run. Keep the window in the foreground; an unfocused window stalls the game.
 
    ```powershell
-   build\<ver>\totk.exe
+   build\<ver>\xcx.exe
    ```
 
-Settings live in `totk.ini` next to `totk.exe` ([totk.ini.example](../totk.ini.example) lists them). Saves go to
+Settings live in `xcx.ini` next to `xcx.exe` ([xcx.ini.example](../xcx.ini.example) lists them). Saves go to
 `build\profile` for `v121` and `build\profile-<ver>` for other versions (`build_game.py --profile` changes it).
 
 ### Portable folder
 
 `.venv\Scripts\python tools\package_build.py --version <ver>` writes `build\<ver>-portable`, which runs on another of
 your machines without MSYS2, Python or .NET. `romfs.bin` stays out unless you pass `--with-romfs`; otherwise put it in
-`romfs\` next to the exe or point `TOTK_ROMFS` at its folder. Run `totk.exe --prepare-shaders` once in the copied
+`romfs\` next to the exe or point `XCX_ROMFS` at its folder. Run `xcx.exe --prepare-shaders` once in the copied
 folder. The folder holds code and data derived from your game: for your own machines only.
 
 ## Checks
@@ -123,7 +123,7 @@ Before a commit:
 
 - `python tools/check_content.py --staged`: nothing game-derived is staged. CI runs the same check;
   `git config core.hooksPath .githooks` runs it before each local commit.
-- `build\<ver>\totk.exe --selftest`: layout, dispatch table and host-function registry, without game files.
+- `build\<ver>\xcx.exe --selftest`: layout, dispatch table and host-function registry, without game files.
 
 The lifter (`recomp/`) and the CPU headers (`runtime/cpu.h`, `runtime/simd.h`) are checked against Unicorn. Every lifter
 change passes these, all run with `.venv`:
@@ -138,7 +138,7 @@ change passes these, all run with `.venv`:
 | `tests\excl_mt.py` | the exclusive monitor helpers under contention and ABA, on several threads | no |
 | `tests\jumptables_check.py` | `recomp/jumptables.py` against a Unicorn oracle; must report 0 disagreements, on 1.4.3 too | yes |
 
-Runtime probes, each a mode of `totk.exe` (the list is at the top of `runtime/main.c`): `--probe-kernel`,
+Runtime probes, each a mode of `xcx.exe` (the list is at the top of `runtime/main.c`): `--probe-kernel`,
 `--probe-vkexec`, `--probe-nvn-tex` and `--probe-shader` cover most runtime changes.
 
 Shaders: `.venv-py314\Scripts\python tools\shader_census.py --version <ver> --translate` extracts every Maxwell shader

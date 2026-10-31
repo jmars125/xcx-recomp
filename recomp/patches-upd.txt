@@ -1,0 +1,35 @@
+# Code patches for XCX DE 2.0.0 main (recomp/patches.py).
+#
+# xcx60 (XCX_FPS60, on): the frame rate of the frame limit XCX_FPS_LIMIT (frame_rate.c). The interval and period
+# sites are our own; the others are ported from the 60FPS mod for 1.0.1 by Fl4sh_ and StevensND
+# (github.com/Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods): each 1.0.1 site was found in the 1.0.0 main by what the
+# patch replaces, then in 2.0.0 by the surrounding instructions (unique match); the original words below are 2.0.0's. The mod's other sites (a code cave at 1.0.1 main+0x2a02ac and constant time scales at
+# +0x1e245c..+0x1e24dc and +0xeb108..+0xeb128) have no clear 1.0.0 counterpart and are not ported.
+
+set xcx60 XCX_FPS60 1
+set xcx60g XCX_FPS60_GETTER 0
+set xcx60m XCX_FPS60_MODE 0
+
+# The game's frame interval in vsyncs, set once at boot (main+0x13db530 calls the setter main+0x13a2fd8 with 2). The
+# main loop's limiter (main+0x13a9ac0) waits that many vsyncs, the frame-time getter main+0x13a250c returns
+# interval * the vsync period below, and the game asks NVN for the same present interval: 1 vsync per frame.
+site xcx60 main 13db540 52800040 52800020
+# The game's vsync period, a virtual of the frame pacing object (main+0x13baa30) that returns 1/60 s: the limiter
+# waits interval * period and the frame time is the same product. The patch page's +0x40 instead (frame_rate.c, the
+# frame limit XCX_FPS_LIMIT: 1 / limit), so one interval is one frame at the limit.
+site xcx60 main 13baa34 72a79108 @page:x8 b9404108
+# The game's frame-rate pick, flag ? 60.0 : 30.0, then stored with its reciprocal (1.0.1 +0xa2ee5c): both arms the
+# limit, the page's +0x44 (x9 is free here: the next use loads it).
+site xcx60 main a1f05c 1e27d001 @page:x9 bd404521
+# A 1/30 s time constant (0x3d088889, 1.0.1 +0x569c0; the mod's 1/60): 1 / limit, the page's +0x40.
+site xcx60 main 56d40 72a7a108 @page:x8 b9404108
+
+# The mod's getter that returns false on Switch (1.0.1 +0x13eb280): true. Off: in 2.0.0 it crashes the title screen's
+# rendering (main+0x9530b0 reads through a bad pointer).
+site xcx60g main 13db618 2a1f03e0 52800020
+
+# A flag at +0x301 of the object at main+0x1df6020, read by the getter main+0x13a288c: its callers halve time steps
+# and scales (main+0x289748, +0x3122e4, +0xa16ef4) and pick 60 at the fps pick above. Both returns of the getter give
+# true. Off: on its own it does not change the frame rate, and what it halves is untested.
+site xcx60m main 13a28a4 1a9f07e0 52800020
+site xcx60m main 13a28ac 2a1f03e0 52800020

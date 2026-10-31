@@ -142,7 +142,7 @@ void rt_boot_event(const char *what, Cpu *c, const char *detail) {
 
 // ---- --seconds S
 // A PNG with stored (uncompressed) deflate blocks: no compression library, and the shot is only read by tools.
-// rt_write_png (declared in vk.h) is shared with the TOTK_DUMP frame dump (vk_dump.c).
+// rt_write_png (declared in vk.h) is shared with the XCX_DUMP frame dump (vk_dump.c).
 static uint32_t crc32_update(uint32_t crc, const uint8_t *p, size_t n) {
     static uint32_t table[256];
     if (!table[1])
@@ -227,9 +227,9 @@ static void save_shot(const tex_t *t, const char *path) {
     rt_logf("boot: shot %s (%ux%u)\n", path, w, h);
 }
 
-// TOTK_SHOTS=lo-hi:step [TOTK_SHOTS_DIR=dir]: every step-th present in [lo, hi] saved as <dir>/f<n>.png (n the
-// present), box-filtered to 480x270; TOTK_SHOTS=w<lo>-<hi>:<step> takes them by world-clock seconds instead, the first
-// present at or after each step (full size with TOTK_SHOTS_FULL=1), for finding short glitches. Pipeline builds stay asynchronous, so the
+// XCX_SHOTS=lo-hi:step [XCX_SHOTS_DIR=dir]: every step-th present in [lo, hi] saved as <dir>/f<n>.png (n the
+// present), box-filtered to 480x270; XCX_SHOTS=w<lo>-<hi>:<step> takes them by world-clock seconds instead, the first
+// present at or after each step (full size with XCX_SHOTS_FULL=1), for finding short glitches. Pipeline builds stay asynchronous, so the
 // pictures show what a player sees.
 static void series_shot(const tex_t *t, uint64_t n) {
     static int parsed;
@@ -237,14 +237,14 @@ static void series_shot(const tex_t *t, uint64_t n) {
     static const char *dir;
     static int full, world;
     if (!parsed) {
-        full = cfg_get("TOTK_SHOTS_FULL") != NULL;
-        const char *e = cfg_get("TOTK_SHOTS");
+        full = cfg_get("XCX_SHOTS_FULL") != NULL;
+        const char *e = cfg_get("XCX_SHOTS");
         double wl, wh, ws;
         if (e && e[0] == 'w' && sscanf(e + 1, "%lf-%lf:%lf", &wl, &wh, &ws) == 3 && ws > 0)   // world-clock seconds
             world = 1, lo = (unsigned long long)(wl * 1e6), hi = (unsigned long long)(wh * 1e6),
             step = (unsigned long long)(ws * 1e6), next = lo;
         else if (!e || sscanf(e, "%llu-%llu:%llu", &lo, &hi, &step) != 3 || !step) hi = 0;
-        dir = cfg_get("TOTK_SHOTS_DIR") ? cfg_get("TOTK_SHOTS_DIR") : ".";
+        dir = cfg_get("XCX_SHOTS_DIR") ? cfg_get("XCX_SHOTS_DIR") : ".";
         if (hi) CreateDirectoryA(dir, NULL);
         parsed = 1;
     }
@@ -260,7 +260,7 @@ static void series_shot(const tex_t *t, uint64_t n) {
     if (!bgra && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) return;
     uint32_t w = t->d.width, h = t->d.height, ow = full ? w : 480, oh = full ? h : 270;
     uint8_t *px = malloc(4ull * w * h), *out = malloc(4ull * ow * oh);
-    if (!px || !out) rt_fatal("boot: out of memory for a TOTK_SHOTS frame");
+    if (!px || !out) rt_fatal("boot: out of memory for a XCX_SHOTS frame");
     view_t view;
     memset(&view, 0, sizeof view);
     NVNcopyRegion r = {.width = (int)w, .height = (int)h, .depth = 1};
@@ -286,11 +286,53 @@ static void series_shot(const tex_t *t, uint64_t n) {
     free(px);
 }
 
+// XCX_HANG_DUMP=<seconds>: when no frame was presented for that long, kern_hang_dump logs every guest thread's wait
+// and call chain, once per stall. Started by the first present, so loading before it does not count.
+// XCX_STATE_DUMP=<seconds>: the same dump three times, that long after the first present and 0.3 s apart, stall or
+// not (what the threads wait for in a frame that runs slow).
+static volatile LONG64 g_last_present_ms;
+
+static DWORD WINAPI state_watch(void *arg) {
+    Sleep((DWORD)(uintptr_t)arg * 1000);
+    for (int i = 0; i < 3; i++) {
+        rt_log("state dump %d", i);
+        kern_hang_dump();
+        Sleep(300);
+    }
+    return 0;
+}
+
+static DWORD WINAPI hang_watch(void *arg) {
+    LONG64 limit = (LONG64)(uintptr_t)arg * 1000, dumped = 0;
+    for (;;) {
+        Sleep(1000);
+        LONG64 last = InterlockedCompareExchange64(&g_last_present_ms, 0, 0), now = (LONG64)GetTickCount64();
+        if (now - last < limit || last == dumped) continue;
+        dumped = last;
+        rt_log("hang: no frame presented for %lld s", (long long)((now - last) / 1000));
+        kern_hang_dump();
+    }
+    return 0;
+}
+
+static void hang_note_present(void) {
+    static volatile LONG started;
+    InterlockedExchange64(&g_last_present_ms, (LONG64)GetTickCount64());
+    if (started || InterlockedExchange(&started, 1)) return;
+    const char *e = cfg_get("XCX_HANG_DUMP");
+    long s = e ? strtol(e, NULL, 10) : 0;
+    if (s > 0) CloseHandle(CreateThread(NULL, 0, hang_watch, (void *)(uintptr_t)s, 0, NULL));
+    e = cfg_get("XCX_STATE_DUMP");
+    s = e ? strtol(e, NULL, 10) : 0;
+    if (s > 0) CloseHandle(CreateThread(NULL, 0, state_watch, (void *)(uintptr_t)s, 0, NULL));
+}
+
 // A --seconds run ends at the first present after the world clock (game time since the save's first frame,
 // frame_step_world_us) passed S seconds, so a run covers the same game time at any frame rate; any other frame is
 // counted by the back end only.
 void rt_frame_presented(const tex_t *t, uint64_t n) {
     const RtConfig *cfg = rt_config();
+    hang_note_present();
     series_shot(t, n);
     int64_t w = cfg->seconds ? frame_step_world_us() : -1;
     if (w < 0 || (double)w < cfg->seconds * 1e6) return;
@@ -328,7 +370,7 @@ static void guest_main(Cpu *c) {
 static DWORD WINAPI prewarm_main(void *arg) {
     (void)arg;
     vk_pipeline_prewarm();
-    const char *prep = cfg_get("TOTK_TEST_PREPARE_SHADERS");   // Task 2.3 test hook; Task 2.6 builds the preparation
+    const char *prep = cfg_get("XCX_TEST_PREPARE_SHADERS");   // Task 2.3 test hook; Task 2.6 builds the preparation
     if (prep && !strcmp(prep, "1")) {
         int cpus = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
         gfx_shader_prepare_recorded(cpus, cpus / 2 > 16 ? 16 : cpus / 2 < 1 ? 1 : cpus / 2);

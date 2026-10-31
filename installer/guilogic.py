@@ -106,12 +106,13 @@ def amount(cat, done, total, unit):
 class Form:
     base: str = ''
     update: str = ''
+    dlc: str = ''          # optional: the add-on content NSP
     keys: str = ''
     lang: str = ''
     dest: str = ''
 
     def installed_state(self):
-        """The recorded state of the install folder (totk-install.json), or None. Never raises."""
+        """The recorded state of the install folder (xcx-install.json), or None. Never raises."""
         if not self.dest.strip():
             return None
         try:
@@ -123,7 +124,7 @@ class Form:
         return self.installed_state() is not None
 
     def problems(self):
-        """Ids of the entries that are missing or wrong, in screen order. A folder with totk-install.json needs only
+        """Ids of the entries that are missing or wrong, in screen order. A folder with xcx-install.json needs only
         itself; the CLI asks for the game files when it must extract again."""
         found = []
         update = self.update_mode()
@@ -143,12 +144,14 @@ class Form:
                 value = getattr(self, name).strip()
                 if value and not Path(value).is_file():
                     found.append(f'ui.missing_{name}')
+        if self.dlc.strip() and not Path(self.dlc.strip()).is_file():
+            found.append('ui.missing_dlc')
         return found
 
     def command(self, python, root=None, temp=None, verify=False):
         cmd = [str(python), '-m', 'installer']
-        for flag, value in (('--base', self.base), ('--update', self.update), ('--keys', self.keys),
-                            ('--lang', self.lang), ('--dest', self.dest)):
+        for flag, value in (('--base', self.base), ('--update', self.update), ('--dlc', self.dlc),
+                            ('--keys', self.keys), ('--lang', self.lang), ('--dest', self.dest)):
             if value.strip():
                 cmd += [flag, value.strip()]
         if root:

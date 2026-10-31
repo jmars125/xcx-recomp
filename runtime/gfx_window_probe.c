@@ -1,6 +1,6 @@
 // --probe-window: presents 300 frames of a cycling clear colour through vk_present_image, reads the swapchain image back
 // and compares every pixel, measures the vsync rate, flips the focus state with synthetic WM_ACTIVATEAPP messages and
-// resizes the window. Run with TOTK_VK_VALIDATION=1 to count validation errors.
+// resizes the window. Run with XCX_VK_VALIDATION=1 to count validation errors.
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>

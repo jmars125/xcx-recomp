@@ -50,14 +50,14 @@ class App:
         self.run_args = run_args or {}   # extra CLI options for tests: temp, verify
         self.log_entries = []            # events and raw lines of the run, rendered by render_log
         self.bound = []                  # (widget, option, id, params) retranslated on a language switch
-        self.vars = {n: tk.StringVar() for n in ('base', 'update', 'keys', 'dest')}
+        self.vars = {n: tk.StringVar() for n in ('base', 'update', 'dlc', 'keys', 'dest')}
         self.vars['lang'] = tk.StringVar()
         self.lang_code = default_game_language(ui_lang)
         self.screen = None
         self.fitted = None               # the (width, height) fit last gave the window
 
         root.title(self.cat('ui.title'))
-        icon = layout.runtime / 'totk.ico'
+        icon = layout.runtime / 'xcx.ico'
         if os.name == 'nt' and icon.is_file():
             root.iconbitmap(default=str(icon))
         root.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -180,7 +180,7 @@ class App:
         grid.pack(fill='x')
         grid.columnconfigure(1, weight=1)
         rows = (('base', 'ui.base', 'ui.pick_game'), ('update', 'ui.update', 'ui.pick_update'),
-                ('keys', 'ui.keys', 'ui.pick_keys'))
+                ('dlc', 'ui.dlc', 'ui.pick_dlc'), ('keys', 'ui.keys', 'ui.pick_keys'))
         self.form_rows = {}
         for i, (name, label_id, pick_id) in enumerate(rows):
             lab = self.label(grid, label_id)
@@ -258,8 +258,8 @@ class App:
     # ---- form -----------------------------------------------------------------------------------------------------
 
     def form(self):
-        return Form(base=self.vars['base'].get(), update=self.vars['update'].get(), keys=self.vars['keys'].get(),
-                    lang=self.selected_lang(), dest=self.vars['dest'].get())
+        return Form(base=self.vars['base'].get(), update=self.vars['update'].get(), dlc=self.vars['dlc'].get(),
+                    keys=self.vars['keys'].get(), lang=self.selected_lang(), dest=self.vars['dest'].get())
 
     def refresh_form(self):
         form = self.form()
@@ -274,7 +274,7 @@ class App:
 
     def pick_file(self, name, pick_id):
         types = [(self.cat('ui.type_game'), '*.nsp *.xci'), (self.cat('ui.type_all'), '*.*')]
-        if name == 'update':
+        if name in ('update', 'dlc'):
             types = [(self.cat('ui.type_nsp'), '*.nsp'), (self.cat('ui.type_all'), '*.*')]
         if name == 'keys':
             types = [(self.cat('ui.type_keys'), '*.keys'), (self.cat('ui.type_all'), '*.*')]
@@ -482,14 +482,14 @@ class App:
 
 # ---- self test ---------------------------------------------------------------------------------------------------
 
-SAMPLE_START = {'type': 'start', 'release': 'selftest', 'mode': 'install', 'dest': 'Z:/selftest/TotK', 'log': 'D:\\log.txt',
+SAMPLE_START = {'type': 'start', 'release': 'selftest', 'mode': 'install', 'dest': 'Z:/selftest/XCX', 'log': 'D:\\log.txt',
                 'steps': ['check', 'extract', 'lift', 'compile', 'prepare', 'cleanup']}
 SAMPLE_RUN = [
     SAMPLE_START,
     {'type': 'plan', 'run': ['check', 'extract'], 'skip': {}},
     {'type': 'step', 'step': 'check', 'state': 'started'},
     {'type': 'progress', 'step': 'check', 'phase': 'inputs'},
-    {'type': 'space', 'dest': 'Z:/selftest/TotK', 'need': 36_400_000_000, 'free': 210_000_000_000, 'temp': 'C:\\t',
+    {'type': 'space', 'dest': 'Z:/selftest/XCX', 'need': 36_400_000_000, 'free': 210_000_000_000, 'temp': 'C:\\t',
      'temp_need': 0, 'temp_free': 0, 'same_disk': True},
     {'type': 'warning', 'id': 'warn.lang_needs_fonts', 'params': {'lang': 'ko'}},
     {'type': 'step', 'step': 'check', 'state': 'done', 'seconds': 12.0},
@@ -540,9 +540,9 @@ def selftest(layout, shots=None):
             app.ui_var.set(lang)
             app.switch_language()
             tag = lang
-            app.vars['dest'].set('Z:/selftest/TotK')
-            app.vars['base'].set('Z:/selftest/totk.xci')
-            app.vars['update'].set('Z:/selftest/totk-1.2.1.nsp')
+            app.vars['dest'].set('Z:/selftest/XCX')
+            app.vars['base'].set('Z:/selftest/xcx.nsp')
+            app.vars['update'].set('Z:/selftest/xcx-2.0.0.nsp')
             app.vars['keys'].set('Z:/selftest/prod.keys')
             app.show('form')
             app.start()   # missing files: shows the problems
@@ -568,14 +568,14 @@ def selftest(layout, shots=None):
             app.model = Model()
             for e in SAMPLE_OK:
                 app.model.apply(e)
-            app.model.dest = 'Z:/selftest/TotK'
+            app.model.dest = 'Z:/selftest/XCX'
             app.model.finish(0)
             app.refresh_finish()
             app.show('finish')
             shot(f'finish-ok-{tag}')
             app.model = Model()
             for e in SAMPLE_RUN[:3] + [{'type': 'error', 'id': 'check.disk_space', 'step': 'check',
-                                        'params': {'path': 'Z:/selftest/TotK', 'need_gb': 36.4, 'free_gb': 20.1}},
+                                        'params': {'path': 'Z:/selftest/XCX', 'need_gb': 36.4, 'free_gb': 20.1}},
                                        {'type': 'end', 'result': 'failed', 'seconds': 3}]:
                 app.model.apply(e)
             app.model.finish(1)

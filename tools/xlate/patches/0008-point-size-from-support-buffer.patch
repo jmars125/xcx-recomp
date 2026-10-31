@@ -5,7 +5,7 @@
              if (TranslatorContext.Definitions.Stage == ShaderStage.Vertex)
              {
 -                this.Store(StorageKind.Output, IoVariable.PointSize, null, ConstF(TranslatorContext.Definitions.PointSize));
-+                // TOTK: the point size is NVN state (SetPointSize), not a translation constant: read it from the support buffer, which the
++                // XCX: the point size is NVN state (SetPointSize), not a translation constant: read it from the support buffer, which the
 +                // host fills per draw. A shader that writes gl_PointSize itself overwrites this store.
 +                this.Store(StorageKind.Output, IoVariable.PointSize, null, this.Load(StorageKind.ConstantBuffer, SupportBuffer.Binding, Const((int)SupportBufferField.PointSize)));
              }

@@ -3,7 +3,7 @@
 // The macOS text bar is replaced by a Win32 window.
 //
 // nn::swkbd::ShowKeyboard: text entry for the game. On the Switch the call starts the keyboard library applet, which
-// takes the screen until the player confirms or cancels. TotK calls it in one place, naming a horse at a stable
+// takes the screen until the player confirms or cancels. XCX calls it in one place, naming a horse at a stable
 // (main+0x1ecbf64 -> main+0x1b2b3a0: UserName preset, at most 9 characters, '@' '%' '\' disabled, UTF-16 out, no
 // header, guide or initial text; an empty answer counts as not named).
 //
@@ -15,9 +15,9 @@
 // input (input_block). text_entry_run is the only front-end seam: an overlay (ImGui) can replace it.
 //
 // Environment:
-//   TOTK_SWKBD_ANSWER=<text>|<cancel>|<initial>   answer without a window (probes, scripted runs); <initial> keeps the
+//   XCX_SWKBD_ANSWER=<text>|<cancel>|<initial>   answer without a window (probes, scripted runs); <initial> keeps the
 //                                                 starting text (the game's, else the default name)
-//   TOTK_SWKBD_TEST=ok|cancel                     open the window, then press OK / Cancel on the first timer tick
+//   XCX_SWKBD_TEST=ok|cancel                     open the window, then press OK / Cancel on the first timer tick
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -144,7 +144,7 @@ typedef struct {
     size_t n;
     int result;                          // 0 open, 1 OK, -1 cancelled
     uint64_t armed;                      // buttons seen released since the window opened
-    int test;                            // TOTK_SWKBD_TEST: 1 press OK, -1 press Cancel
+    int test;                            // XCX_SWKBD_TEST: 1 press OK, -1 press Cancel
 } Entry;
 
 static wchar_t *wide(const char *utf8, wchar_t *buf, int cap) {
@@ -206,7 +206,7 @@ static HWND child(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD st
 
 // Shows the window and waits for the answer. Returns 1 with the text in out (n units), 0 when cancelled.
 static int text_entry_run(const SwkbdRequest *req, uint16_t *out, size_t cap, size_t *n) {
-    static const wchar_t cls[] = L"TotKTextEntry";
+    static const wchar_t cls[] = L"XCXTextEntry";
     HINSTANCE inst = GetModuleHandleW(NULL);
     WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = entry_proc, .hInstance = inst,
                       .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1),
@@ -215,7 +215,7 @@ static int text_entry_run(const SwkbdRequest *req, uint16_t *out, size_t cap, si
         rt_fatal("nn::swkbd::ShowKeyboard: RegisterClassEx (error %lu)", GetLastError());
 
     Entry e = {.req = req, .armed = 0};
-    const char *test = cfg_get("TOTK_SWKBD_TEST");
+    const char *test = cfg_get("XCX_SWKBD_TEST");
     if (test && *test) e.test = !strcmp(test, "cancel") ? -1 : 1;
     NONCLIENTMETRICSW ncm = {.cbSize = sizeof ncm};
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0);
@@ -336,7 +336,7 @@ static void ov_show_keyboard(Cpu *c) {
     uint16_t u[KB_LIMIT * 2 + 1];
     size_t n = 0;
     int confirmed;
-    const char *forced = cfg_get("TOTK_SWKBD_ANSWER");
+    const char *forced = cfg_get("XCX_SWKBD_ANSWER");
     int away = kern_core_away();
     AcquireSRWLockExclusive(&one);
     request_from(arg, &req);
@@ -369,7 +369,7 @@ static void ov_show_keyboard(Cpu *c) {
     if (req.password) snprintf(shown, sizeof shown, "(password, %zu units, not logged)", n);
     rt_log("swkbd: from %s: \"%s\" (%d-%d units, disabled keys %#x, %s out, %s start)%s -> %s%s%s",
            ldr_describe(c->x[30] - 4, lr, sizeof lr), prompt, req.min_len, req.max_len, req.disabled,
-           utf8 ? "UTF-8" : "UTF-16", req.game_initial ? "game" : "default", forced && *forced ? " [TOTK_SWKBD_ANSWER]" : "",
+           utf8 ? "UTF-8" : "UTF-16", req.game_initial ? "game" : "default", forced && *forced ? " [XCX_SWKBD_ANSWER]" : "",
            confirmed ? "\"" : "cancelled", confirmed ? shown : "", confirmed ? "\"" : "");
     ReleaseSRWLockExclusive(&one);
     kern_core_back(&away);

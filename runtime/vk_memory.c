@@ -2,7 +2,7 @@
 // buffers, the virtual-pool page table, GPU address resolution, page write generations for re-uploads, and the
 // upload batch (command buffer, staging buffers, deferred destruction) that vk_texture.c records into.
 //
-// Behaviour ported from MacNativeGames games/totk/third_party/d2r_gfx/gfx/nvn/totk_vpool.c (request checks, unmap
+// Behaviour ported from MacNativeGames games/totk/third_party/d2r_gfx/gfx/nvn/xcx_vpool.c (request checks, unmap
 // semantics, 64 KiB pages) and nvn_dirty.c (generation stamps: a texture is stale when a covered page carries a
 // generation newer than its upload), @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile); and from LAS
 // Recomp runtime/nvn/vulkan/exec.c:2094-2131 (vk_pages_changed: every write-watch query resets the OS bits, so each
@@ -57,7 +57,7 @@ typedef struct PoolRec {
     VPage *pt;                         // POOL_VIRT: size / 64 KiB entries
     uint64_t npages;
     volatile long used;                // resolved at least once: the GPU may still read it at finalize
-    // TOTK_TRACE=perf dirty census (vk_mem_dirty_submit), replay thread under the submit lock only:
+    // XCX_TRACE=perf dirty census (vk_mem_dirty_submit), replay thread under the submit lock only:
     uint32_t bound_sub;                // last submit that bound it as a buffer (dirty_sub), 0 never
     uint32_t synced_gen;               // page generation its lazy-mirror count covers; DIRTY_UNSYNCED until scanned
     uint8_t bufbound;                  // ever bound as a vertex, index, uniform, storage or indirect buffer
@@ -213,7 +213,7 @@ static int alloc_physical(VkCtx *c, PoolRec *r) {
 int vk_fix_zero(void) {
     static int on = -1;
     if (on < 0) {
-        on = cfg_bool("TOTK_FIX_ZERO");
+        on = cfg_bool("XCX_FIX_ZERO");
     }
     return on;
 }
@@ -327,7 +327,7 @@ void vk_pool_fini(pool_t *p) {
     else destroy_rec(c, r);
 }
 
-// Requests were checked by the front end (nvn_api_core.c, MNG totk_vpool.c); apply them in order.
+// Requests were checked by the front end (nvn_api_core.c, MNG xcx_vpool.c); apply them in order.
 int vk_pool_map_virtual(pool_t *v, int n, const void *requests) {
     const nvn_mapping_t *rq = requests;
     AcquireSRWLockExclusive(&pool_lock);
@@ -356,7 +356,7 @@ int vk_pool_map_virtual(pool_t *v, int n, const void *requests) {
 // Per-thread copies of resolved import and physical pools that overlap no other index entry (so pidx_find picks them for
 // any range inside), valid while pool_gen is unchanged: the replay resolves a few dozen pools thousands of times per
 // frame (16 vertex streams and every buffer binding of each draw). Direct-mapped by the 4 KiB page of the address, so
-// a hit is one compare however many pools a frame touches. TOTK_RESOLVE_CHECK=1 compares every hit with the locked
+// a hit is one compare however many pools a frame touches. XCX_RESOLVE_CHECK=1 compares every hit with the locked
 // lookup and stops on a difference.
 static int rec_class(const PoolRec *r) {
     if (r->kind != POOL_IMPORT) return VK_MCLS_DEVICE;
@@ -373,7 +373,7 @@ static ResolveHit *rhit_slot(uint64_t addr) { return &rhit[(addr >> 12 ^ addr >>
 static int resolve_check_on(void) {
     static int on = -1;
     if (on < 0) {
-        const char *e = cfg_get("TOTK_RESOLVE_CHECK");
+        const char *e = cfg_get("XCX_RESOLVE_CHECK");
         on = e && *e && strcmp(e, "0");
     }
     return on;
@@ -487,7 +487,7 @@ static void flag_names(uint32_t f, char *buf, size_t n) {
 
 // One line per (kind, flags) group of the live pools, then the bytes the replay bound or copied per frame by pool
 // class since the previous census (the first one: since frame 1200). Logged at frame 1800 (in the world from the
-// run-game saves), at frame 600, and with TOTK_TRACE=perf every 1800 frames.
+// run-game saves), at frame 600, and with XCX_TRACE=perf every 1800 frames.
 static void dirty_frame(uint64_t frame);
 
 static void mirror_log(uint64_t frame);
@@ -760,7 +760,7 @@ void vk_mem_snap_stats(uint64_t *checks, uint64_t *calls, uint64_t *untracked) {
     *untracked = __atomic_exchange_n(&n_snap_untracked, 0, __ATOMIC_RELAXED);
 }
 
-// ---------------------------------------------------------------- dirty census (TOTK_TRACE=perf)
+// ---------------------------------------------------------------- dirty census (XCX_TRACE=perf)
 // What a device-local mirror of the buffer-bound pools would upload. The replay notes every
 // imported pool it binds as a vertex, index, uniform, storage or indirect buffer (vk_mem_bound_note). At the start of
 // each submit one write-watch query per run of such pools stamps the pages written since with a new generation, in the
@@ -940,7 +940,7 @@ static void dirty_frame(uint64_t frame) {
 // ---------------------------------------------------------------- VRAM mirror of buffer-bound pools
 // An imported pool keeps vertices, indices, constants
 // and storage buffers in system memory, so a discrete GPU reads them over PCIe on every draw (GTX 1050 Ti and RTX
-// 3090 Ti: about 110 ms of GPU time per frame in the field). In mirror mode (device class discrete, TOTK_MEMORY) an
+// 3090 Ti: about 110 ms of GPU time per frame in the field). In mirror mode (device class discrete, XCX_MEMORY) an
 // imported pool gets a device-local buffer over its imported range the first time the replay uses it as a vertex,
 // index, uniform, storage or indirect buffer (vk_mem_use). From then on those bindings, and the buffer copies, fills
 // and uniform updates that touch the pool (vk_mem_pick), use the mirror at the same offsets. Guest memory stays what
@@ -954,7 +954,7 @@ static void dirty_frame(uint64_t frame) {
 // - GPU -> guest: what the replay writes into a mirror (storage buffers its shaders write, buffer copies, fills,
 //   uniform updates, texture-to-buffer copies: vk_mem_gpu_wrote) goes back into the imported buffer at the end of the
 //   submission, exact byte ranges, before the fence signals (vk_mem_mirror_end).
-// - TOTK_MEMORY=verify: every submission also copies up to VERIFY_BYTES of mirror pages, round robin, into host memory;
+// - XCX_MEMORY=verify: every submission also copies up to VERIFY_BYTES of mirror pages, round robin, into host memory;
 //   at its fence the pages the CPU has not written since their sync are compared with guest memory.
 // A pool stays imported when its mirror would not fit the VRAM budget, its range is not write-watched, it overlaps
 // another pool or the allocation fails.
@@ -988,23 +988,23 @@ static volatile LONG64 m_live_n, m_live_bytes, m_refused_n[MR_N], m_refused_byte
 static volatile LONG64 m_flush_calls, m_flush_bytes, v_pages, v_skipped, v_mismatch;
 
 static void mirror_mode(int discrete) {
-    const char *e = cfg_value("TOTK_MEMORY");
+    const char *e = cfg_value("XCX_MEMORY");
     int mode = discrete ? 1 : 0;   // 0 import, 1 mirror, 2 verify
     const char *why = discrete ? "auto, discrete gpu" : "auto, uma";
     if (strcmp(e, "auto")) {
-        if (!strcmp(e, "import")) mode = 0, why = "TOTK_MEMORY=import";
-        else if (!strcmp(e, "mirror")) mode = 1, why = "TOTK_MEMORY=mirror";
-        else if (!strcmp(e, "verify")) mode = 2, why = "TOTK_MEMORY=verify";
-        else rt_log("mem: TOTK_MEMORY=%s is not import, mirror, verify or auto: auto", e);
+        if (!strcmp(e, "import")) mode = 0, why = "XCX_MEMORY=import";
+        else if (!strcmp(e, "mirror")) mode = 1, why = "XCX_MEMORY=mirror";
+        else if (!strcmp(e, "verify")) mode = 2, why = "XCX_MEMORY=verify";
+        else rt_log("mem: XCX_MEMORY=%s is not import, mirror, verify or auto: auto", e);
     }
     vk_mirror_on = mode > 0;
     mirror_verify = mode == 2;
-    const char *g = cfg_get("TOTK_MIRROR_GAP");
+    const char *g = cfg_get("XCX_MIRROR_GAP");
     mirror_gap = g && *g ? atoi(g) : 2;
     if (mirror_gap < 0) mirror_gap = 0;
     // Submissions a region stays unwritten before it is frozen. 60 rather than 300: in a fight 100 of the 257 MiB
     // queried a frame lay in regions idle for 30-299 submissions, and a thaw by a write costs about 60 us.
-    const char *fi = cfg_get("TOTK_FREEZE_IDLE");
+    const char *fi = cfg_get("XCX_FREEZE_IDLE");
     freeze_idle = fi && *fi ? atoi(fi) : 60;
     if (freeze_idle < 0) freeze_idle = 0;
     rt_log("mem: mode %s (%s): %s", mode == 2 ? "verify" : mode ? "mirror" : "import", why,
@@ -1438,7 +1438,7 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
     return rec;
 }
 
-// One summary line: with TOTK_TRACE=perf every 60 frames, else at frames 600 and 1800.
+// One summary line: with XCX_TRACE=perf every 60 frames, else at frames 600 and 1800.
 static void mirror_log(uint64_t frame) {
     static uint64_t last, ww_last;
     AcquireSRWLockExclusive(&gen_lock);
@@ -1482,7 +1482,7 @@ static void mirror_log(uint64_t frame) {
            qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, ver);
 }
 
-// With TOTK_TRACE=perf every 600 frames: what holds device-local memory, to see what grows over a long session.
+// With XCX_TRACE=perf every 600 frames: what holds device-local memory, to see what grows over a long session.
 // VMA's blocks and allocations on the device-local heaps, texture entries with their own memory, the VRAM mirrors and
 // the objects waiting for their last submission to retire.
 static void vram_log(uint64_t frame) {

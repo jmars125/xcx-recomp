@@ -1,7 +1,7 @@
 # XCX Recomp: feasibility notes
 
 Static recompilation of *Xenoblade Chronicles X: Definitive Edition* (Switch) to Windows x86-64, reusing the
-TotK Recomp pipeline (`..\..\totk-pc-recomp`). Everything under `build\` and `generated\` is derived from the game: keep it private.
+XCX Recomp pipeline (`..\..\totk-pc-recomp`). Everything under `build\` and `generated\` is derived from the game: keep it private.
 
 ## Inputs
 
@@ -15,13 +15,13 @@ TotK Recomp pipeline (`..\..\totk-pc-recomp`). Everything under `build\` and `ge
 
 1. ExeFS extracted with MacNativeGames' `extract_exefs.py`, retargeted to the XCX title ids
    (`tools\vendor\macnativegames\extract_exefs.py`) into `build\extracted\{v0,upd}\exefs`.
-2. Modules surveyed. Same layout as TotK: `main`, `sdk`, `subsdk0` (`movie`), `rtld`.
-   - NintendoSDK 19.3.2, NVN 19.3.2 (TotK 1.4.3 is SDK 20.5.22; 1.2.1 is older).
+2. Modules surveyed. Same layout as XCX: `main`, `sdk`, `subsdk0` (`movie`), `rtld`.
+   - NintendoSDK 19.3.2, NVN 19.3.2 (XCX 1.4.3 is SDK 20.5.22; 1.2.1 is older).
    - `main` (17.8 MB, text 0x1735050): Havok Physics 2023.2, NPLN online stack (gRPC/WebRTC/OpenSSL), 831 imports.
    - `sdk`, `subsdk0` and `rtld` are identical between base and update; only `main` changes.
-3. Host boundary: 208 of the 212 `nn::*` symbols TotK's runtime replaces exist by name in XCX's modules (the other
+3. Host boundary: 208 of the 212 `nn::*` symbols XCX's runtime replaces exist by name in XCX's modules (the other
    4 are prefixes in the grep, not real misses).
-4. Lifted with TotK's `recomp\gen.py`, unchanged, no patch table:
+4. Lifted with XCX's `recomp\gen.py`, unchanged, no patch table:
 
    | Module | Functions | Jump tables | C |
    |---|---|---|---|
@@ -42,9 +42,9 @@ uv pip install --python .venv\Scripts\python.exe cryptography capstone lz4 numpy
 
 ## Road to first boot
 
-- RomFS: extract base + BKTR-merge the update (TotK's patched hactool, in the TotK setup's `bin\`).
-- Fork the TotK runtime and strip what is TotK-specific: version detection by `main` hash, patch page and
+- RomFS: extract base + BKTR-merge the update (XCX's patched hactool, in the XCX setup's `bin\`).
+- Fork the XCX runtime and strip what is XCX-specific: version detection by `main` hash, patch page and
   resolution sites, `ov_zstd` entry points, RomFS index, title id and save paths.
 - Build: compile `generated\upd` with the bundled llvm-mingw and link the runtime (`build_game.py --runtime-lib` path).
-- Then iterate on whatever XCX calls that TotK never did: NPLN/online services (stub as offline), Havok threading,
+- Then iterate on whatever XCX calls that XCX never did: NPLN/online services (stub as offline), Havok threading,
   Monolith's renderer through the NVN front end, shader list (none exists yet; first-use translation only).

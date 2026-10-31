@@ -6,7 +6,7 @@
 //
 // Objects are stored in place in the NVN object memory the game provides (nvn_obj.h); every argument is read from the
 // AAPCS64 registers (host.h arg_x / arg_s / arg_p) and every result returned with ret_x. Command-buffer procs are in
-// nvn_api_cmd.c, the TOTK extension procs in nvn_ext.c.
+// nvn_api_cmd.c, the XCX extension procs in nvn_ext.c.
 #include <windows.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -32,7 +32,7 @@ NVN_API(nvnTexturePoolRegisterTexture) {
     gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
 }
 // void nvnTexturePoolRegisterImage(const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v)
-// XCX calls it; TotK never did. An image handle is a texture pool index here (nvn_api_cmd.c, BindImage), so the
+// XCX calls it; XCX never did. An image handle is a texture pool index here (nvn_api_cmd.c, BindImage), so the
 // slot takes the same registration as a sampled texture.
 NVN_API(nvnTexturePoolRegisterImage) {
     gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
@@ -580,7 +580,7 @@ NVN_API(nvnWindowBuilderSetTextures) {
     b->ntex = n;
     for (int i = 0; i < n; i++) b->tex[i] = t[i];
 }
-// TOTK sets two active images; the limit bounds what WindowAcquireTexture hands out. No prototype in nvn.h.
+// XCX sets two active images; the limit bounds what WindowAcquireTexture hands out. No prototype in nvn.h.
 NVN_API(nvnWindowBuilderSetNumActiveTextures) {
     int n = (int)arg_x(c, 1);
     if (n < 2 || n > 4) rt_fatal("nvn: unsupported active texture count %d", n);
@@ -641,11 +641,11 @@ NVN_API(nvnWindowSetCrop) {
 // ---------- Present pacing
 // The vsync thread ticks at a fixed 60 Hz whatever the monitor does, so one game frame lasts `interval` ticks. With
 // the real-time frame step (frame_rate.c) game speed does not depend on the interval, so a frame is shown when it is
-// ready, at most at the frame limit (TOTK_FPS_LIMIT: 30 to 360 per second or the monitor's rate): holding it to the
+// ready, at most at the frame limit (XCX_FPS_LIMIT: 30 to 360 per second or the monitor's rate): holding it to the
 // 2nd or 3rd tick would only add latency and 50 ms frames.
 #define VSYNC_HZ 60ull
 static uint64_t present_period(const win_t *o) {
-    if (frame_step_realtime()) return frame_step_cap_ns();
+    if (frame_step_realtime() || frame_rate_paced()) return frame_step_cap_ns();
     return (o->interval > 0 ? (uint64_t)o->interval : 1ull) * 1000000000ull / VSYNC_HZ;
 }
 

@@ -1,20 +1,20 @@
-// Sampling profiler (TOTK_PROFILE=<path>) and per-frame timing (TOTK_TRACE=perf). tools/prof_report.py reads the profile.
+// Sampling profiler (XCX_PROFILE=<path>) and per-frame timing (XCX_TRACE=perf). tools/prof_report.py reads the profile.
 // A host thread wakes every 1 ms and, for every other thread, suspends it, reads Rip and resumes it. The sampler never
 // allocates or takes a lock between SuspendThread and ResumeThread and never runs guest code. The profile is text:
-//   totk-prof 1 / base <hex> / period_us / samples N / thread <tid> <samples> <in-exe samples> / module <base> <size> <path> /
-//   rip <hex> <count> (the top PROF_TOP Rips) / stack <count> <rip> <caller> ... (TOTK_PROFILE_RENDER or
-//   TOTK_PROFILE_CHAINS only, the top PROF_STACKS call chains)
-// With TOTK_PROFILE_RENDER (the render thread) or TOTK_PROFILE_CHAINS=1 (every thread, chains of all threads summed: for
+//   xcx-prof 1 / base <hex> / period_us / samples N / thread <tid> <samples> <in-exe samples> / module <base> <size> <path> /
+//   rip <hex> <count> (the top PROF_TOP Rips) / stack <count> <rip> <caller> ... (XCX_PROFILE_RENDER or
+//   XCX_PROFILE_CHAINS only, the top PROF_STACKS call chains)
+// With XCX_PROFILE_RENDER (the render thread) or XCX_PROFILE_CHAINS=1 (every thread, chains of all threads summed: for
 // short frame ranges, as each sample copies a stack) the sampler also copies up to STK_COPY bytes of the suspended
 // thread's stack and, after
 // ResumeThread, unwinds the copy with the .pdata tables (RtlVirtualUnwind), so it takes no lock while the thread is
 // suspended. The unwind stops at the first frame outside the copy; deeper callers are cut.
-// TOTK_PROFILE_SLOW=<ms> keeps every thread's chains of the last half second in a ring (a thread outside the exe, mostly
+// XCX_PROFILE_SLOW=<ms> keeps every thread's chains of the last half second in a ring (a thread outside the exe, mostly
 // waiting, copies 8 KiB of stack, one in it STK_COPY; a thread that ran no cycle since its previous sample is not
 // suspended and repeats its previous chain; a sample that took over 2 ms to stop its thread, which happens while the
 // thread is in a long kernel call, is written as `tstall <tid> <ms into the window> <ms stopping> <rip>...` with the
 // chain where the thread stopped) and, after a present at least <ms> after the previous one, writes
-// that interval's samples (plus the 20 ms before) to <TOTK_PROFILE>.f<frame>: the profile format, one `stack 1` line per
+// that interval's samples (plus the 20 ms before) to <XCX_PROFILE>.f<frame>: the profile format, one `stack 1` line per
 // sample, and `tstack <tid> <ms into the window> <rip>...` lines that keep the thread and the time. At most 64 dumps.
 #include <windows.h>
 #include <psapi.h>
@@ -39,7 +39,7 @@
 
 typedef struct { uint64_t rip, n; } RipCount;
 #define PROF_DEPTH 24             // frames kept per call chain, the sampled Rip first
-// cycles, depth, last: TOTK_PROFILE_SLOW only, the thread's cycle count and chain at its previous sample
+// cycles, depth, last: XCX_PROFILE_SLOW only, the thread's cycle count and chain at its previous sample
 typedef struct { DWORD tid; HANDLE h; uint64_t n, in_exe, cycles; uint32_t depth; uint64_t last[PROF_DEPTH]; } ThreadSlot;
 
 static RipCount table[PROF_SLOTS];
@@ -55,15 +55,15 @@ static HANDLE sampler;
 static volatile LONG stop, written;
 static uintptr_t exe_lo, exe_hi;
 static volatile DWORD render_tid;   // the thread that presents (perf_present)
-static int only_render;             // TOTK_PROFILE_RENDER=1: sample the render thread only
+static int only_render;             // XCX_PROFILE_RENDER=1: sample the render thread only
 static volatile DWORD main_tid;     // the guest main thread (kern_main_thread)
-static int only_main;               // TOTK_PROFILE_MAIN=1: sample the guest main thread only
-static int chains;                  // call chains are kept: TOTK_PROFILE_RENDER or TOTK_PROFILE_CHAINS
+static int only_main;               // XCX_PROFILE_MAIN=1: sample the guest main thread only
+static int chains;                  // call chains are kept: XCX_PROFILE_RENDER or XCX_PROFILE_CHAINS
 static volatile uint64_t cur_frame; // last presented frame
-static uint64_t frame_lo, frame_hi; // TOTK_PROFILE_FRAMES=<lo>-<hi>: sample only while presents lo..hi-1 are pending
-static int64_t world_lo, world_hi;  // TOTK_PROFILE_FRAMES=w<lo>-<hi>: only while the world clock is in [lo, hi) s (us)
+static uint64_t frame_lo, frame_hi; // XCX_PROFILE_FRAMES=<lo>-<hi>: sample only while presents lo..hi-1 are pending
+static int64_t world_lo, world_hi;  // XCX_PROFILE_FRAMES=w<lo>-<hi>: only while the world clock is in [lo, hi) s (us)
 
-#define SLOW_RING (1u << 15)        // TOTK_PROFILE_SLOW: about 0.5 s of samples of every thread
+#define SLOW_RING (1u << 15)        // XCX_PROFILE_SLOW: about 0.5 s of samples of every thread
 #define SLOW_DUMPS 64
 typedef struct { uint64_t t; DWORD tid; uint32_t depth; uint64_t rip[PROF_DEPTH]; } Sample;
 static Sample ring[SLOW_RING];
@@ -71,7 +71,7 @@ static uint64_t ring_n;
 #define STALL_RING 1024
 static Sample stalls[STALL_RING];   // t: when the stop began; rip[PROF_DEPTH - 1] holds the stop's ns
 static uint64_t stall_n;
-static uint64_t slow_ns;            // TOTK_PROFILE_SLOW in ns, 0 off
+static uint64_t slow_ns;            // XCX_PROFILE_SLOW in ns, 0 off
 static volatile LONG64 dump_lo, dump_hi, dump_frame;   // the render thread asks for a window, the sampler writes it
 static volatile DWORD replay_tid;   // asynchronous replay (vk_backend.c): its waits hold up the frame too
 
@@ -180,7 +180,7 @@ static void slow_dump(void) {
     FILE *f = dumps < SLOW_DUMPS ? fopen(path, "w") : NULL;
     if (f) {
         dumps++;
-        fprintf(f, "totk-prof 1\nbase %llx\nperiod_us 1000\nframe %llu interval_ms %.1f\nmain %lu render %lu replay %lu\n",
+        fprintf(f, "xcx-prof 1\nbase %llx\nperiod_us 1000\nframe %llu interval_ms %.1f\nmain %lu render %lu replay %lu\n",
                 (unsigned long long)(uintptr_t)GetModuleHandleW(NULL), (unsigned long long)frame, (hi - lo) / 1e6 - 20,
                 main_tid, render_tid, replay_tid);
         write_modules(f);
@@ -303,7 +303,7 @@ void prof_write(void) {
         rt_log("prof: cannot write %s", out_path);
         return;
     }
-    fprintf(f, "totk-prof 1\nbase %llx\nperiod_us 1000\nsamples %llu\ndropped %llu\n", (unsigned long long)(uintptr_t)GetModuleHandleW(NULL),
+    fprintf(f, "xcx-prof 1\nbase %llx\nperiod_us 1000\nsamples %llu\ndropped %llu\n", (unsigned long long)(uintptr_t)GetModuleHandleW(NULL),
             (unsigned long long)total, (unsigned long long)dropped);
     for (int i = 0; i < n_threads; i++)
         fprintf(f, "thread %lu %llu %llu\n", threads[i].tid, (unsigned long long)threads[i].n, (unsigned long long)threads[i].in_exe);
@@ -327,7 +327,7 @@ void prof_write(void) {
     rt_log("prof: %llu samples, %d Rips -> %s", (unsigned long long)total, cnt, out_path);
 }
 
-// TOTK_TRACE=perf, TOTK_FLIGHT=1 or the full performance overlay: event counts are taken. Wait times are always taken
+// XCX_TRACE=perf, XCX_FLIGHT=1 or the full performance overlay: event counts are taken. Wait times are always taken
 // (frame-time summary). perf_base: the part fixed at start.
 static int perf_on, perf_base;
 static int overlay;   // performance overlay mode (perf_set_overlay): 0 off, 1 fps, 2 full
@@ -350,18 +350,18 @@ void prof_start(void) {
     atexit(perf_summary_flush);   // boot.c's _exit path goes through prof_write instead
     perf_base = (rt_trace & RT_TRACE_PERF) || flight_on;
     perf_on = perf_base || overlay == 2;
-    out_path = cfg_get("TOTK_PROFILE");
+    out_path = cfg_get("XCX_PROFILE");
     if (!out_path || !*out_path) {
         out_path = NULL;
         return;
     }
-    only_render = cfg_get("TOTK_PROFILE_RENDER") != NULL;
-    only_main = !only_render && cfg_get("TOTK_PROFILE_MAIN") != NULL;
-    const char *ch = cfg_get("TOTK_PROFILE_CHAINS");
-    const char *sl = cfg_get("TOTK_PROFILE_SLOW");
+    only_render = cfg_get("XCX_PROFILE_RENDER") != NULL;
+    only_main = !only_render && cfg_get("XCX_PROFILE_MAIN") != NULL;
+    const char *ch = cfg_get("XCX_PROFILE_CHAINS");
+    const char *sl = cfg_get("XCX_PROFILE_SLOW");
     slow_ns = sl && atoi(sl) > 0 ? (uint64_t)atoi(sl) * 1000000ull : 0;
     chains = only_render || only_main || slow_ns || (ch && *ch && strcmp(ch, "0"));
-    const char *fr = cfg_get("TOTK_PROFILE_FRAMES");
+    const char *fr = cfg_get("XCX_PROFILE_FRAMES");
     double wl, wh;
     if (fr && fr[0] == 'w' && sscanf(fr + 1, "%lf-%lf", &wl, &wh) == 2 && wl >= 0 && wl < wh)
         world_lo = (int64_t)(wl * 1e6), world_hi = (int64_t)(wh * 1e6);
@@ -380,8 +380,8 @@ void prof_start(void) {
     atexit(prof_write);   // a --seconds run ends in _exit: boot.c calls prof_write itself first
 }
 
-// ---- TOTK_TRACE=perf: frame interval and the time the render thread spends waiting, logged every 60 presents. The
-// flight recorder (TOTK_FLIGHT=1, flight.c) takes the same numbers per frame.
+// ---- XCX_TRACE=perf: frame interval and the time the render thread spends waiting, logged every 60 presents. The
+// flight recorder (XCX_FLIGHT=1, flight.c) takes the same numbers per frame.
 static uint64_t wait_ns[PERF_N], frame_ns[PERF_N], worst_ns[PERF_N];   // window totals, this frame, the slowest frame
 
 uint64_t perf_begin(void) { return kern_now_ns(); }
@@ -538,7 +538,7 @@ static void perf_gpu_line(uint64_t frame, double interval_ms, double pace_share,
 int rt_ab(void) {
     static int64_t period = -1;   // us of world clock; 0: off
     if (period < 0) {
-        const char *e = cfg_get("TOTK_AB");
+        const char *e = cfg_get("XCX_AB");
         period = e && *e ? (int64_t)(atof(e) * 1e6) : 0;
     }
     int64_t w = period ? frame_step_world_us() : -1;
@@ -549,13 +549,13 @@ int rt_ab(void) {
 
 int rt_knob(const char *name, const char *def) {
     char key[64];
-    snprintf(key, sizeof key, "TOTK_%s", name);
+    snprintf(key, sizeof key, "XCX_%s", name);
     const char *e = cfg_get(key);
     if (!e || !*e) e = def;
     return !strcmp(e, "ab") ? 2 : strcmp(e, "0") != 0;
 }
 
-// TOTK_ONE_PER_CORE=1: the process keeps the first logical processor of each physical core, so busy threads (the
+// XCX_ONE_PER_CORE=1: the process keeps the first logical processor of each physical core, so busy threads (the
 // render thread, the guest cores, the job workers) never share a core's execution units with another; "ab" switches
 // it with the A/B blocks. Off by default until measured here; Savage Wind Recomp
 // reported +4-10% from the same rule on an 8-core SMT CPU.
@@ -614,9 +614,9 @@ void perf_present(uint64_t frame) {
         last = now;
         return;
     }
-    static uint64_t slow_ns;   // TOTK_PERF_SLOW_MS (default 50): frames at least this long get a line of their own
+    static uint64_t slow_ns;   // XCX_PERF_SLOW_MS (default 50): frames at least this long get a line of their own
     if (!slow_ns) {
-        const char *e = cfg_get("TOTK_PERF_SLOW_MS");
+        const char *e = cfg_get("XCX_PERF_SLOW_MS");
         slow_ns = (uint64_t)(e && atoi(e) > 0 ? atoi(e) : 50) * 1000000ull;
     }
     if (last) {

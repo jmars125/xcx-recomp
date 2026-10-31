@@ -1,15 +1,15 @@
-# Code patches for TotK 1.4.3 main (recomp/patches.py). Ported from MacNativeGames
+# Code patches for XCX 1.4.3 main (recomp/patches.py). Ported from MacNativeGames
 # games/totk/runtime/game_patches_v143.c (MIT, Copyright (c) 2026 MacNativeGames contributors) at upstream 73c4821,
 # each original word checked against the 1.4.3 main. MacNativeGames branches to veneers after the text; here a
 # veneer's body is the site's replacement. The patch page holds three floats the runtime writes at every present
 # (frame_rate.c): +0 the 30 Hz ratio (seconds * 30), +4 the frame step in seconds, +8 the step in 60 Hz ticks.
 
-set fps60    TOTK_FPS60          1
-set realtime TOTK_REALTIME       1
-set cloth    TOTK_CLOTH_REALTIME 1
-set bounce   TOTK_HIGHFPS_FIX    1
-set output   TOTK_PATCH_OUTPUT   0
-set scene    TOTK_PATCH_SCENE    0
+set fps60    XCX_FPS60          1
+set realtime XCX_REALTIME       1
+set cloth    XCX_CLOTH_REALTIME 1
+set bounce   XCX_HIGHFPS_FIX    1
+set output   XCX_PATCH_OUTPUT   0
+set scene    XCX_PATCH_SCENE    0
 
 # 60 fps: the adaptive present-interval controller (main+0x2db174, 1.2.1 0x8f26c8) gets the minimum interval 1.
 site fps60 main 2db204 6b08015f 7100055f   # clamp: cmp w10, #1 (was cmp w10, w8 = minimum)
@@ -68,7 +68,7 @@ site scene main 585e60 bd0cca60 bd0cca61    # str s0, [x19, #0xcc8] -> str s1, [
 # same frames several times faster and gives the virtual core up for large inputs. Not main+0x547a04: that caller
 # (main+0x547964) resets a static DCtx of its own with which the game's zstd rejects some valid frames
 # (corruption_detected on a 473 KB frame the host decodes), and the game relies on that result.
-set zstd     TOTK_ZSTD_NATIVE    1
+set zstd     XCX_ZSTD_NATIVE    1
 site zstd   main 5f5358 97e913a6 94d3ab26   # bl ZSTD_decompressMultiFrame -> page+0xff0
 site zstd   main 6d7788 97e58a9a 94d0221a   # bl ZSTD_decompressMultiFrame -> page+0xff0
 site zstd   main bdc8e8 97d17642 94bc0dc2   # bl ZSTD_decompressMultiFrame -> page+0xff0
@@ -78,7 +78,7 @@ site zstd   main bdc910 97d17634 94bc0db4   # bl ZSTD_decompress_usingDDict -> p
 site zstd   main 1852314 979f9fb3 948a3733  # bl ZSTD_decompress_usingDDict -> page+0xfe0
 
 # Spin waits, from tools/spin_waits.py --exefs build/extracted/v143/exefs --patches recomp/patches-v143.txt: loops that only
-# another thread can end; their back-edges pass rt_spin_gate (runtime/kernel.c), TOTK_SPIN=0 keeps the core.
+# another thread can end; their back-edges pass rt_spin_gate (runtime/kernel.c), XCX_SPIN=0 keeps the core.
 spin main 231dc 231ec   # 5 instructions; loads
 spin main 24780 24790   # 5 instructions; loads
 spin main 5748c 574a0   # 6 instructions; loads

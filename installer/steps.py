@@ -1,12 +1,12 @@
-"""The six setup steps of docs/installer.md: check, extract, lift, compile, prepare, cleanup.
+"""The seven setup steps of docs/installer.md: check, extract, dlc, lift, compile, prepare, cleanup.
 
-Extraction runs in this process through tools/extract.py (the package's sibling tools/, which ships with it); lift,
-compile and prepare run the bundled Python on recomp/gen.py, tools/build_game.py, tools/make_romfs_patches.py and
-tools/prepare_shaders.py, whose output goes to <temp>/logs/<step>-<tool>.log and is read for progress. No Win32 call
-here: the host check is a small C program built with the bundled clang (hostcheck.c).
+Extraction runs in this process through tools/extract.py (the package's sibling tools/, which ships with it) and the
+bundled hactool; lift and compile run the bundled Python on recomp/gen.py and tools/build_game.py, whose output goes to
+<temp>/logs/<step>-<tool>.log and is read for progress. No Win32 call here: the host check is a small C program built
+with the bundled clang (hostcheck.c).
 
-Install folder: exefs/, romfs/ (romfs.bin, index.json), profile/, totk.exe and its DLLs, romfs-index.bin,
-romfs-patches/, totk_xlate.exe, the shader state of totk.exe --prepare-shaders, totk.ini, totk-install.json.
+Install folder: exefs/, romfs/ (romfs.bin, index.json), aoc/<index>/ (the add-on content's RomFS), profile/, xcx.exe
+and its DLLs, romfs-index.bin, xcx_xlate.exe, xcx.ini, xcx-install.json.
 Temp folder (<temp>/<dest name>-<hash>): check/ (ExeFS of both inputs, the host check), gen/ (C), build/ (objects),
 logs/ (kept by the cleanup).
 """
@@ -22,20 +22,22 @@ import time
 from pathlib import Path
 
 from . import ini
-from .layout import EXE, SUPPORTED, version_tag
+from .layout import APP_ID, BASE, EXE, GAME_EXE, SUPPORTED, version_tag
 from .runner import InstallError, Step
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 import extract  # noqa: E402
-import shader_list  # noqa: E402
 from extract_exefs import (common_tickets, container_entries, load_keys, nca_ctr_key, nca_inventory,  # noqa: E402
                            program_nca)
+from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 
 GiB = 1 << 30
-DEST_EXTRA = 4 * GiB      # beside the RomFS: shader and pipeline caches (about 2 GB), exefs, totk.exe, seed files
+DEST_EXTRA = 4 * GiB      # beside the RomFS: shader and pipeline caches (about 2 GB), exefs, xcx.exe
 TEMP_NEED = 3 * GiB       # generated C (about 0.9 GB) and objects
 HOSTCHECK = Path(__file__).resolve().parent / 'hostcheck.c'
 STAMP = '.install-key'
+PATCHES = 'patches-upd.txt'   # recomp/: code patch sets of 2.0.0 (recomp/patches.py)
+XLATE = 'xcx_xlate' + EXE   # the translator's name beside xcx.exe; runtime/gfx_shader.c starts it by this name
 
 
 # ---- helpers
@@ -139,22 +141,17 @@ def raise_if_damaged(error, name, path):
 
 
 def game_version(ctx):
-    """The update this install is built from: what the check identified, else the recorded one (an install made before
-    1.4.3 support records none: 1.2.1)."""
+    """The update this install is built from: what the check identified, else the recorded one."""
     return ctx.state.get('version', SUPPORTED[0])
 
 
+def expected_of(ctx, version):
+    """The expected hashes of the base game (BASE) or an update (tools/data/expected-xcx-<version>.json)."""
+    return json.loads(ctx.layout.expected(version).read_text(encoding='utf-8'))
+
+
 def expected_update(ctx):
-    return extract.load_expected()[game_version(ctx)]
-
-
-def shader_list_text(layout):
-    if layout.shader_list:
-        return layout.shader_list.read_text(encoding='utf-8')
-    try:
-        return shader_list.history(layout.root / 'refs' / 'MacNativeGames')
-    except subprocess.CalledProcessError:
-        raise InstallError('prepare.shader_list_missing')
+    return expected_of(ctx, game_version(ctx))
 
 
 class Watch(threading.Thread):
@@ -276,6 +273,11 @@ class Check(Step):
             path = Path(getattr(o, name))
             with path.open('rb') as f:
                 total += self.open_input(f, path, keys, name, is_update)
+        for path in dlc_inputs(ctx):   # optional: each must hold this game's add-on content
+            if not path.is_file():
+                raise InstallError('check.input_missing', input='dlc', path=str(path))
+            with path.open('rb') as f:
+                dlc_record(f, path, keys)
         del keys
         return total
 
@@ -307,7 +309,7 @@ class Check(Step):
         except ValueError as e:
             if is_update and 'BKTR' in str(e):
                 raise InstallError('check.update_is_base') from None
-            raise InstallError('check.update_not_totk' if is_update else 'check.base_not_totk', detail=str(e)) from None
+            raise InstallError('check.update_not_game' if is_update else 'check.base_not_game', detail=str(e)) from None
         try:
             nca_ctr_key(header, keys, tickets)
         except ValueError as e:
@@ -321,7 +323,7 @@ class Check(Step):
         dest_need = temp_need = 0
         if ctx.will_run('extract'):
             # the update is identified after this estimate: the larger RomFS of the supported ones
-            dest_need += max(extract.load_expected()[v]['romfs']['size'] for v in SUPPORTED) + ncas
+            dest_need += max(expected_of(ctx, v)['romfs']['size'] for v in SUPPORTED) + ncas
             romfs = ctx.dest / 'romfs' / 'romfs.bin'
             if romfs.is_file():   # a resumed extraction replaces it
                 dest_need -= romfs.stat().st_size
@@ -348,7 +350,7 @@ class Check(Step):
         o, work = ctx.options, ctx.temp / 'check'
         logs = ctx.temp / 'logs'
         logs.mkdir(parents=True, exist_ok=True)
-        versions = extract.load_expected()
+        versions = {v: expected_of(ctx, v) for v in SUPPORTED}
         for name, is_update in (('base', False), ('update', True)):
             out = work / name
             remove(out)
@@ -359,11 +361,11 @@ class Check(Step):
             except ValueError:
                 raise InstallError('check.exefs_failed', input=name, log=str(logs / f'extract_exefs-{name}.log')) \
                     from None
-        problems = extract.exefs_problems(work / 'base' / 'exefs', versions['1.0.0'])
+        problems = extract.exefs_problems(work / 'base' / 'exefs', expected_of(ctx, BASE))
         if problems:
             raise InstallError('check.base_wrong_version', modules=', '.join(problems))
         try:
-            found = extract.identify_update(work / 'update' / 'exefs', versions)['display_version']
+            found = extract.identify_update(work / 'update' / 'exefs', versions)['version']
         except ValueError:
             found = 'unknown'
         if found not in SUPPORTED:
@@ -372,7 +374,7 @@ class Check(Step):
             ctx.reporter.log(f'check: update {found} (recorded {game_version(ctx)})')
             ctx.state['version'] = found
             ctx.keys = {}
-            ctx.plan(ctx.forced | {'extract', 'lift', 'compile', 'prepare'})
+            ctx.plan(ctx.forced | {'extract', 'dlc', 'lift', 'compile', 'prepare'})
         ctx.state['version'] = found
 
 
@@ -386,7 +388,7 @@ class Extract(Step):
         return fingerprint('extract-1', ctx.layout.expected(game_version(ctx)))
 
     def current(self, ctx, record):
-        # Another update file than the recorded one (1.2.1 -> 1.4.3) extracts again; the check then identifies it.
+        # Another update file than the recorded one extracts again; the check then identifies it.
         update, known = getattr(ctx.options, 'update', None), ctx.state['inputs'].get('update')
         if update and known and Path(update).is_file():
             st = Path(update).stat()
@@ -484,6 +486,87 @@ class Extract(Step):
             watch.stop()
 
 
+# ---- 2b. add-on content
+
+AOC_BASE = APP_ID + 0x1000
+AOC_DATA = 5   # NCA content type of add-on content (PublicData)
+
+
+def aoc_index(title_id):
+    """The AddOnContentIndex of an add-on title id, or None when it is not one of this game's."""
+    index = int(title_id, 16) - AOC_BASE
+    return index if 0 < index < 2000 else None
+
+
+def dlc_inputs(ctx):
+    """The add-on content files chosen (--dlc, any number), else none."""
+    return [Path(p) for p in (getattr(ctx.options, 'dlc', None) or [])]
+
+
+def dlc_record(f, path, keys):
+    """(title id, NCA record) of the add-on content in an opened NSP. InstallError when it holds none of this game's."""
+    try:
+        kind, entries = container_entries(f, path.stat().st_size)
+        records = nca_inventory(f, entries, keys)
+    except ValueError as e:
+        raise_if_damaged(e, 'dlc', path)
+        raise InstallError('check.file_unreadable', input='dlc', detail=str(e)) from None
+    for record, _ in records:
+        if record['content_type'] == AOC_DATA and aoc_index(record['title_id']) is not None:
+            return record['title_id'], record
+    raise InstallError('check.dlc_not_game', path=str(path))
+
+
+class Dlc(Step):
+    """Extracts the RomFS of each add-on content file into aoc/<index>/, where xcx.exe mounts it (runtime/fs_host.c
+    mount_aoc). Without --dlc it keeps what an earlier run extracted."""
+    id = 'dlc'
+
+    def key(self, ctx):
+        files = dlc_inputs(ctx)
+        if not files:   # nothing chosen: whatever is recorded stays current
+            return ctx.state.get('steps', {}).get('dlc', {}).get('key') or fingerprint('dlc-1')
+        return fingerprint('dlc-1', *(f'{p.name}:{p.stat().st_size}:{p.stat().st_mtime_ns}' for p in files))
+
+    def current(self, ctx, record):
+        return all((ctx.dest / 'aoc' / str(i)).is_dir() for i in record.get('indices', []))
+
+    def run(self, ctx):
+        files, dest, rep = dlc_inputs(ctx), ctx.dest, ctx.reporter
+        if not files:
+            return {'indices': []}
+        keys_path = Path(ctx.options.keys)
+        keys = load_keys(keys_path)
+        work = ctx.temp / 'dlc'
+        remove(work)
+        work.mkdir(parents=True)
+        hactool_keys = work / 'hactool.keys'
+        hactool_prod_keys(keys_path, hactool_keys)
+        indices = []
+        try:
+            for n, path in enumerate(files):
+                rep.progress('dlc', 'extract', n, len(files), 'files')
+                with path.open('rb') as f:
+                    title_id, record = dlc_record(f, path, keys)
+                index = aoc_index(title_id)
+                nca, out = work / f'{index}.nca', dest / 'aoc' / str(index)
+                copy_range(path, record['nca_offset'], record['size'], nca)
+                remove(out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                code, log = extract.run_hactool([str(ctx.layout.hactool), '-y', '--disablekeywarns', '--suppresskeys',
+                                                 '-k', str(hactool_keys), f'--romfsdir={out}', str(nca)], dict(os.environ))
+                (ctx.temp / 'logs').mkdir(parents=True, exist_ok=True)
+                (ctx.temp / 'logs' / f'dlc-{index}.log').write_text(log, encoding='utf-8')
+                if code or not out.is_dir():
+                    raise InstallError('dlc.extract_failed', path=str(path), log=str(ctx.temp / 'logs' / f'dlc-{index}.log'))
+                rep.log(f'dlc: {path.name} is add-on content {index} ({title_id})')
+                indices.append(index)
+        finally:
+            remove(hactool_keys)
+        rep.progress('dlc', 'extract', len(files), len(files), 'files')
+        return {'indices': sorted(set(indices))}
+
+
 # ---- 3. lift
 
 EMITTED = re.compile(r'^emitted (\d+)/(\d+) chunks')
@@ -495,7 +578,7 @@ class Lift(Step):
     transient = True
 
     def key(self, ctx):
-        return fingerprint('lift-1', ctx.keys['extract'], ctx.layout.recomp, ctx.layout.patches(game_version(ctx)))
+        return fingerprint('lift-2', ctx.keys['extract'], ctx.layout.recomp)
 
     def current(self, ctx, record):
         gen = ctx.temp / 'gen'
@@ -512,8 +595,11 @@ class Lift(Step):
             if m:
                 rep.progress('lift', 'emit', int(m.group(1)), int(m.group(2)), 'chunks')
 
-        code, log = run_tool(ctx, 'lift', layout.recomp / 'gen.py',
-                             ['--exefs', ctx.dest / 'exefs', '--out', gen, '--patches', layout.patches(game_version(ctx))], parse)
+        args = ['--exefs', ctx.dest / 'exefs', '--out', gen]
+        table = layout.recomp / PATCHES
+        if table.is_file():   # the 60 fps sites (XCX_FPS60 switches them at run time)
+            args += ['--patches', table]
+        code, log = run_tool(ctx, 'lift', layout.recomp / 'gen.py', args, parse)
         if code:
             raise InstallError('lift.failed', code=code, log=str(log))
         (gen / STAMP).write_text(ctx.keys['lift'] + '\n')
@@ -531,12 +617,12 @@ class Compile(Step):
     def key(self, ctx):
         layout = ctx.layout
         clang = subprocess.run([str(layout.clang), '--version'], capture_output=True, text=True).stdout
-        tools = [layout.tools / n for n in ('build_game.py', 'romfs_index.py', 'check_content.py')]
+        tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py')]
         return fingerprint('compile-1', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps, *tools,
                            clang, *[d.name for d in layout.dlls])
 
     def current(self, ctx, record):
-        exe = ctx.dest / ('totk' + EXE)
+        exe = ctx.dest / GAME_EXE
         if not exe.is_file() or not (ctx.dest / 'romfs-index.bin').is_file():
             return False
         if not all((ctx.dest / d.name).is_file() for d in ctx.layout.dlls):
@@ -563,81 +649,46 @@ class Compile(Step):
             '--version', version_tag(game_version(ctx)), '--expected', layout.expected(game_version(ctx)),
             '--exefs', dest / 'exefs', '--romfs', dest / 'romfs',
             '--profile', dest / 'profile'], parse)
-        exe = build / ('totk' + EXE)
+        exe = build / ('xcx' + EXE)
         if code or not exe.is_file():
             raise InstallError('compile.failed', code=code, log=str(log))
         try:
-            replace_file(exe, dest / exe.name)
+            replace_file(exe, dest / GAME_EXE)
         except PermissionError:
-            raise InstallError('compile.exe_in_use', path=str(dest / exe.name)) from None
+            raise InstallError('compile.exe_in_use', path=str(dest / GAME_EXE)) from None
         replace_file(build / 'romfs-index.bin', dest / 'romfs-index.bin')
         for dll in layout.dlls:
             replace_file(dll, dest / dll.name)
-        return {'exe_sha256': file_sha256(dest / exe.name)}
+        return {'exe_sha256': file_sha256(dest / GAME_EXE)}
 
 
 # ---- 5. prepare
 
-TRANSLATED = re.compile(r'gfx_shader: prepare: (\d+) of (\d+) pairs')
-
-
 class Prepare(Step):
+    """Puts the shader translator beside xcx.exe. XCX has no shader list to translate ahead of play yet: shaders are
+    translated on first use and cached in shader-cache/."""
     id = 'prepare'
 
     def key(self, ctx):
         layout = ctx.layout
-        xlate_id = layout.xlate.with_suffix('.id')
-        tools = [layout.tools / n for n in ('prepare_shaders.py', 'shader_census.py', 'make_romfs_patches.py')]
-        return fingerprint('prepare-1', ctx.keys['compile'], layout.xlate, xlate_id, shader_list_text(layout), *tools)
+        return fingerprint('prepare-2', ctx.keys['compile'], layout.xlate, layout.xlate.with_suffix('.id'))
 
     def current(self, ctx, record):
-        dest = ctx.dest
-        xlate = dest / ctx.layout.xlate.name
-        return ((dest / 'shader-prepared.bin').is_file() and (dest / 'romfs-patches' / 'manifest.tsv').is_file()
-                and xlate.is_file() and file_sha256(xlate) == record.get('xlate_sha256'))
+        xlate = ctx.dest / XLATE
+        return xlate.is_file() and file_sha256(xlate) == record.get('xlate_sha256')
 
     def run(self, ctx):
-        layout, rep, dest = ctx.layout, ctx.reporter, ctx.dest
-        xlate = dest / layout.xlate.name
+        layout, dest = ctx.layout, ctx.dest
+        ctx.reporter.progress('prepare', 'translator', force=True)
+        xlate = dest / XLATE
         if xlate.is_file() and file_sha256(xlate) != file_sha256(layout.xlate):
-            # Another translator: its cache keys differ, so the old translations would only take space.
-            for name in ('shader-cache', 'shader-prepared.bin'):
-                remove(dest / name)
+            remove(dest / 'shader-cache')   # another translator: its cache keys differ, the old ones only take space
         replace_file(layout.xlate, xlate)
         xlate_id = layout.xlate.with_suffix('.id')
         if xlate_id.is_file():
             replace_file(xlate_id, xlate.with_suffix('.id'))
         else:
             remove(xlate.with_suffix('.id'))
-
-        rep.progress('prepare', 'romfs_patches', force=True)
-        remove(dest / 'romfs-patches')
-        code, log = run_tool(ctx, 'prepare', layout.tools / 'make_romfs_patches.py',
-                             ['--version', version_tag(game_version(ctx)), '--romfs', dest / 'romfs', '--out',
-                              dest / 'romfs-patches'])
-        if code:
-            raise InstallError('prepare.romfs_patches_failed', code=code, log=str(log))
-
-        shader_list = layout.shader_list
-        if not shader_list:
-            shader_list = ctx.temp / 'shader_list.tsv'
-            shader_list.write_text(shader_list_text(layout), encoding='utf-8', newline='\n')
-
-        def parse(line):
-            m = TRANSLATED.search(line)
-            if m:
-                rep.progress('prepare', 'translate', int(m.group(1)), int(m.group(2)), 'shaders')
-            elif 'listed variants' in line:
-                rep.progress('prepare', 'translate', force=True)
-            elif 'gfx_shader: prepare:' in line and 'translated' in line and 'programs' in line:
-                rep.progress('prepare', 'libraries', force=True)
-
-        rep.progress('prepare', 'seed', force=True)
-        code, log = run_tool(ctx, 'prepare', layout.tools / 'prepare_shaders.py',
-                             [dest, '--version', version_tag(game_version(ctx)), '--romfs', dest / 'romfs', '--exefs',
-                              dest / 'exefs', '--list', shader_list], parse)
-        if code or not (dest / 'shader-prepared.bin').is_file():
-            raise InstallError('prepare.shaders_failed', code=code, log=str(log))
         return {'xlate_sha256': file_sha256(xlate)}
 
 
@@ -659,10 +710,10 @@ class Cleanup(Step):
         rep.progress('cleanup', 'temp', force=True)
         for stale in dest.glob('update-merge-*'):
             remove(stale)
-        for name in ('gen', 'build', 'check', 'shader_list.tsv'):
+        for name in ('gen', 'build', 'check', 'dlc'):
             remove(ctx.temp / name)
         return {}
 
 
 def all_steps():
-    return [Check(), Extract(), Lift(), Compile(), Prepare(), Cleanup()]
+    return [Check(), Extract(), Dlc(), Lift(), Compile(), Prepare(), Cleanup()]

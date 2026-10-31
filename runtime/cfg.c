@@ -1,6 +1,6 @@
-// totk.ini: file-backed defaults for the TOTK_* environment variables (docs/controls.md, totk.ini.example).
+// xcx.ini: file-backed defaults for the XCX_* environment variables (docs/controls.md, xcx.ini.example).
 // Format: "key = value" lines, '#' or ';' at the start of a line begins a comment, [sections] only group. A key is a
-// variable name without "TOTK_" (an optional TOTK_ prefix is accepted), case-insensitive. A value is the rest of the
+// variable name without "XCX_" (an optional XCX_ prefix is accepted), case-insensitive. A value is the rest of the
 // line, trimmed, optionally in double quotes; an empty value counts as unset. The environment wins over the file.
 //
 // Live settings: cfg_set changes a value in memory (readers see the new pointer; the old string is kept, so a pointer
@@ -15,8 +15,8 @@
 #include "host.h"
 #include "platform/platform.h"
 
-#define PREFIX "TOTK_"
-#define PREFIX_LEN 5
+#define PREFIX "XCX_"
+#define PREFIX_LEN 4
 #define CFG_MAX_KEYS 512
 
 typedef struct { char *key, *value; int dirty, removed; } CfgEntry;   // key upper-case, without the prefix; value NULL after cfg_reset
@@ -53,7 +53,7 @@ static const char *const known[] = {
     "WINDOW_SIZE", "XLATE", "XLATE_ID", "XLATE_PROCS", "ZSTD_CHECK", "ZSTD_NATIVE",
 };
 
-// The totk.ini section a key cfg_set may write goes to when the file lacks it (totk.ini.example's sections).
+// The xcx.ini section a key cfg_set may write goes to when the file lacks it (xcx.ini.example's sections).
 static const struct { const char *key, *section; } sections[] = {
     {"FPS_LIMIT", "frame rate"}, {"FPS60", "frame rate"},
     {"REALTIME", "frame rate"}, {"CLOTH_REALTIME", "frame rate"}, {"HIGHFPS_FIX", "frame rate"},
@@ -158,7 +158,7 @@ static void add(char *key, char *value, int line) {
     size_t vl = strlen(value);
     if (vl >= 2 && value[0] == '"' && value[vl - 1] == '"') value[vl - 1] = 0, value++;
     if (!*key) return;
-    if (!is_known(key)) rt_log("cfg: totk.ini line %d: unknown key '%s'", line, key);
+    if (!is_known(key)) rt_log("cfg: xcx.ini line %d: unknown key '%s'", line, key);
     if (!*value) return;   // "key =" leaves the setting at its default
     for (int i = 0; i < n_entries; i++)
         if (!strcmp(entries[i].key, key)) {   // a repeated key: the later line wins
@@ -183,7 +183,7 @@ int cfg_load(const char *path) {
         char *s = trim(p);
         char *eq = strchr(s, '=');
         if (*s && *s != '#' && *s != ';' && *s != '[') {
-            if (!eq) rt_log("cfg: totk.ini line %d: no '=' in '%s'", line, s);
+            if (!eq) rt_log("cfg: xcx.ini line %d: no '=' in '%s'", line, s);
             else {
                 *eq = 0;
                 add(trim(s), trim(eq + 1), line);
@@ -381,7 +381,7 @@ static void put(Out *o, const char *s, size_t n) {
     if (o->n + n + 1 > o->cap) {
         o->cap = (o->n + n + 1) * 2;
         o->buf = realloc(o->buf, o->cap);
-        if (!o->buf) rt_fatal("cfg: out of memory writing totk.ini");
+        if (!o->buf) rt_fatal("cfg: out of memory writing xcx.ini");
     }
     memcpy(o->buf + o->n, s, n);
     o->n += n;
@@ -429,7 +429,7 @@ int cfg_save_to(const char *path) {
     // after[i]: entries to write after line i (-1 = none); replace[i]: the entry whose value line i now carries
     int *replace = malloc(sizeof(int) * ((size_t)nl + 1)), *after_key = malloc(sizeof(int) * (size_t)(n + 1));
     char *drop = calloc((size_t)nl + 1, 1);   // lines of a reset key
-    if (!lines || !replace || !after_key || !drop) rt_fatal("cfg: out of memory writing totk.ini");
+    if (!lines || !replace || !after_key || !drop) rt_fatal("cfg: out of memory writing xcx.ini");
     for (int i = 0, at = 0; i < nl; i++) {
         size_t start = (size_t)at;
         while ((uint64_t)at < size && text[at] != '\n') at++;
@@ -543,7 +543,7 @@ static int find_ini(void) {
     char *cut = strrchr(path, '\\');
     if (!cut) cut = strrchr(path, '/');
     if (!cut || cut + 10 >= path + sizeof path) return 0;
-    strcpy(cut + 1, "totk.ini");
+    strcpy(cut + 1, "xcx.ini");
     snprintf(ini_path, sizeof ini_path, "%s", path);
     return 1;
 }
@@ -564,6 +564,6 @@ void cfg_init(void) {
     for (int i = 0; i < n_entries; i++) {
         char var[128];
         snprintf(var, sizeof var, PREFIX "%s", entries[i].key);
-        if (getenv(var)) rt_log("cfg: %s is set in the environment and overrides totk.ini", var);
+        if (getenv(var)) rt_log("cfg: %s is set in the environment and overrides xcx.ini", var);
     }
 }

@@ -1,4 +1,4 @@
-// nn::audio AudioOut on SDL3: XCX streams PCM through AudioOut next to the audio renderer (TotK used only the
+// nn::audio AudioOut on SDL3: XCX streams PCM through AudioOut next to the audio renderer (XCX used only the
 // renderer). Each open AudioOut is an SDL audio stream of 16-bit samples at 48 kHz with the channel count the game
 // asked for. AppendAudioOutBuffer queues a buffer's data on the stream; a buffer is released once the device has
 // consumed every byte up to its end, which GetReleasedAudioOutBuffer reports in append order. Without an audio device
@@ -62,12 +62,16 @@ static uint64_t consumed(const Out *o) {
     return played < o->appended ? played : o->appended;
 }
 
-// The SDL device pulls on its own thread: a release there wakes a game waiting on the buffer event.
+// The SDL device pulls on its own thread: a release there wakes a game waiting on the buffer event. SDL holds the
+// stream's lock around this callback, and the functions below hold `lock` while they call into the stream
+// (consumed), so waiting for `lock` here deadlocks with them: the game's audio thread then never returns from
+// GetReleasedAudioOutBuffer, keeps its virtual core, and the threads bound to that core stop (XCX after New Game).
+// A busy `lock` skips this pull; the next one, a few milliseconds later, signals the release.
 static void SDLCALL device_pull(void *user, SDL_AudioStream *s, int additional, int total) {
     (void)s, (void)additional, (void)total;
     Out *o = user;
     uint64_t ev = 0;
-    AcquireSRWLockShared(&lock);
+    if (!TryAcquireSRWLockShared(&lock)) return;
     if (o->guest && o->event && o->nq && consumed(o) >= o->q[0].end) ev = o->event;
     ReleaseSRWLockShared(&lock);
     if (ev) kern_signal_system_event(ev);

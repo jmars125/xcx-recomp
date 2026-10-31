@@ -7,7 +7,7 @@
 // every call, so ending, submitting and the command pool stay on the submitting thread.
 //
 // Every vkCmd* the runtime calls through vk.h goes through the rc_* wrappers below (the macros at the end); the
-// extension commands called through function pointers have rec_* wrappers of their own. TOTK_VK_RECORDER=0 makes every
+// extension commands called through function pointers have rec_* wrappers of their own. XCX_VK_RECORDER=0 makes every
 // call at once (the same calls in the same order), =ab switches it with the A/B blocks (rt_ab), per submission part.
 //
 // The design follows Savage Wind Recomp's and LAS Recomp's recorder threads (LAS Recomp runtime/nvn/vulkan/record.c,
@@ -17,7 +17,7 @@
 void rec_begin(VkCommandBuffer cb);   // the submitting thread, sub_lock held
 void rec_end(void);                   // waits for the recorder; no-op when rec_begin did not start it
 void rec_drain(void);                 // waits until the recorder made every call queued so far
-void rec_stats_log(void);             // TOTK_TRACE=perf: packets, bytes, drains and waits since the last call
+void rec_stats_log(void);             // XCX_TRACE=perf: packets, bytes, drains and waits since the last call
 
 // Extension commands called through device function pointers.
 void rec_push_tpl(PFN_vkCmdPushDescriptorSetWithTemplateKHR fn, VkCommandBuffer cb, VkDescriptorUpdateTemplate tpl,

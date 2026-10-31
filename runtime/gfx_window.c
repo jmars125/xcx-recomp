@@ -11,7 +11,7 @@
 //
 // The in-game menu (ui/menu.h) draws over the game image in the present's command buffer, after the blit; its keyboard
 // and mouse come from the window procedure (ui/menu_win.cpp). The window's size and fullscreen state are the settings
-// TOTK_WINDOW_SIZE and TOTK_FULLSCREEN, applied at start and whenever a cfg_set changes them (window_settings_live).
+// XCX_WINDOW_SIZE and XCX_FULLSCREEN, applied at start and whenever a cfg_set changes them (window_settings_live).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,8 +46,8 @@ static volatile LONG g_focused = 1;
 static volatile LONG g_focus_msgs;
 static CRITICAL_SECTION g_start_lock;       // gfx_window_start / vsync start
 static int g_started, g_wnd_failed;
-static int g_background;                   // TOTK_BACKGROUND_WINDOW: the window stays behind the user's windows
-static int g_fs_pending;                   // window thread: TOTK_FULLSCREEN waits for the first activation
+static int g_background;                   // XCX_BACKGROUND_WINDOW: the window stays behind the user's windows
+static int g_fs_pending;                   // window thread: XCX_FULLSCREEN waits for the first activation
 
 // ---- swapchain and present state (g_pl)
 static CRITICAL_SECTION g_pl;
@@ -73,7 +73,7 @@ static int g_cap_w, g_cap_h, g_cap_valid;
 static int g_flip_on;            // vk_present_blit submitted the blit of swapchain image g_flip_idx; vk_present_flip presents it
 static uint32_t g_flip_idx;
 
-// ---- TOTK_FLIGHT thumbnails (flight.c; g_pl): each present also blits the swapchain image down into slot frame % g_th_n
+// ---- XCX_FLIGHT thumbnails (flight.c; g_pl): each present also blits the swapchain image down into slot frame % g_th_n
 // of a host-visible ring. A slot's tag names the frame it holds complete; recording a new frame clears the tag first,
 // and the tag is set once the fence of that present has signalled.
 #define TH_BYTES ((VkDeviceSize)FLIGHT_THUMB_W * FLIGHT_THUMB_H * 4)
@@ -189,15 +189,15 @@ static WINDOWPLACEMENT g_saved_place = {sizeof g_saved_place};   // the window b
 
 static int is_fullscreen(HWND h) { return !(GetWindowLongW(h, GWL_STYLE) & WS_OVERLAPPEDWINDOW); }
 
-// TOTK_FULLSCREEN=1: borderless window over the monitor. TOTK_WINDOW_SIZE=<w>x<h>: client area of the window (the
+// XCX_FULLSCREEN=1: borderless window over the monitor. XCX_WINDOW_SIZE=<w>x<h>: client area of the window (the
 // swapchain follows the window; the game image is scaled to it).
 static int cfg_fullscreen(void) {
-    return cfg_bool("TOTK_FULLSCREEN");
+    return cfg_bool("XCX_FULLSCREEN");
 }
 
 static void cfg_window_size(int *w, int *h) {
     int x = 0, y = 0;
-    if (sscanf(cfg_value("TOTK_WINDOW_SIZE"), "%dx%d", &x, &y) != 2 || x < 640 || y < 360 || x > 7680 || y > 4320)
+    if (sscanf(cfg_value("XCX_WINDOW_SIZE"), "%dx%d", &x, &y) != 2 || x < 640 || y < 360 || x > 7680 || y > 4320)
         sscanf(cfg_meta("WINDOW_SIZE")->def, "%dx%d", &x, &y);   // unparsable or out of range: the default
     *w = x;
     *h = y;
@@ -232,14 +232,14 @@ static char g_applied_size[32];
 static int g_applied_fs;
 
 static void note_applied(void) {
-    snprintf(g_applied_size, sizeof g_applied_size, "%s", cfg_value("TOTK_WINDOW_SIZE"));
+    snprintf(g_applied_size, sizeof g_applied_size, "%s", cfg_value("XCX_WINDOW_SIZE"));
     g_applied_fs = cfg_fullscreen();
 }
 
 // Window thread: the window takes the size and fullscreen state of the settings when they changed. In fullscreen the
 // size goes into the placement restored when fullscreen ends.
 static void apply_settings(HWND h) {
-    int size_changed = strcmp(cfg_value("TOTK_WINDOW_SIZE"), g_applied_size) != 0, fs = cfg_fullscreen(), fs_changed = fs != g_applied_fs;
+    int size_changed = strcmp(cfg_value("XCX_WINDOW_SIZE"), g_applied_size) != 0, fs = cfg_fullscreen(), fs_changed = fs != g_applied_fs;
     note_applied();
     if (size_changed) {
         int cw, ch;
@@ -271,15 +271,15 @@ void gfx_window_apply_settings(void) {
 }
 
 // Present path (g_pl held): a settings change (cfg_version) reaches the window thread, which applies a changed size or
-// fullscreen; a changed TOTK_VK_PRESENT rebuilds the swapchain at this present.
+// fullscreen; a changed XCX_VK_PRESENT rebuilds the swapchain at this present.
 static void window_settings_live(void) {
     static unsigned seen;
     static int started;
-    static char present[16];   // the TOTK_VK_PRESENT the swapchain was made with
+    static char present[16];   // the XCX_VK_PRESENT the swapchain was made with
     unsigned v = cfg_version();
     if (started && v == seen) return;
     seen = v;
-    const char *e = cfg_value("TOTK_VK_PRESENT");
+    const char *e = cfg_value("XCX_VK_PRESENT");
     if (!started || strncmp(e, present, sizeof present - 1)) {
         snprintf(present, sizeof present, "%s", e);
         if (started) InterlockedExchange(&g_dirty, 1);
@@ -292,7 +292,7 @@ void gfx_window_request_close(void) {
     if (g_hwnd) PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
 }
 
-// ---- refresh rate of the window's monitor (TOTK_FPS_LIMIT=display). The window thread measures it when the window
+// ---- refresh rate of the window's monitor (XCX_FPS_LIMIT=display). The window thread measures it when the window
 // opens, lands on another monitor or the display mode changes; readers take the stored value. QueryDisplayConfig gives
 // the exact rational rate (59.94, 143.998); EnumDisplaySettings' whole hertz is the fallback.
 static HMONITOR g_rate_mon;
@@ -356,7 +356,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             input_cursor_suspend(1);
             toggle_fullscreen(h);
             input_cursor_suspend(0);
-            cfg_set("TOTK_FULLSCREEN", is_fullscreen(h) ? "1" : "0");   // the menu shows it; the next start keeps it
+            cfg_set("XCX_FULLSCREEN", is_fullscreen(h) ? "1" : "0");   // the menu shows it; the next start keeps it
             cfg_save();
             note_applied();   // what cfg_get reads now (the environment may still override it)
         }
@@ -384,7 +384,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_ACTIVATEAPP: {
         int in = w != 0;
         InterlockedExchange(&g_focused, in);
-        oe_set_focus(in);                          // pinned to 1 by TOTK_ASSUME_FOCUS inside
+        oe_set_focus(in);                          // pinned to 1 by XCX_ASSUME_FOCUS inside
         oe_push_message(OE_MSG_FOCUS_STATE_CHANGED);
         InterlockedIncrement(&g_focus_msgs);
         if (in && g_fs_pending) {
@@ -409,13 +409,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 static DWORD WINAPI window_main(void *arg) {
     (void)arg;
     HINSTANCE inst = GetModuleHandleW(NULL);
-    // Icon resource 1 of totk.rc (runtime/totk.ico): the title bar, the taskbar button and Alt+Tab.
+    // Icon resource 1 of xcx.rc (runtime/xcx.ico): the title bar, the taskbar button and Alt+Tab.
     WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = wnd_proc, .hInstance = inst,
                       .hIcon = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON),
                                           GetSystemMetrics(SM_CYICON), LR_SHARED),
                       .hIconSm = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                             GetSystemMetrics(SM_CYSMICON), LR_SHARED),
-                      .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"TotKRecompWindow"};
+                      .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"XCXRecompWindow"};
     RegisterClassExW(&wc);
     int cw, ch;
     cfg_window_size(&cw, &ch);
@@ -424,10 +424,10 @@ static DWORD WINAPI window_main(void *arg) {
     // The window opens behind the user's windows without taking focus: it shows the game's blank loading frames for a
     // while, and must not cover what the player works on meanwhile. The game still counts itself in focus until the
     // first WM_ACTIVATEAPP, so loading goes on, and keyboard input waits for the foreground (input_win.c). Its taskbar
-    // button flashes until it is brought up, and TOTK_FULLSCREEN waits for that first activation.
-    // TOTK_BACKGROUND_WINDOW=1 (test runs): no flashing, never fullscreen at start, and F11 keeps the window's place.
-    int background = g_background = cfg_get("TOTK_BACKGROUND_WINDOW") && atoi(cfg_get("TOTK_BACKGROUND_WINDOW"));
-    g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"TotK Recomp", WND_STYLE, CW_USEDEFAULT, CW_USEDEFAULT,
+    // button flashes until it is brought up, and XCX_FULLSCREEN waits for that first activation.
+    // XCX_BACKGROUND_WINDOW=1 (test runs): no flashing, never fullscreen at start, and F11 keeps the window's place.
+    int background = g_background = cfg_get("XCX_BACKGROUND_WINDOW") && atoi(cfg_get("XCX_BACKGROUND_WINDOW"));
+    g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"XCX Recomp", WND_STYLE, CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top, NULL, NULL, inst, NULL);
     if (!g_hwnd) {
         rt_log("gfx: CreateWindowEx failed (%lu)", GetLastError());
@@ -453,10 +453,10 @@ static DWORD WINAPI window_main(void *arg) {
 }
 
 // ---- swapchain
-static const char *g_present_got = "";   // the TOTK_VK_PRESENT value of the mode the swapchain got; "" before one
+static const char *g_present_got = "";   // the XCX_VK_PRESENT value of the mode the swapchain got; "" before one
 
 static VkPresentModeKHR pick_present_mode(VkPhysicalDevice pd) {
-    const char *e = cfg_value("TOTK_VK_PRESENT");
+    const char *e = cfg_value("XCX_VK_PRESENT");
     VkPresentModeKHR want = !strcmp(e, "mailbox") ? VK_PRESENT_MODE_MAILBOX_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
     uint32_t n = 0;
@@ -471,7 +471,7 @@ static VkPresentModeKHR pick_present_mode(VkPhysicalDevice pd) {
     static int logged = -1;   // the mode last logged: a change from the menu shows in the log
     if ((int)got != logged) {
         logged = (int)got;
-        rt_log("gfx: present mode %s (TOTK_VK_PRESENT=%s)", name, e);
+        rt_log("gfx: present mode %s (XCX_VK_PRESENT=%s)", name, e);
     }
     return got;
 }
@@ -796,7 +796,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     sync_barrier(cb, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     const int rect[4] = {cx, cy, cw, ch};
-    // FSR (TOTK_UPSCALER) when the swapchain is larger than the crop; else the bilinear blit
+    // FSR (XCX_UPSCALER) when the swapchain is larger than the crop; else the bilinear blit
     int fsr = general && vk_fsr_record(cb, slot, src, fmt, w, h, rect, dst, g_sc_ext.width, g_sc_ext.height);
     g_scaler = fsr ? 2 : (uint32_t)cw != g_sc_ext.width || (uint32_t)ch != g_sc_ext.height;
     if (!fsr) {

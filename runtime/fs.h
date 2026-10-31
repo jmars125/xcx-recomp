@@ -39,11 +39,12 @@ const char *romfs_entry(uint64_t i, uint64_t *offset, uint64_t *size);   // path
 const char *romfs_image_path(void);                        // the romfs.bin path fs_init opened
 size_t romfs_overlay_count(void);
 const char *romfs_overlay(size_t k, const char **file, uint64_t *size, int *is_added);   // RomFS path of overlay k
-void fs_trace(const char *what, const char *path);         // TOTK_TRACE=fs: one line per open
+void fs_trace(const char *what, const char *path);         // XCX_TRACE=fs: one line per open
 
 // ---- fs_host.c
 wchar_t *fs_wide(const char *utf8);                        // UTF-16 copy for the W APIs; free() it. Fatal on
                                                            // invalid UTF-8
+int fs_aoc_list(int32_t *out, int offset, int count);       // add-on content indices present (fs_host.c)
 void fs_host_set_profile(const char *dir);                 // profile directory; before the first storage mount only
                                                            // (default rt_config()->profile)
 int fs_save_busy(void);                                    // a save is being written: a save file open for writing,

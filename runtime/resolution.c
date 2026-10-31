@@ -5,7 +5,7 @@
 // MacNativeGames contributors) make the game read both sizes from the patch page, and the texture heap that holds the
 // output- and scene-sized render targets grows with them.
 //
-// Settings, read at start: TOTK_OUTPUT_RES = <w>x<h> (default 1920x1080, the game's own), TOTK_RENDER_SCALE = the
+// Settings, read at start: XCX_OUTPUT_RES = <w>x<h> (default 1920x1080, the game's own), XCX_RENDER_SCALE = the
 // scene's size relative to the output: "game" (default, 5/6, the game's 1600x900 at 1080p) or a percentage; above 100
 // the game supersamples its scene, which smooths edges (anti-aliasing) at the cost of GPU time. The game's own final
 // pass (FSR 1 EASU) scales the scene to the output; the present scales the output to the window (vk_fsr.c).
@@ -40,7 +40,7 @@
 #define SCENE_W 1600
 #define SCENE_H 900
 #define DTA_KIB 113664u      // DynamicTextureAllocatorMem, shipped
-#define SCENE_MAX 4096       // per side, as MacNativeGames' TOTK_RENDER_RES
+#define SCENE_MAX 4096       // per side, as MacNativeGames' XCX_RENDER_RES
 
 static struct {
     int decided;
@@ -55,16 +55,16 @@ static void decide(void) {
     R.decided = 1;
     R.ow = BASE_W;
     R.oh = BASE_H;
-    const char *o = cfg_value("TOTK_OUTPUT_RES");
+    const char *o = cfg_value("XCX_OUTPUT_RES");
     unsigned w = 0, h = 0;
     char tail;
     if (sscanf(o, "%ux%u%c", &w, &h, &tail) == 2 && w >= 1280 && h >= 720 && w <= 7680 && h <= 4320) {
         R.ow = w & ~1u;
         R.oh = h & ~1u;
     } else {
-        rt_log("resolution: TOTK_OUTPUT_RES=%s is not <width>x<height> in 1280x720..7680x4320; 1920x1080", o);
+        rt_log("resolution: XCX_OUTPUT_RES=%s is not <width>x<height> in 1280x720..7680x4320; 1920x1080", o);
     }
-    const char *s = cfg_value("TOTK_RENDER_SCALE");
+    const char *s = cfg_value("XCX_RENDER_SCALE");
     double k = 5.0 / 6.0;
     if (strcmp(s, "game")) {
         char *end;
@@ -73,7 +73,7 @@ static void decide(void) {
             k = pct / 100.0;
             R.scene_set = 1;
         } else {
-            rt_log("resolution: TOTK_RENDER_SCALE=%s is not game or a percentage 25..400; game", s);
+            rt_log("resolution: XCX_RENDER_SCALE=%s is not game or a percentage 25..400; game", s);
         }
     }
     double sw = R.ow * k, sh = R.oh * k;

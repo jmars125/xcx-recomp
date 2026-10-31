@@ -11,6 +11,8 @@
 //   <profile>/save-backup/<time>/      the three committed saves before the current one
 //   <profile>/temp/                    emptied at start
 //   <profile>/cache/<index>/           cache storage
+//   <romfs>/../aoc/<index>/            add-on content: the extracted RomFS of each one the player has (installer),
+//                                      mounted read-only by MountAddOnContent
 //
 // The save mount is journaled as on Horizon: changes go to a working copy and become the committed save atomically at
 // Commit; a crash or an Unmount before Commit leaves the previous committed save. Commit returns at once and the copy
@@ -26,7 +28,7 @@
 #include "platform/platform.h"
 #include "romfs_path.h"
 
-#define TOTK_APPLICATION_ID 0x0100453019aa8000ull   // XCX DE (the name stays to keep the diff against TotK Recomp small)
+#define XCX_APPLICATION_ID 0x0100453019aa8000ull   // XCX DE (the name stays to keep the diff against XCX Recomp small)
 #define FILE_BASE 0x200000000ull
 #define DIR_BASE 0x300000000ull
 #define NFILES 1024
@@ -34,7 +36,8 @@
 #define NMOUNTS 16
 #define PATH_CAP 1100
 
-enum { M_FREE, M_SAVE, M_TEMP, M_CACHE, M_SAVE_RO };   // M_SAVE: the working copy; M_SAVE_RO: the committed save
+enum { M_FREE, M_SAVE, M_TEMP, M_CACHE, M_SAVE_RO, M_AOC };   // M_SAVE: the working copy; M_SAVE_RO: the committed
+                                                              // save; M_AOC: add-on content (read-only)
 
 typedef struct { int kind; char name[32]; char root[1024]; } Mount;
 typedef struct { HANDLE h; int mode, save; } File;   // h NULL = free; save: on a save-data mount
@@ -68,7 +71,7 @@ static DWORD attributes(const char *path) {
 }
 
 // Save in progress: a save-data file open for writing, or save data changed in the last 3 s and not committed yet
-// (TotK writes a slot's files back to back and then commits; between the files nothing is open for a moment).
+// (XCX writes a slot's files back to back and then commits; between the files nothing is open for a moment).
 static volatile LONG save_writers, save_dirty;
 static volatile LONG64 save_changed_ns;
 static void save_wait_commit(void);
@@ -599,7 +602,7 @@ static uint32_t host_path(const char *path, char *out, size_t cap) { return host
 static uint32_t save_change_path(const char *path, char *out, size_t cap) {
     int kind = M_FREE;
     uint32_t r = host_path_kind(path, out, cap, &kind);
-    if (!r && kind == M_SAVE_RO) return FS_R_UNSUPPORTED_OPEN;
+    if (!r && (kind == M_SAVE_RO || kind == M_AOC)) return FS_R_UNSUPPORTED_OPEN;
     if (!r && kind == M_SAVE) save_touched();
     return r;
 }
@@ -634,7 +637,7 @@ static uint32_t mount_save(const char *name, const uint64_t *uid) {
 
 static uint8_t save_exists(uint64_t application, const uint64_t *uid) {
     ready();
-    return application == TOTK_APPLICATION_ID && my_uid(uid);
+    return application == XCX_APPLICATION_ID && my_uid(uid);
 }
 
 // Other titles' save data (data-link bonuses) is not present on this host.
@@ -677,6 +680,37 @@ static uint32_t mount_cache(const char *name, int index) {
     DWORD a = attributes(p);
     if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) return FS_R_TARGET_NOT_FOUND;
     return mount_add(name, M_CACHE, p);
+}
+
+// ---- add-on content
+#define AOC_MAX 256   // AddOnContentIndex values looked for (XCX DE has one add-on, index 1)
+
+static void aoc_dir(int index, char *out, size_t cap) { snprintf(out, cap, "%s/../aoc/%d", rt_config()->romfs, index); }
+
+static int aoc_present(int index) {
+    char p[PATH_CAP];
+    aoc_dir(index, p, sizeof p);
+    DWORD a = attributes(p);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// Writes the indices of the add-on content present, from the offset-th on, at most count, and returns how many; with
+// out NULL, returns how many are present.
+int fs_aoc_list(int32_t *out, int offset, int count) {
+    int n = 0, seen = 0;
+    for (int i = 1; i < AOC_MAX && (!out || n < count); i++) {
+        if (!aoc_present(i) || seen++ < offset) continue;
+        if (out) out[n] = i;
+        n++;
+    }
+    return n;
+}
+
+static uint32_t mount_aoc(const char *name, int index) {
+    if (index <= 0 || index >= AOC_MAX || !aoc_present(index)) return FS_R_TARGET_NOT_FOUND;
+    char p[PATH_CAP];
+    aoc_dir(index, p, sizeof p);
+    return mount_add(name, M_AOC, p);
 }
 
 typedef struct { int32_t index; uint8_t reserved[0x1c]; } CacheStorageInfo;
@@ -795,7 +829,7 @@ static uint32_t open_file(uint64_t *out, const char *path, int mode) {
     DWORD a = attributes(p);
     if (a == INVALID_FILE_ATTRIBUTES || (a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
         return FS_R_PATH_NOT_FOUND;
-    if (kind == M_SAVE_RO && (mode & FS_OPEN_WRITE)) return FS_R_UNSUPPORTED_OPEN;
+    if ((kind == M_SAVE_RO || kind == M_AOC) && (mode & FS_OPEN_WRITE)) return FS_R_UNSUPPORTED_OPEN;
     int save_writer = kind == M_SAVE && (mode & FS_OPEN_WRITE);
     DWORD access = (mode & FS_OPEN_READ ? GENERIC_READ : 0) | (mode & FS_OPEN_WRITE ? GENERIC_WRITE : 0);
     wchar_t *w = fs_wide(p);
@@ -1073,6 +1107,15 @@ static void ov_delete_recursive(Cpu *c) { ret_x(c, delete_recursive(arg_p(c, 0))
 static void ov_open_directory(Cpu *c) { ret_x(c, open_directory(arg_p(c, 0), arg_p(c, 1), I32(2))); }
 static void ov_read_directory(Cpu *c) { ret_x(c, read_directory(arg_p(c, 0), arg_p(c, 1), arg_x(c, 2), I64(3))); }
 static void ov_close_directory(Cpu *c) { close_directory(arg_x(c, 0)); }
+// Result MountAddOnContent(const char *name, AddOnContentIndex index, void *cache, size_t cache_size)
+static void ov_mount_aoc(Cpu *c) { ret_x(c, mount_aoc(arg_p(c, 0), (int)arg_x(c, 1))); }
+// Result QueryMountAddOnContentCacheSize(size_t *out, AddOnContentIndex index): host files need no cache
+static void ov_query_aoc_cache(Cpu *c) {
+    uint64_t *out = arg_p(c, 0);
+    if (!out) { ret_x(c, FS_R_INVALID_ARGUMENT); return; }
+    *out = 0x1000;
+    ret_x(c, 0);
+}
 static void ov_mount_save(Cpu *c) { ret_x(c, mount_save(arg_p(c, 0), arg_p(c, 1))); }
 static void ov_mount_save_ro(Cpu *c) { ret_x(c, mount_save_ro(arg_p(c, 0), arg_x(c, 1), arg_p(c, 2))); }
 static void ov_save_exists(Cpu *c) { ret_x(c, save_exists(arg_x(c, 0), arg_p(c, 1))); }
@@ -1092,7 +1135,7 @@ static void ov_set_allocator(Cpu *c) { (void)c; }
 // Result EnsureSaveData(const Uid &): the save directory is created on mount, so there is nothing to make ahead.
 static void ov_ensure_save(Cpu *c) { ret_x(c, my_uid(arg_p(c, 0)) ? 0 : FS_R_TARGET_NOT_FOUND); }
 // bool IsSaveDataExisting(const Uid &): the overload for the calling application.
-static void ov_save_exists_own(Cpu *c) { ret_x(c, save_exists(TOTK_APPLICATION_ID, arg_p(c, 0))); }
+static void ov_save_exists_own(Cpu *c) { ret_x(c, save_exists(XCX_APPLICATION_ID, arg_p(c, 0))); }
 #undef I32
 #undef I64
 
@@ -1151,6 +1194,8 @@ HOST_OVERRIDE(S_OPEN_DIRECTORY, ov_open_directory);
 HOST_OVERRIDE(S_READ_DIRECTORY, ov_read_directory);
 HOST_OVERRIDE(S_CLOSE_DIRECTORY, ov_close_directory);
 HOST_OVERRIDE(S_MOUNT_SAVE, ov_mount_save);
+HOST_OVERRIDE("_ZN2nn2fs17MountAddOnContentEPKciPvm", ov_mount_aoc);
+HOST_OVERRIDE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", ov_query_aoc_cache);
 HOST_OVERRIDE(S_MOUNT_SAVE_RO, ov_mount_save_ro);
 HOST_OVERRIDE(S_SAVE_EXISTS, ov_save_exists);
 HOST_OVERRIDE(S_MOUNT_TEMP, ov_mount_temp);
@@ -1337,7 +1382,7 @@ static uint64_t probe_romfs(void) {
     CHECK(write_open == FS_R_UNSUPPORTED_OPEN && write_existing == FS_R_UNSUPPORTED_OPEN,
           "write open -> %#x/%#x, expected 0x6402", write_open, write_existing);
 
-    // Overlays (TOTK_ROMFS_PATCHES, TOTK_ROMFS_MODS): served in place of the original, added files and their folders
+    // Overlays (XCX_ROMFS_PATCHES, XCX_ROMFS_MODS): served in place of the original, added files and their folders
     // exist, bytes equal the overlay file.
     size_t nov = romfs_overlay_count(), ovok = 0;
     for (size_t k = 0; k < nov; k++) {
@@ -1536,7 +1581,7 @@ static void probe_save_tx(const uint64_t *uid) {
     committed = gen;
 
     // the read-only mount shows the committed save and refuses changes
-    CHECK(tx_write(a, 99) && RES(S_MOUNT_SAVE_RO, U("ro"), TOTK_APPLICATION_ID, U(uid)) == 0 &&
+    CHECK(tx_write(a, 99) && RES(S_MOUNT_SAVE_RO, U("ro"), XCX_APPLICATION_ID, U(uid)) == 0 &&
           tx_read("ro:/tx_a.sav") == committed && RES(S_OPEN_FILE, U(&h), U("ro:/tx_a.sav"), FS_OPEN_WRITE) ==
           FS_R_UNSUPPORTED_OPEN && RES(S_CREATE_FILE, U("ro:/x"), 0) == FS_R_UNSUPPORTED_OPEN &&
           RES(S_RENAME_FILE, U("save:/tx_a.sav"), U("ro:/y")) == FS_R_INVALID_PATH, "MountSaveDataReadOnly");
@@ -1553,7 +1598,7 @@ static void probe_storage(void) {
     char tmp[MAX_PATH * 3], dir[MAX_PATH * 3 + 64];
     DWORD n = GetTempPathW(MAX_PATH + 1, tmpw);
     need(n && WideCharToMultiByte(CP_UTF8, 0, tmpw, -1, tmp, sizeof tmp, NULL, NULL) > 0, "temporary directory");
-    snprintf(dir, sizeof dir, "%stotk-probe-fs-%lu", tmp, GetCurrentProcessId());
+    snprintf(dir, sizeof dir, "%sxcx-probe-fs-%lu", tmp, GetCurrentProcessId());
     remove_tree(dir);
     fs_host_set_profile(dir);
     uint64_t uid[2], other[2], h = 0, h2 = 0, d = 0, l = 0;
@@ -1569,9 +1614,9 @@ static void probe_storage(void) {
     CHECK(RES(S_MOUNT_SAVE, U("save"), U(other)) == FS_R_TARGET_NOT_FOUND, "MountSaveData for another user");
     CHECK(RES(S_MOUNT_SAVE, U("save"), U(uid)) == 0, "MountSaveData");
     CHECK(RES(S_MOUNT_SAVE, U("save"), U(uid)) == FS_R_ALREADY_EXISTS, "MountSaveData twice");
-    CHECK((CALL(S_SAVE_EXISTS, TOTK_APPLICATION_ID, U(uid)) & 0xff) == 1 &&
-          (CALL(S_SAVE_EXISTS, TOTK_APPLICATION_ID + 0x1000, U(uid)) & 0xff) == 0, "IsSaveDataExisting");
-    CHECK(RES(S_MOUNT_SAVE_RO, U("other"), TOTK_APPLICATION_ID + 0x1000, U(uid)) == FS_R_TARGET_NOT_FOUND,
+    CHECK((CALL(S_SAVE_EXISTS, XCX_APPLICATION_ID, U(uid)) & 0xff) == 1 &&
+          (CALL(S_SAVE_EXISTS, XCX_APPLICATION_ID + 0x1000, U(uid)) & 0xff) == 0, "IsSaveDataExisting");
+    CHECK(RES(S_MOUNT_SAVE_RO, U("other"), XCX_APPLICATION_ID + 0x1000, U(uid)) == FS_R_TARGET_NOT_FOUND,
           "MountSaveDataReadOnly of another title");
     CHECK(!fs_save_busy(), "idle at start");
 

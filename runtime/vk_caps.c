@@ -1,16 +1,16 @@
 // What the runtime branches on, logged once at device creation, and the fallbacks for GPUs other than the RX 9070.
 //
 // Fallbacks (each also forced on any GPU by an environment switch, to test it where the GPU does not need it):
-//   - no shaderFloat64 (TOTK_VK_NO_FLOAT64=1 clears the feature before vkCreateDevice): the translator lowers FP64 to
+//   - no shaderFloat64 (XCX_VK_NO_FLOAT64=1 clears the feature before vkCreateDevice): the translator lowers FP64 to
 //     FP32 ("softfloat64"), so no shader declares Float64.
-//   - minStorageBufferOffsetAlignment above 4 (TOTK_VK_SSBO_ALIGN=<power of two> raises it): the translator computes
+//   - minStorageBufferOffsetAlignment above 4 (XCX_VK_SSBO_ALIGN=<power of two> raises it): the translator computes
 //     storage offsets from the guest address rounded down to that alignment (Ryujinx's unaligned storage path), and
 //     vk_exec_draw.c ssbo_info binds the rounded-down address, so shader writes reach guest memory instead of a copy.
-//   - no graphics pipeline library with fast linking (TOTK_GPL=0 forces it): vk_caps.gpl = 0, the extension stays
+//   - no graphics pipeline library with fast linking (XCX_GPL=0 forces it): vk_caps.gpl = 0, the extension stays
 //     disabled, and pipelines are built whole.
-//   - no 32-lane pin (no subgroupSizeControl, 32 outside min..max, or TOTK_VK_SUBGROUP_PIN=0): stages run at the
+//   - no 32-lane pin (no subgroupSizeControl, 32 outside min..max, or XCX_VK_SUBGROUP_PIN=0): stages run at the
 //     device's subgroupSize (SPIR-V 1.3 without a required size) and the translator is told that size.
-//     TOTK_VK_SUBGROUP=<n> pins n instead of 32 where the driver allows it.
+//     XCX_VK_SUBGROUP=<n> pins n instead of 32 where the driver allows it.
 // The defaults (Float64, no storage rounding, 32 everywhere) leave the shader cache keys as they were (gfx_shader.c).
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +32,7 @@ static uint32_t env_u32(const char *name, uint32_t def) {
 
 void vk_caps_features(VkPhysicalDeviceFeatures *f) {
     f64_supported = f->shaderFloat64;
-    if (env_u32("TOTK_VK_NO_FLOAT64", 0)) f->shaderFloat64 = VK_FALSE;
+    if (env_u32("XCX_VK_NO_FLOAT64", 0)) f->shaderFloat64 = VK_FALSE;
     vk_caps.float64 = f->shaderFloat64;
 }
 
@@ -40,7 +40,7 @@ int vk_caps_gpl(const VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT *f,
                 const VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT *p) {
     gpl_lib = f->graphicsPipelineLibrary;
     gpl_fast = p->graphicsPipelineLibraryFastLinking;
-    vk_caps.gpl = gpl_lib && gpl_fast && cfg_bool("TOTK_GPL");
+    vk_caps.gpl = gpl_lib && gpl_fast && cfg_bool("XCX_GPL");
     return vk_caps.gpl;
 }
 
@@ -81,12 +81,12 @@ void vk_caps_init(VkCtx *c) {
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(c->phys, NULL, &ne, ep);
 
-    uint32_t real_align = (uint32_t)l->minStorageBufferOffsetAlignment, a = env_u32("TOTK_VK_SSBO_ALIGN", 0);
+    uint32_t real_align = (uint32_t)l->minStorageBufferOffsetAlignment, a = env_u32("XCX_VK_SSBO_ALIGN", 0);
     if (a && !(a & (a - 1)) && a > real_align) l->minStorageBufferOffsetAlignment = a;
     vk_caps.sbuf_align = l->minStorageBufferOffsetAlignment > 4 ? (uint32_t)l->minStorageBufferOffsetAlignment : 0;
 
-    uint32_t want = env_u32("TOTK_VK_SUBGROUP", 32);
-    int pin = f13.subgroupSizeControl && cfg_bool("TOTK_VK_SUBGROUP_PIN") && p13.minSubgroupSize <= want &&
+    uint32_t want = env_u32("XCX_VK_SUBGROUP", 32);
+    int pin = f13.subgroupSizeControl && cfg_bool("XCX_VK_SUBGROUP_PIN") && p13.minSubgroupSize <= want &&
               want <= p13.maxSubgroupSize;
     vk_caps.sg_size = want;
     vk_caps.sg_pin_stages = pin ? p13.requiredSubgroupSizeStages : 0;
@@ -118,7 +118,7 @@ void vk_caps_init(VkCtx *c) {
            depth_ok(p, VK_FORMAT_D24_UNORM_S8_UINT), depth_ok(p, VK_FORMAT_X8_D24_UNORM_PACK32), depth_ok(p, VK_FORMAT_D32_SFLOAT),
            depth_ok(p, VK_FORMAT_D32_SFLOAT_S8_UINT));
     rt_log("vk caps: gpl %s fast-link %s (graphicsPipelineLibrary %u%s)", vk_caps.gpl ? "yes" : "no",
-           gpl_fast ? "yes" : "no", (unsigned)gpl_lib, gpl_lib && gpl_fast && !vk_caps.gpl ? ", off by TOTK_GPL=0" : "");
+           gpl_fast ? "yes" : "no", (unsigned)gpl_lib, gpl_lib && gpl_fast && !vk_caps.gpl ? ", off by XCX_GPL=0" : "");
     rt_log("vk caps: fallbacks: float64 %s, storage buffers %s %u, subgroup pin %u on stages %#x, translator subgroup vs/fs/cs %u/%u/%u",
            vk_caps.float64 ? "native" : "softfloat64", vk_caps.sbuf_align ? "rounded down to" : "exact, alignment",
            (unsigned)l->minStorageBufferOffsetAlignment, want, (unsigned)vk_caps.sg_pin_stages, told[0], told[1], told[2]);

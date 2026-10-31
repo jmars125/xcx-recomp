@@ -1,7 +1,7 @@
 // Adapted from MacNativeGames games/totk/runtime/movie_host.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
 // contributors).
 // movie::Decoder for VP9 on the host with libvpx (BSD-3-Clause, linked statically).
-// TotK's pre-rendered movies (Event/Movie/*.webm, 28 files: VP9 profile 0, 1920x1080, 30 fps, video only) play through
+// XCX's pre-rendered movies (Event/Movie/*.webm, 28 files: VP9 profile 0, 1920x1080, 30 fps, video only) play through
 // the SDK movie library in subsdk0, Android's MediaCodec over NVIDIA NvMM. Its decoder opens NVDEC through NvRm, whose
 // first NvOsDrvOpen (sdk+0x3f9050) aborts with "Use of nv::InitializeGraphics is required." because ov_gfx.c takes
 // nv::InitializeGraphics over; nvdrv and mm:u are not served either. The game's own demuxer (movie::Extractor) runs as
@@ -21,7 +21,7 @@
 // decoded frames are handed over when their presentation time is due, counted from the first frame (movie_tick, at every
 // present on the presenting guest thread), at most one per present. When the game falls behind, a frame more than 1.5
 // periods late is dropped if the next one is due too, so the picture keeps time with the movie's sound.
-// TOTK_MOVIE_PACE=0 hands every decoded frame over at the next present; TOTK_MOVIE_HOST=0 leaves every decoder to the
+// XCX_MOVIE_PACE=0 hands every decoded frame over at the next present; XCX_MOVIE_HOST=0 leaves every decoder to the
 // library (which aborts at the first movie).
 #include <windows.h>
 #include <emmintrin.h>
@@ -94,7 +94,7 @@ void movie_set_clock(uint64_t (*clock)(void)) { g_clock = clock ? clock : kern_n
 void movie_set_pace(int on) { g_pace = on; }
 static int pace_on(void) {
     if (g_pace < 0) {
-        const char *e = cfg_get("TOTK_MOVIE_PACE");
+        const char *e = cfg_get("XCX_MOVIE_PACE");
         g_pace = !(e && !strcmp(e, "0"));
     }
     return g_pace;
@@ -102,7 +102,7 @@ static int pace_on(void) {
 static int host_off(void) {
     static int v = -1;
     if (v < 0) {
-        const char *e = cfg_get("TOTK_MOVIE_HOST");
+        const char *e = cfg_get("XCX_MOVIE_HOST");
         v = e && !strcmp(e, "0");
     }
     return v;
@@ -441,7 +441,7 @@ static void ov_ctor(Cpu *c) {
     guest_init();
     if (type != MOVIE_TYPE_VP9 || mode != MOVIE_MODE_BUFFER || host_off()) {
         rt_log("movie: decoder type %d mode %d format %d left to the library%s", type, mode, format,
-               host_off() ? " (TOTK_MOVIE_HOST=0)" : " (only VP9 in buffer mode runs on the host)");
+               host_off() ? " (XCX_MOVIE_HOST=0)" : " (only VP9 in buffer mode runs on the host)");
         pass(c, MOVIE_CTOR);
         return;
     }

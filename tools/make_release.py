@@ -1,7 +1,8 @@
 """Assemble the release folder of docs/installer.md ("Release layout") from pinned downloads.
 
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/TotK-Setup [--zip build/release/TotK-Setup.zip]
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/TotK-Setup --prove
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup.zip]
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --from ..\\..\\totk-pc-recomp
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --prove
 
 Needs Python 3.14 (tarfile reads the MSYS2 .zst packages), uv on PATH and network access on the first run. Downloads are
 cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismatch stops the build. The folder holds:
@@ -9,17 +10,22 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     python/    python.org embeddable 3.14.9 + the packages of tools/requirements-installer.txt + tkinter (the Tcl/Tk 9.0
                files come out of the python.org installer's own component MSI, unpacked with msiexec /a and expand.exe;
                the installer is never run)
-    llvm/      llvm-mingw, x86_64 only, the files clang and lld need to compile and link totk.exe
-    runtime/   libtotkrt.a (build_game.py --make-runtime-lib with llvm/), the runtime headers, romfs.c, patches.c and
+    llvm/      llvm-mingw, x86_64 only, the files clang and lld need to compile and link xcx.exe
+    runtime/   libxcxrt.a (build_game.py --make-runtime-lib with llvm/), the runtime headers, romfs.c, patches.c and
                ov_zstd.c (compiled per install), deps/ (headers and import libraries of SDL3, Opus, libvpx, Vulkan and VMA)
-    bin/       totk_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
-    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, totk.ini.example
-    VERSION    the repository's VERSION plus the commit, 0.1.0+973c626; the installer's release string
-    TotK-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
+    bin/       xcx_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
+    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example
+    VERSION    the repository's VERSION plus the commit, 0.1.0+973c626 (VERSION alone outside a git checkout); the
+               installer's release string
+    XCX-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
 
---prove compiles generated/v121 and links build/release-check/totk.exe with nothing but the folder's python/, llvm/,
+--from DIR takes python/, llvm/, runtime/deps/, bin/ and licenses/ from an unpacked earlier release (an XCX Recomp
+release, or the TotK Recomp release whose bin/totk_xlate.exe is the same translator) instead of downloading and
+unpacking them; runtime/, the sources and the launcher are still built from this checkout.
+
+--prove compiles generated/upd and links build/release-check/xcx.exe with nothing but the folder's python/, llvm/,
 runtime/ and bin/ (PATH holds the Windows system directory and those), then runs the four probes there. It needs a
-generated/v121 and build/extracted/v121 from the usual game build (they are read, nothing is written to them).
+generated/upd and build/extracted/upd from the usual game build (they are read, nothing is written to them).
 
 The folder contains nothing derived from the game: check_content runs over it before the script finishes. Then the
 folder's own python runs a check-only installer pass (no game files: it must get through the release, toolchain and host
@@ -41,7 +47,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_content  # noqa: E402
-import shader_list  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MAIN_ROOT = (ROOT / 'build').resolve().parent   # build/, generated/, toolchain/ and refs/ are junctions in a worktree
@@ -51,7 +56,6 @@ WORK = MAIN_ROOT / 'toolchain' / 'release-work'   # unpacked downloads
 MSYS2 = 'https://repo.msys2.org/mingw/ucrt64/'
 SDL_VERSION = '3.4.18'
 LLVM_VERSION = '20261020'
-MNG_COMMIT = 'b75be8cfa704df3701e86130c8ced268e79d6b11'   # MacNativeGames, the shader list (refs/MacNativeGames)
 # name: (url, sha256)
 PINS = {
     'python-embed': ('https://www.python.org/ftp/python/3.14.9/python-3.14.9-embed-amd64.zip',
@@ -86,7 +90,7 @@ PINS = {
 TCLTK_PAYLOAD = ('a12', 'ac87609db3f715404dd41a989c2f1706ea1512f3d86217f938d11c63af8eb505')
 SDL3_DLL_SHA256 = '2b4b128d8d510cc2d442693cf848c050d700d43dc667afe9e5fd82b0570d667e'   # SDL3.dll inside the SDL zip
 
-# llvm-mingw: what clang and lld need to compile and link totk.exe for x86_64-w64-mingw32 (dynamic LLVM, libc++, compiler-rt).
+# llvm-mingw: what clang and lld need to compile and link xcx.exe for x86_64-w64-mingw32 (dynamic LLVM, libc++, compiler-rt).
 LLVM_BIN = {'clang.exe', 'clang++.exe', 'clang-23.exe', 'ld.lld.exe', 'llvm-ar.exe', 'llvm-ranlib.exe', 'llvm-nm.exe',
             'llvm-objdump.exe', 'llvm-objcopy.exe', 'llvm-strip.exe', 'llvm-readobj.exe', 'llvm-dlltool.exe',
             'llvm-rc.exe', 'llvm-cvtres.exe', 'llvm-windres.exe', 'llvm-wrapper.exe', 'mingw32-common.cfg',
@@ -97,11 +101,12 @@ LLVM_SKIP_DIRS = {'aarch64-w64-mingw32', 'armv7-w64-mingw32', 'i686-w64-mingw32'
 LLVM_SKIP_SUFFIXES = {'.idl', '.tlb'}
 
 # tools/ files the installer steps run (and what they import), copied from the repo.
-TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'make_romfs_patches.py',
-               'prepare_shaders.py', 'romfs_index.py', 'shader_census.py', 'shader_list.py']
+TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'romfs_index.py']
 TOOLS_DIRS = ['vendor/macnativegames', 'data']   # data/: expected hashes
 RUNTIME_SUFFIXES = {'.h', '.inc', '.ico'}   # .ico: the installer window icon
 
+VERSION_TAG = 'upd'   # installer/layout.py version_tag: the generated/ and build/extracted/ name of 2.0.0
+EXPECTED = 'expected-xcx-2.0.0.json'
 PROBES = ['--probe-kernel', '--probe-vkexec', '--probe-nvn-tex', '--probe-shader']
 
 
@@ -270,7 +275,7 @@ def build_llvm(out):
 def build_bin(out):
     b = out / 'bin'
     b.mkdir(parents=True, exist_ok=True)
-    for f in ('totk_xlate.exe', 'totk_xlate.id'):
+    for f in ('xcx_xlate.exe', 'xcx_xlate.id'):
         shutil.copy2(MAIN_ROOT / 'build' / 'xlate' / f, b / f)
     shutil.copy2(MAIN_ROOT / 'toolchain' / 'hactool' / 'hactool.exe', b / 'hactool.exe')
     dll = unpack('sdl3-dll') / 'SDL3.dll'
@@ -326,17 +331,32 @@ def collect_licenses(out):
         shutil.copy2(out / 'llvm' / name, lic / 'llvm-mingw-LICENSE.txt')
 
 
+def take_prebuilt(out, src):
+    """python/, llvm/, runtime/deps/, bin/ and licenses/ copied from the unpacked release src. The translator is renamed
+    to xcx_xlate when src is the TotK Recomp release."""
+    for d in ('python', 'llvm', 'licenses'):
+        copy_tree(src / d, out / d, lambda r: '__pycache__' in r)
+    copy_tree(src / 'runtime' / 'deps', out / 'runtime' / 'deps')
+    (out / 'bin').mkdir(parents=True, exist_ok=True)
+    for name in ('hactool.exe', 'ninja.exe', 'SDL3.dll', 'libopus-0.dll'):
+        shutil.copy2(src / 'bin' / name, out / 'bin' / name)
+    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'totk_xlate'
+    for ext in ('.exe', '.id'):
+        shutil.copy2(src / 'bin' / (stem + ext), out / 'bin' / ('xcx_xlate' + ext))
+    return out / 'llvm'
+
+
 # ---- runtime/, recomp/, tools/, data/ ---------------------------------------------------------------------------------
 
 def runtime_lib(out, llvm):
-    """Build libtotkrt.a with the folder's llvm/ and copy it, the headers and the install-side sources into runtime/."""
+    """Build libxcxrt.a with the folder's llvm/ and copy it, the headers and the install-side sources into runtime/."""
     build = MAIN_ROOT / 'build' / 'release-check' / 'rtlib'
-    gen = MAIN_ROOT / 'generated' / 'v121'
-    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--toolchain', llvm,
-         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--gen', gen, '--out', build],
+    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', VERSION_TAG,
+         '--expected', ROOT / 'tools' / 'data' / EXPECTED, '--toolchain', llvm,
+         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--out', build],
         env=clean_env(llvm / 'bin', out / 'bin'))
     rt = out / 'runtime'
-    shutil.copy2(build / 'libtotkrt.a', rt / 'libtotkrt.a')
+    shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
     for p in sorted((ROOT / 'runtime').rglob('*')):
         if p.suffix in RUNTIME_SUFFIXES and p.is_file():
             (rt / p.relative_to(ROOT / 'runtime')).parent.mkdir(parents=True, exist_ok=True)
@@ -352,11 +372,8 @@ def build_sources(out):
         shutil.copy2(ROOT / 'tools' / f, out / 'tools' / f)
     for d in TOOLS_DIRS:
         copy_tree(ROOT / 'tools' / d, out / 'tools' / d, lambda r: '__pycache__' in r or r.endswith('.md'))
-    (out / 'data').mkdir(exist_ok=True)
-    text = shader_list.history(MAIN_ROOT / 'refs' / 'MacNativeGames', MNG_COMMIT)
-    (out / 'data' / 'shader_list.tsv').write_text(text, encoding='utf-8', newline='\n')
     copy_tree(ROOT / 'installer', out / 'installer', lambda r: '__pycache__' in r or r.startswith('launcher/'))
-    shutil.copy2(ROOT / 'totk.ini.example', out / 'totk.ini.example')
+    shutil.copy2(ROOT / 'xcx.ini.example', out / 'xcx.ini.example')
     shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', out / 'THIRD_PARTY_NOTICES.md')
     (out / 'VERSION').write_text(version() + '\n', encoding='utf-8')
 
@@ -364,13 +381,15 @@ def build_sources(out):
 def version():
     """The port version from VERSION with the commit as build metadata: 0.1.0+973c626. The commit keeps two releases of
     one version apart, so the installer reruns the steps an earlier release made."""
-    r = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)
-    if r.returncode or not r.stdout.strip():
-        sys.exit('no git version: not a git checkout')
-    return (ROOT / 'VERSION').read_text(encoding='utf-8').strip() + '+' + r.stdout.strip()
+    semver = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
+    try:
+        r = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True)
+    except FileNotFoundError:
+        return semver
+    return semver + '+' + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else semver
 
 
-# ---- TotK-Setup.exe --------------------------------------------------------------------------------------------------
+# ---- XCX-Setup.exe --------------------------------------------------------------------------------------------------
 
 def c_wide(text):
     """A C wide string literal of text: ASCII as is, everything else as a universal character name."""
@@ -407,7 +426,7 @@ def build_launcher(out, llvm):
     run([llvm / 'bin' / 'llvm-windres.exe', '-I', ROOT / 'runtime', '-O', 'coff',
          ROOT / 'installer' / 'launcher' / 'launcher.rc', '-o', res], env=env)
     run([llvm / 'bin' / 'clang.exe', '-O2', '-mwindows', '-Wall', '-Wl,-s', '-I', work,
-         ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'TotK-Setup.exe'], env=env)
+         ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'XCX-Setup.exe'], env=env)
 
 
 # ---- checks ----------------------------------------------------------------------------------------------------------
@@ -464,23 +483,26 @@ def write_zip(out, path):
 
 
 def prove(out):
-    """Compile generated/v121 and link totk.exe with the folder's tools only, then run the probes next to it."""
+    """Compile generated/upd and link xcx.exe with the folder's tools only, then run the probes next to it."""
     out = out.resolve()
-    gen = MAIN_ROOT / 'generated' / 'v121'
-    ext = MAIN_ROOT / 'build' / 'extracted' / 'v121'
+    gen = MAIN_ROOT / 'generated' / VERSION_TAG
+    ext = MAIN_ROOT / 'build' / 'extracted' / VERSION_TAG
     chk = MAIN_ROOT / 'build' / 'release-check'
     env = clean_env(out / 'python', out / 'llvm' / 'bin', out / 'bin')
     t0 = time.time()
-    run([out / 'python' / 'python.exe', out / 'tools' / 'build_game.py', '--toolchain', out / 'llvm',
-         '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime', '--runtime-lib', out / 'runtime' / 'libtotkrt.a',
+    run([out / 'python' / 'python.exe', out / 'tools' / 'build_game.py', '--version', VERSION_TAG,
+         '--expected', out / 'tools' / 'data' / EXPECTED, '--toolchain', out / 'llvm',
+         '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime', '--runtime-lib', out / 'runtime' / 'libxcxrt.a',
          '--ninja', out / 'bin' / 'ninja.exe', '--gen', gen, '--out', chk, '--exefs', ext / 'exefs', '--romfs', ext / 'romfs',
          '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
     for dll in ('SDL3.dll', 'libopus-0.dll'):
         shutil.copy2(out / 'bin' / dll, chk / dll)
+    for dll in ('libc++.dll', 'libunwind.dll', 'libwinpthread-1.dll'):   # installer/layout.py release_dlls
+        shutil.copy2(out / 'llvm' / 'bin' / dll, chk / dll)
     failed = []
     for probe in PROBES:
-        r = subprocess.run([str(chk / 'totk.exe'), probe], cwd=chk, env=clean_env(chk), capture_output=True, text=True,
+        r = subprocess.run([str(chk / 'xcx.exe'), probe], cwd=chk, env=clean_env(chk), capture_output=True, text=True,
                            timeout=900)
         tail = (r.stdout.strip().splitlines() or [''])[-1]
         print(f'{probe}: exit {r.returncode}: {tail}')
@@ -494,6 +516,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--out', type=Path, required=True, help='release folder (replaced)')
     ap.add_argument('--zip', type=Path, help='also write the folder as this zip')
+    ap.add_argument('--from', dest='src', type=Path,
+                    help='unpacked earlier release to take python/, llvm/, runtime/deps/, bin/ and licenses/ from')
     ap.add_argument('--prove', action='store_true', help='only run the compile-and-probe check on an existing folder')
     args = ap.parse_args()
     out = args.out.resolve()
@@ -501,16 +525,28 @@ def main():
         prove(out)
         return
     if out.exists():
-        shutil.rmtree(out)
+        # Renamed first: a folder whose setup is running cannot be renamed (its python holds files open), and deleting
+        # it file by file would break that install halfway.
+        old = out.with_name(out.name + '.old')
+        shutil.rmtree(old, ignore_errors=True)
+        try:
+            out.rename(old)
+        except OSError as e:
+            sys.exit(f'{out} is in use (a setup from it is running?): {e}')
+        shutil.rmtree(old)
     out.mkdir(parents=True)
-    build_python(out)
-    llvm = build_llvm(out)
-    build_bin(out)
-    build_deps(out)
+    if args.src:
+        llvm = take_prebuilt(out, args.src.resolve())
+    else:
+        build_python(out)
+        llvm = build_llvm(out)
+        build_bin(out)
+        build_deps(out)
     runtime_lib(out, llvm)
     build_sources(out)
     build_launcher(out, llvm)
-    collect_licenses(out)
+    if not args.src:
+        collect_licenses(out)
     check_folder(out)
     check_bundle(out)
     sizes(out)

@@ -138,7 +138,7 @@ void rec_begin(VkCommandBuffer cb) {
             } else {
                 SetThreadPriority(rec_thread, GetThreadPriority(GetCurrentThread()));
                 rt_log("vk_rec: the replay's Vulkan commands are made by a recorder thread%s",
-                       mode == 2 ? " in the B blocks (TOTK_AB)" : "");
+                       mode == 2 ? " in the B blocks (XCX_AB)" : "");
             }
         }
     }
@@ -433,8 +433,7 @@ void rec_push_tpl(PFN_vkCmdPushDescriptorSetWithTemplateKHR fn, VkCommandBuffer 
     A_PushTpl *a = put(R_PushTpl, sizeof *a + bytes);
     uint8_t *at = (uint8_t *)(a + 1);
     *a = (A_PushTpl){fn, tpl, layout, set, NULL};
-    // An empty set (XCX has some) copies nothing, but pData must still be a valid pointer: the NVIDIA driver reads it.
-    a->data = bytes ? tail_copy(&at, data, bytes) : (const void *)at;
+    a->data = tail_copy(&at, data, bytes);
     pub();
 }
 

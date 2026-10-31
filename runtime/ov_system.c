@@ -5,13 +5,13 @@
 // host. Stub rule: queries and initialisation succeed with neutral values, data paths stop with a named fatal.
 //
 // Environment:
-//   TOTK_LANG=<Switch language code>   the game's language as given ("ja", "en-GB", "zh-Hant", ...)
-//   TOTK_LOCALE=<BCP 47 tag>           else the language for this locale ("pt-BR"), else the Windows user locale;
+//   XCX_LANG=<Switch language code>   the game's language as given ("ja", "en-GB", "zh-Hant", ...)
+//   XCX_LOCALE=<BCP 47 tag>           else the language for this locale ("pt-BR"), else the Windows user locale;
 //                                      a language the game does not ship becomes en-US
-//   TOTK_OPERATION_MODE=docked|handheld   operation and performance mode reported to the game (default docked)
-//   TOTK_ASSUME_FOCUS=1                GetCurrentFocusState always reports in focus, whatever the window says; the
+//   XCX_OPERATION_MODE=docked|handheld   operation and performance mode reported to the game (default docked)
+//   XCX_ASSUME_FOCUS=1                GetCurrentFocusState always reports in focus, whatever the window says; the
 //                                      window opens without taking focus (gfx_window.c), for scripted runs
-//   TOTK_SHARED_FONTS=<dir>            nn::pl shared fonts (tools/extract_fonts.py output), default
+//   XCX_SHARED_FONTS=<dir>            nn::pl shared fonts (tools/extract_fonts.py output), default
 //                                      <romfs>/../../firmware/shared-fonts
 #include <windows.h>
 #include <bcrypt.h>
@@ -38,15 +38,15 @@ static void need(int ok, const char *what) {
 static const char *caller(Cpu *c, char *buf, int n) { return ldr_describe(c->x[30] - 4, buf, n); }
 
 // ==== nn::oe (services.c)
-// TOTK_OPERATION_MODE, read once: 1 handheld (OperationMode 0, PerformanceMode Normal 0), 0 docked (1, Boost 1).
+// XCX_OPERATION_MODE, read once: 1 handheld (OperationMode 0, PerformanceMode Normal 0), 0 docked (1, Boost 1).
 int ov_handheld(void) {
     static volatile LONG v = -1;
     LONG h = v;
     if (h < 0) {
-        const char *e = cfg_value("TOTK_OPERATION_MODE");
+        const char *e = cfg_value("XCX_OPERATION_MODE");
         if (!strcmp(e, "docked")) h = 0;
         else if (!strcmp(e, "handheld")) h = 1;
-        else rt_fatal("TOTK_OPERATION_MODE must be docked or handheld, not '%s'", e);
+        else rt_fatal("XCX_OPERATION_MODE must be docked or handheld, not '%s'", e);
         if (InterlockedCompareExchange(&v, h, -1) == -1)
             rt_log("oe: operation mode reported to the game: %s", h ? "handheld (performance normal)"
                                                                   : "docked (performance boost)");
@@ -88,17 +88,17 @@ static const char *switch_language(const char *tag) {
     return "en-US";
 }
 
-// The game's language as a Switch language code (TOTK_LANG, else TOTK_LOCALE, else the Windows user locale).
+// The game's language as a Switch language code (XCX_LANG, else XCX_LOCALE, else the Windows user locale).
 const char *ov_language(void) {
     static const char *const codes[] = {"ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru",
                                         "zh-TW", "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
-    const char *code = cfg_get("TOTK_LANG");   // no fixed default: TOTK_LOCALE or the Windows user locale decides when unset
+    const char *code = cfg_get("XCX_LANG");   // no fixed default: XCX_LOCALE or the Windows user locale decides when unset
     if (code && *code) {
         for (size_t i = 0; i < sizeof codes / sizeof *codes; i++)
             if (!strcmp(code, codes[i])) return codes[i];
-        rt_fatal("TOTK_LANG '%s' is not a Switch language code", code);
+        rt_fatal("XCX_LANG '%s' is not a Switch language code", code);
     }
-    const char *tag = cfg_get("TOTK_LOCALE");
+    const char *tag = cfg_get("XCX_LOCALE");
     char sys[LOCALE_NAME_MAX_LENGTH] = "en-US";
     if (!tag || !*tag) {
         wchar_t w[LOCALE_NAME_MAX_LENGTH];
@@ -154,14 +154,14 @@ static void ov_focus_mode(Cpu *c) {
 }
 
 // FocusState GetCurrentFocusState(): 1 in focus, 2 out of focus (nn::oe::FocusState). In focus until the window
-// reports otherwise through oe_set_focus; TOTK_ASSUME_FOCUS=1 (unattended runs) pins it to 1. The caller of
+// reports otherwise through oe_set_focus; XCX_ASSUME_FOCUS=1 (unattended runs) pins it to 1. The caller of
 // oe_set_focus also pushes OE_MSG_FOCUS_STATE_CHANGED.
 static volatile LONG focus_state = 1;
 static int assume_focus(void) {
     static volatile LONG v = -1;
     LONG a = v;
     if (a < 0) {
-        const char *e = cfg_get("TOTK_ASSUME_FOCUS");
+        const char *e = cfg_get("XCX_ASSUME_FOCUS");
         a = e && atoi(e) ? 1 : 0;
         InterlockedExchange(&v, a);
     }
@@ -267,7 +267,7 @@ static void ov_report_save(Cpu *c) {   // Result PlayReport::Save() and Save(con
     if (n % 100 == 1) rt_log("prepo: play report kept local (not sent), %lld so far", (long long)n);
     ret_x(c, 0);
 }
-static void ov_result_ok(Cpu *c) { ret_x(c, 0); }   // RequestImmediateTransmission, AddInternetConnectionStatus
+static void ov_result_ok(Cpu *c) { ret_x(c, 0); }   // RequestImmediateTransmission, AddInternetConnectionStatus, AddSessionId
 
 // nn::nfp: no NFC reader
 static volatile LONG nfp_state;
@@ -300,13 +300,13 @@ static void ov_show_error(Cpu *c) {
 
 // ==== SDK-internal initialisation (services.c)
 static void ov_diag_startup(Cpu *c) { (void)c; rt_log("diag: host diagnostics"); }
-static void ov_aoc_initialize(Cpu *c) { (void)c; rt_log("aoc: no add-on content"); }
-// 1.4.3's main lists add-on content (MNG services.c host_aoc_list): there is none.
+static void ov_aoc_initialize(Cpu *c) { (void)c; rt_log("aoc: %d add-on content present", fs_aoc_list(NULL, 0, 0)); }
+// The add-on content installed beside the RomFS (fs_host.c fs_aoc_list); XCX 1.4.3 and XCX list it.
 // int ListAddOnContent(AddOnContentIndex *out, int offset, int count)
 static void ov_aoc_list(Cpu *c) {
     int offset = (int)arg_x(c, 1), count = (int)arg_x(c, 2);
     if (offset < 0 || count < 0) rt_fatal("aoc: ListAddOnContent range %d+%d", offset, count);
-    ret_x(c, 0);
+    ret_x(c, (uint64_t)fs_aoc_list(arg_p(c, 0), offset, count));
 }
 static void ov_err_context(Cpu *c) { (void)c; rt_log("err: error contexts stay local"); }
 static void ov_pctl_initialize(Cpu *c) { (void)c; rt_log("pctl: no parental controls"); }
@@ -467,7 +467,7 @@ static void ov_user_existence(Cpu *c) {
     ret_x(c, 0);
 }
 
-// ---- XCX: account calls TotK never makes. The host has one local user and no network service account.
+// ---- XCX: account calls XCX never makes. The host has one local user and no network service account.
 #define ACCOUNT_R_NSA_UNAVAILABLE 0x2307cu   // module 124 (account), description 280: no network service account
 
 // Result OpenUser(UserHandle *out, const Uid &)
@@ -745,12 +745,12 @@ static void ov_user_difference(Cpu *c) {
     ret_x(c, (uint64_t)((b->user.offset - a->user.offset) * 1000000000ll));
 }
 
-// ==== nn::pl shared fonts (shared_font.c). TotK asks for them only from its font loader, only with Simplified Chinese,
+// ==== nn::pl shared fonts (shared_font.c). XCX asks for them only from its font loader, only with Simplified Chinese,
 // Korean or Traditional Chinese text, and only for type 0; tools/extract_fonts.py writes
 // them from the user's firmware. Each type is read on first use into guest-visible memory as the BFTTF file the pl
 // shared memory holds; Address is 8 bytes past the file start (after the BFTTF header) and Size the decoded font size,
 // as in MNG. The load state is always Loaded: the game spins until it is, so missing files stop with a named fatal at
-// Address/Size instead of a hang. TOTK_SHARED_FONTS=<dir> overrides <romfs>/../../firmware/shared-fonts.
+// Address/Size instead of a hang. XCX_SHARED_FONTS=<dir> overrides <romfs>/../../firmware/shared-fonts.
 #define SHARED_FONT_TYPES 6
 #define BFTTF_MAGIC 0x7f9a0218u
 static const char *const font_files[SHARED_FONT_TYPES] = {
@@ -759,10 +759,10 @@ static const char *const font_files[SHARED_FONT_TYPES] = {
 static struct { SRWLOCK lock; const uint8_t *file[SHARED_FONT_TYPES]; uint64_t size[SHARED_FONT_TYPES]; } fonts;
 
 const char *ov_shared_font_dir(char *buf, size_t n) {
-    const char *e = cfg_get("TOTK_SHARED_FONTS");
+    const char *e = cfg_get("XCX_SHARED_FONTS");
     if (e && *e) snprintf(buf, n, "%s", e);
     else {
-        char exe[MAX_PATH], probe[MAX_PATH + 40];   // shared-fonts next to totk.exe (tools/package_build.py), else the repo's
+        char exe[MAX_PATH], probe[MAX_PATH + 40];   // shared-fonts next to xcx.exe (tools/package_build.py), else the repo's
         DWORD len = GetModuleFileNameA(NULL, exe, sizeof exe);
         char *cut = len && len < sizeof exe ? strrchr(exe, '\\') : NULL;
         if (cut) *cut = 0;
@@ -801,7 +801,7 @@ static const uint8_t *font_data(Cpu *c, const char *fn, int64_t t) {
         FILE *f = fopen(path, "rb");
         if (!f)
             rt_fatal("nn::pl::%s(%lld) from %s: no shared font %s (needed for Chinese and Korean text); run "
-                     "tools/extract_fonts.py --firmware <firmware NCA dir> or set TOTK_SHARED_FONTS", fn, (long long)t,
+                     "tools/extract_fonts.py --firmware <firmware NCA dir> or set XCX_SHARED_FONTS", fn, (long long)t,
                      caller(c, lr, sizeof lr), path);
         _fseeki64(f, 0, SEEK_END);
         int64_t len = _ftelli64(f);
@@ -831,7 +831,7 @@ static void ov_font_size(Cpu *c) {
     ret_x(c, fonts.size[t]);
 }
 
-// ---- XCX: oe calls TotK never makes
+// ---- XCX: oe calls XCX never makes
 static void ov_nop(Cpu *c) { (void)c; }   // Enter/LeaveExitRequestHandlingSection: the host never asks the game to exit
 static void ov_ret_zero(Cpu *c) { ret_x(c, 0); }   // inactivity extension getters: not extended
 // void GetPseudoDeviceId(util::Uuid *out): one fixed id per host, as the console gives one per application
@@ -867,7 +867,7 @@ static void ov_clock_gettime(Cpu *c) {
 }
 
 // ---- XCX: add-on content count, the language list, the profanity filter, screenshots
-static void ov_aoc_count(Cpu *c) { ret_x(c, 0); }   // int CountAddOnContent(): matches ListAddOnContent
+static void ov_aoc_count(Cpu *c) { ret_x(c, (uint64_t)fs_aoc_list(NULL, 0, 0)); }   // int CountAddOnContent()
 
 // The languages a console offers, in nn::settings::Language order; each LanguageCode is 8 bytes.
 static const char languages[][8] = {"ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-TW",
@@ -925,6 +925,7 @@ HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveEv", ov_report_save);
 HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", ov_report_save);
 HOST_OVERRIDE("_ZN2nn5prepo28RequestImmediateTransmissionEv", ov_result_ok);
 HOST_OVERRIDE("_ZN2nn5prepo27AddInternetConnectionStatusEPNS0_10PlayReportEPKcS4_S4_", ov_result_ok);
+HOST_OVERRIDE("_ZN2nn5prepo12AddSessionIdEPNS0_10PlayReportEPKc", ov_result_ok);   // XCX: would open the prepo:u session
 HOST_OVERRIDE("_ZN2nn3nfp10InitializeEv", ov_nfp_initialize);
 HOST_OVERRIDE("_ZN2nn3nfp8FinalizeEv", ov_nfp_finalize);
 HOST_OVERRIDE("_ZN2nn3nfp8GetStateEv", ov_nfp_state);

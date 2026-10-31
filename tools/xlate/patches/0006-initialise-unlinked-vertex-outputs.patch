@@ -23,7 +23,7 @@
  
              UInt128 usedAttributes = context.TranslatorContext.AttributeUsage.NextInputAttributesComponents;
 +
-+            // TOTK (2026-10-22): the host translates each stage on its own (no SetNextStage), so the components the next
++            // XCX (2026-10-22): the host translates each stage on its own (no SetNextStage), so the components the next
 +            // stage reads are unknown. Maxwell reads an unwritten output component as (0, 0, 0, 1) (a VS writing xyz of a
 +            // varying the FS divides by w); start every component of every written output there, as a linked pipeline would
 +            // for the components the next stage reads. The host adds outputs the VS never writes (vk_pipeline.c).

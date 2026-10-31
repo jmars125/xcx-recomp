@@ -1,5 +1,5 @@
-// RenderDoc in-app capture (debug tool). TOTK_RDOC=<frame>[,<frame>...] captures those presented frames; TOTK_RDOC_DIR is the
-// output directory (default build/captures); TOTK_RDOC_DLL overrides the renderdoc.dll path. Only the API fields used are declared
+// RenderDoc in-app capture (debug tool). XCX_RDOC=<frame>[,<frame>...] captures those presented frames; XCX_RDOC_DIR is the
+// output directory (default build/captures); XCX_RDOC_DLL overrides the renderdoc.dll path. Only the API fields used are declared
 // here (layout of RENDERDOC_API_1_4_1, renderdoc_app.h, MIT), so no RenderDoc header is vendored.
 #include <windows.h>
 #include <stdint.h>
@@ -36,7 +36,7 @@ static int capturing;
 int rdoc_active(void) { return api != NULL; }
 
 void rdoc_init(void) {
-    const char *e = cfg_get("TOTK_RDOC");
+    const char *e = cfg_get("XCX_RDOC");
     if (!e || !*e) return;
     for (const char *p = e; *p && n_targets < RDOC_MAX_FRAMES;) {
         char *end;
@@ -46,10 +46,10 @@ void rdoc_init(void) {
         p = *end == ',' ? end + 1 : end;
         if (*end != ',') break;
     }
-    if (!n_targets) { rt_log("rdoc: TOTK_RDOC=%s has no frame numbers", e); return; }
-    const char *dll = cfg_get("TOTK_RDOC_DLL");
+    if (!n_targets) { rt_log("rdoc: XCX_RDOC=%s has no frame numbers", e); return; }
+    const char *dll = cfg_get("XCX_RDOC_DLL");
     HMODULE m = LoadLibraryExA(dll && *dll ? dll : "C:\\Program Files\\RenderDoc\\renderdoc.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!m) { rt_log("rdoc: cannot load renderdoc.dll (error %lu); set TOTK_RDOC_DLL", GetLastError()); return; }
+    if (!m) { rt_log("rdoc: cannot load renderdoc.dll (error %lu); set XCX_RDOC_DLL", GetLastError()); return; }
     int (*get_api)(int, void **) = (int (*)(int, void **))(void *)GetProcAddress(m, "RENDERDOC_GetAPI");
     void *a = NULL;
     if (!get_api || get_api(RDOC_API_1_4_1, &a) != 1 || !a) { rt_log("rdoc: RENDERDOC_GetAPI(1.4.1) failed"); return; }
@@ -59,11 +59,11 @@ void rdoc_init(void) {
     rt_log("rdoc: AllowUnsupportedVendorExtensions -> %u", api->SetCaptureOptionU32(12, 1));
     api->SetCaptureOptionU32(8, 1);
     api->SetCaptureOptionU32(9, 1);
-    const char *dir = cfg_get("TOTK_RDOC_DIR");
+    const char *dir = cfg_get("XCX_RDOC_DIR");
     char full[MAX_PATH], tmpl[MAX_PATH + 16];
     if (!_fullpath(full, dir && *dir ? dir : "build/captures", sizeof full)) return;
     CreateDirectoryA(full, NULL);
-    snprintf(tmpl, sizeof tmpl, "%s\totk", full);
+    snprintf(tmpl, sizeof tmpl, "%s\xcx", full);
     api->SetCaptureFilePathTemplate(tmpl);
     rt_log("rdoc: ready, %d frame(s), captures %s", n_targets, full);
 }

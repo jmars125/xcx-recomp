@@ -23,9 +23,9 @@ extern "C" {
 void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 }
 
-static const ImU32 kGold = IM_COL32(236, 194, 84, 255);
-static const ImU32 kDim = IM_COL32(150, 150, 140, 255);
-static const ImU32 kGrey = IM_COL32(110, 110, 102, 255);
+static const ImU32 kAccent = IM_COL32(90, 220, 245, 255);
+static const ImU32 kDim = IM_COL32(140, 158, 170, 255);
+static const ImU32 kGrey = IM_COL32(100, 112, 122, 255);
 
 static float g_scale = 1;
 static bool g_focus_req, g_take_first;   // opt_focus_first: requested / this page's first row takes it
@@ -87,7 +87,7 @@ void opt_end(void) {
     avail.y -= g_bottom;
     float gap = 24 * g_scale;
     ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y), ImVec2(p.x + gap * 0.5f, p.y + avail.y),
-                                        IM_COL32(236, 194, 84, 110), 1.0f);
+                                        IM_COL32(90, 220, 245, 110), 1.0f);
     ImGui::SetCursorScreenPos(ImVec2(p.x + gap, p.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * g_scale, 6 * g_scale));
     ImGui::BeginChild("##desc", ImVec2(0, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoNav);
@@ -155,7 +155,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     float r = 9 * g_scale, pad = 16 * g_scale, small = fs * 0.72f;
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov || foc ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 40), r);
     dl->AddRect(p, ImVec2(p.x + w, p.y + h),
-                hov || foc ? (off ? IM_COL32(236, 194, 84, 120) : kGold) : IM_COL32(255, 255, 255, off ? 18 : 38), r, 0,
+                hov || foc ? (off ? IM_COL32(90, 220, 245, 120) : kAccent) : IM_COL32(255, 255, 255, off ? 18 : 38), r, 0,
                 hov || foc ? 2.0f : 1.0f);
     float ty = p.y + fs * 0.25f, ny = p.y + fs * 1.3f;   // the label line and the note line under it
     float right = p.x + w - pad;                         // the value's right edge
@@ -163,7 +163,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     if (v.arrows && v.value[0]) {   // < value >, drawn (the font has no arrow glyphs); a click on one steps
         float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
         float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(v.value).x - gap - aw;
-        ImU32 ac = off ? kGrey : hov || foc ? kGold : IM_COL32(170, 170, 160, 255);
+        ImU32 ac = off ? kGrey : hov || foc ? kAccent : IM_COL32(160, 178, 190, 255);
         dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
         dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
         if (clicked && !off) {
@@ -176,7 +176,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     }
     if (v.value[0]) {
         float vx = right - ImGui::CalcTextSize(v.value).x;
-        dl->AddText(ImVec2(vx, ty), off ? kGrey : v.is_default ? IM_COL32(205, 205, 195, 255) : IM_COL32(255, 255, 255, 255),
+        dl->AddText(ImVec2(vx, ty), off ? kGrey : v.is_default ? IM_COL32(195, 212, 222, 255) : IM_COL32(255, 255, 255, 255),
                     v.value);
         if (!v.arrows) value_left = vx;
     }
@@ -187,7 +187,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     }
     // the label and its note, clipped before the value
     ImVec4 clip(p.x, p.y, value_left - fs * 0.6f, p.y + h);
-    dl->AddText(font, fs, ImVec2(p.x + pad, ty), off ? kGrey : IM_COL32(240, 236, 224, 255), menu_text(label), NULL, 0,
+    dl->AddText(font, fs, ImVec2(p.x + pad, ty), off ? kGrey : IM_COL32(230, 242, 250, 255), menu_text(label), NULL, 0,
                 &clip);
     const char *note = disabled        ? disabled
                      : off             ? menu_text(UI_MENU_SET_BY_ENV)
@@ -198,14 +198,14 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     return off ? 0 : step;
 }
 
-// ---- writing a setting: at once in memory (live settings follow), to totk.ini a moment later (opt_save_tick)
+// ---- writing a setting: at once in memory (live settings follow), to xcx.ini a moment later (opt_save_tick)
 static uint64_t g_save_at;   // plat_now_ns deadline of the pending write; 0 none
 static bool g_save_logged;
 
 static void apply(const char *key, const char *value) {
     if (*value) {
         cfg_set(key, value);
-    } else {   // the automatic choice: the key unset, its line removed from totk.ini
+    } else {   // the automatic choice: the key unset, its line removed from xcx.ini
         const char *k = key;
         cfg_reset(&k, 1);
     }
@@ -219,7 +219,7 @@ int opt_save_tick(int force) {
     g_save_at = 0;
     if (!cfg_save() && !g_save_logged) {
         g_save_logged = true;
-        rt_log("menu: could not write totk.ini; the changed settings hold for this session");
+        rt_log("menu: could not write xcx.ini; the changed settings hold for this session");
     }
     return 0;
 }
@@ -243,7 +243,7 @@ bool opt_button(const char *id, UiTextId label, UiTextId desc, const char *value
 
 void opt_group(UiTextId title) {
     ImGui::Dummy(ImVec2(0, 6 * g_scale));
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", menu_text(title));
+    ImGui::TextColored(ImVec4(0.35f, 0.86f, 0.96f, 1), "%s", menu_text(title));
 }
 
 void opt_text(UiTextId text, bool warn) {
@@ -359,7 +359,7 @@ int opt_bind_row(const char *key, const char *label, UiTextId desc, const char *
     bind_columns(p.x, w, cx, &cw);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float r = 8 * g_scale, pad = 6 * g_scale;
-    fit_text(dl, p.x + 16 * g_scale, cx[0] - fs * 0.3f, p.y, h, IM_COL32(240, 236, 224, 255), label, false);
+    fit_text(dl, p.x + 16 * g_scale, cx[0] - fs * 0.3f, p.y, h, IM_COL32(230, 242, 250, 255), label, false);
     int result = -1;
     bool row_foc = false, row_hov = false;
     for (int c = 0; c < 3; c++) {
@@ -394,12 +394,12 @@ int opt_bind_row(const char *key, const char *label, UiTextId desc, const char *
                     ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)))
             result = 10 + c;
         dl->AddRectFilled(a, b, hov || foc ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 40), r);
-        dl->AddRect(a, b, hov || foc ? kGold : IM_COL32(255, 255, 255, 38), r, 0, hov || foc ? 2.0f : 1.0f);
+        dl->AddRect(a, b, hov || foc ? kAccent : IM_COL32(255, 255, 255, 38), r, 0, hov || foc ? 2.0f : 1.0f);
         fit_text(dl, a.x + pad, b.x - pad, a.y, h, IM_COL32(255, 255, 255, 255), t, true);
         ImGui::PopID();
     }
     char k[64];
-    snprintf(k, sizeof k, "TOTK_%s", key);
+    snprintf(k, sizeof k, "XCX_%s", key);
     if (row_foc) desc_set(g_focus, desc, k, NULL, NULL);
     if (row_hov) desc_set(g_hover, desc, k, NULL, NULL);
     if (!g_first.text[0]) desc_set(g_first, desc, k, NULL, NULL);

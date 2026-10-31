@@ -3,18 +3,18 @@
 // Read-only game RomFS backed by the player's extracted image.
 //
 // Input: <romfs>/romfs.bin (rt_config()->romfs), whose six IVFC levels and SHA-256 tools/extract.py verified, and
-// romfs-index.bin next to totk.exe (TOTK_ROMFS_INDEX overrides), which tools/romfs_index.py wrote together with
+// romfs-index.bin next to xcx.exe (XCX_ROMFS_INDEX overrides), which tools/romfs_index.py wrote together with
 // romfs_config.h. fs_init checks the index's SHA-256 and layout and the image size. The full 17 GB hash runs only with
-// TOTK_ROMFS_VERIFY=full; a proof file (.romfs-verified-v1 next to the index, or in TOTK_ROMFS_PROOF_DIR) keyed by
-// the file's volume, file id, size and times skips it on later starts, TOTK_ROMFS_VERIFY=force ignores the proof.
+// XCX_ROMFS_VERIFY=full; a proof file (.romfs-verified-v1 next to the index, or in XCX_ROMFS_PROOF_DIR) keyed by
+// the file's volume, file id, size and times skips it on later starts, XCX_ROMFS_VERIFY=force ignores the proof.
 //
 // Reads are positional (ReadFile with an OVERLAPPED offset on a FILE_FLAG_OVERLAPPED handle, one event per thread),
-// so threads read the image in parallel without a file-pointer lock. TOTK_ROMFS_MMAP=1 maps the image instead.
+// so threads read the image in parallel without a file-pointer lock. XCX_ROMFS_MMAP=1 maps the image instead.
 //
 // Overlays: files listed in a directory's manifest.tsv are served in place of the originals. Each line names a RomFS
 // path, the overlay's size and SHA-256 and the original's SHA-256 ("-" adds a file the RomFS lacks; it is numbered
-// after the RomFS's own files, file_count + k in path order). The directories, in this order: TOTK_ROMFS_PATCHES and
-// TOTK_ROMFS_MODS; unset or "0" = none. A missing path, a size or hash mismatch or a changed original stops the start.
+// after the RomFS's own files, file_count + k in path order). The directories, in this order: XCX_ROMFS_PATCHES and
+// XCX_ROMFS_MODS; unset or "0" = none. A missing path, a size or hash mismatch or a changed original stops the start.
 // An overlay file is opened when the game opens it; its identity (volume, file id, size, last write) is kept from the
 // start check, and an open that finds another file there stops the game.
 #include <windows.h>
@@ -150,12 +150,12 @@ static void sha_range(HANDLE f, uint64_t offset, uint64_t size, char hex[65], in
 typedef struct { char magic[16], sha256[65]; uint8_t pad[7]; Identity id; } RomfsProof;
 
 static void verify_image(const char *dir) {
-    const char *mode = cfg_get("TOTK_ROMFS_VERIFY");
+    const char *mode = cfg_get("XCX_ROMFS_VERIFY");
     if (!mode || (strcmp(mode, "full") && strcmp(mode, "force"))) return;
-    const char *pdir = cfg_get("TOTK_ROMFS_PROOF_DIR");
+    const char *pdir = cfg_get("XCX_ROMFS_PROOF_DIR");
     if (pdir && *pdir) dir = pdir;
     RomfsProof want = {0}, saved;
-    memcpy(want.magic, "TOTKRFS-PROOF-1", 16);
+    memcpy(want.magic, "XCXRFS-PROOF-1", 16);
     memcpy(want.sha256, ROMFS_IMAGE_SHA256, sizeof ROMFS_IMAGE_SHA256 < 65 ? sizeof ROMFS_IMAGE_SHA256 : 65);
     want.id = identity_of(image);
     char path[2100], tmp[2200];
@@ -408,15 +408,15 @@ static void heapdef_overlay(void) {
 }
 
 static void overlay_init(void) {
-    // TOTK_ROMFS_PATCHES unset: romfs-patches next to romfs-index.bin if it has a manifest (tools/make_romfs_patches.py)
+    // XCX_ROMFS_PATCHES unset: romfs-patches next to romfs-index.bin if it has a manifest (tools/make_romfs_patches.py)
     char def[2100];
-    const char *patches = cfg_get("TOTK_ROMFS_PATCHES");
+    const char *patches = cfg_get("XCX_ROMFS_PATCHES");
     if (!patches && snprintf(def, sizeof def, "%s/romfs-patches/manifest.tsv", index_dir) < (int)sizeof def &&
         GetFileAttributesA(def) != INVALID_FILE_ATTRIBUTES) {
         def[strlen(def) - strlen("/manifest.tsv")] = 0;
         patches = def;
     }
-    const char *dirs[2] = {patches, cfg_get("TOTK_ROMFS_MODS")};
+    const char *dirs[2] = {patches, cfg_get("XCX_ROMFS_MODS")};
     for (int i = 0; i < 2; i++)
         if (dirs[i] && *dirs[i] && strcmp(dirs[i], "0")) overlay_load(dirs[i]);
     heapdef_overlay();
@@ -429,9 +429,9 @@ static void overlay_init(void) {
 }
 
 // ---- start
-// romfs-index.bin next to totk.exe, or TOTK_ROMFS_INDEX.
+// romfs-index.bin next to xcx.exe, or XCX_ROMFS_INDEX.
 static void index_path(char *out, size_t cap) {
-    const char *e = cfg_get("TOTK_ROMFS_INDEX");
+    const char *e = cfg_get("XCX_ROMFS_INDEX");
     if (e && *e) {
         need(snprintf(out, cap, "%s", e) < (int)cap, "index path");
         return;
@@ -456,7 +456,7 @@ static void load_index(void) {
     else strcpy(index_dir, ".");
     HANDLE f = open_read(path, 0);
     if (f == INVALID_HANDLE_VALUE)
-        rt_fatal("RomFS index %s missing (tools/build_game.py writes it next to totk.exe)", path);
+        rt_fatal("RomFS index %s missing (tools/build_game.py writes it next to xcx.exe)", path);
     LARGE_INTEGER sz;
     need(GetFileSizeEx(f, &sz) && sz.QuadPart >= 24 && sz.QuadPart < (128 << 20), "index size");
     index_size = (size_t)sz.QuadPart;
@@ -475,7 +475,7 @@ static void load_index(void) {
     if (strcmp(hex, ROMFS_INDEX_SHA256))
         rt_fatal("RomFS index %s has SHA-256 %s, this build expects %s (rebuild with tools/build_game.py)", path, hex,
                  ROMFS_INDEX_SHA256);
-    need(!memcmp(index_bytes, "TOTKRFS1", 8), "index format");
+    need(!memcmp(index_bytes, "XCXRFS1", 8), "index format");
     memcpy(&file_count, index_bytes + 8, 8);
     memcpy(&strings_offset, index_bytes + 16, 8);
     need(file_count == ROMFS_FILE_COUNT && file_count < 1000000 && strings_offset == 24 + file_count * 24 &&
@@ -504,7 +504,7 @@ static BOOL CALLBACK init_once(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     const char *dir = rt_config()->romfs;
     need(snprintf(image_file, sizeof image_file, "%s/romfs.bin", dir) < (int)sizeof image_file, "image path");
     image = open_read(image_file, 1);
-    if (image == INVALID_HANDLE_VALUE) rt_fatal("RomFS image %s missing (error %lu); put romfs.bin into the romfs folder next to totk.exe or set TOTK_ROMFS",
+    if (image == INVALID_HANDLE_VALUE) rt_fatal("RomFS image %s missing (error %lu); put romfs.bin into the romfs folder next to xcx.exe or set XCX_ROMFS",
                                           image_file, GetLastError());
     LARGE_INTEGER sz;
     need(GetFileSizeEx(image, &sz), "image size");
@@ -513,7 +513,7 @@ static BOOL CALLBACK init_once(PINIT_ONCE once, PVOID param, PVOID *ctx) {
                  (unsigned long long)sz.QuadPart, (unsigned long long)ROMFS_IMAGE_SIZE);
     rt_log("RomFS image %s: size ok (%llu bytes)", image_file, (unsigned long long)ROMFS_IMAGE_SIZE);
     verify_image(index_dir);
-    const char *mm = cfg_get("TOTK_ROMFS_MMAP");
+    const char *mm = cfg_get("XCX_ROMFS_MMAP");
     if (mm && strcmp(mm, "0")) {
         HANDLE map = CreateFileMappingW(image, NULL, PAGE_READONLY, 0, 0, NULL);
         const void *v = map ? MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0) : NULL;

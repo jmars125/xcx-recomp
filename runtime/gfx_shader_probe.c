@@ -1,4 +1,4 @@
-// --probe-shader: the shader service client (gfx_shader.c) against 32 census shaders. Needs build/xlate/totk_xlate.exe and
+// --probe-shader: the shader service client (gfx_shader.c) against 32 census shaders. Needs build/xlate/xcx_xlate.exe and
 // build/v121/shaders/ (tools/shader_census.py); uses a throwaway cache directory.
 //   1. Translate 32 shaders (mixed stages) through gfx_shader_get; each SPIR-V starts with the magic 0x07230203.
 //   2. Drop the memory cache and ask again: 32 hits from disk, 0 service requests. A third pass returns the same pointers.
@@ -48,7 +48,7 @@ static const char *str_field(const char *from, const char *to, const char *name,
 
 static int hexval(char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 
-// The repository root: the nearest parent of totk.exe holding build/v121/shaders/jobs.json.
+// The repository root: the nearest parent of xcx.exe holding build/v121/shaders/jobs.json.
 static int find_root(char *root, size_t n) {
     char exe[MAX_PATH * 2];
     DWORD len = GetModuleFileNameA(NULL, exe, sizeof exe);
@@ -150,8 +150,8 @@ int probe_shader(void) {
     CHECK(count == WANT, "only %d census shaders usable", count);
 
     char dir[MAX_PATH];
-    snprintf(dir, sizeof dir, "%s\\totk-shader-probe-%lu", getenv("TEMP") ? getenv("TEMP") : ".", GetCurrentProcessId());
-    CHECK(_putenv_s("TOTK_SHADER_CACHE", dir) == 0, "cannot set TOTK_SHADER_CACHE");
+    snprintf(dir, sizeof dir, "%s\\xcx-shader-probe-%lu", getenv("TEMP") ? getenv("TEMP") : ".", GetCurrentProcessId());
+    CHECK(_putenv_s("XCX_SHADER_CACHE", dir) == 0, "cannot set XCX_SHADER_CACHE");
 
     // pass 1: translate through the service
     const GfxShader *first[WANT];

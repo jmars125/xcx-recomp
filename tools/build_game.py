@@ -1,9 +1,9 @@
-"""Compile the generated C for one game version and link it with the runtime into build/<version>/totk.exe.
+"""Compile the generated C for one game version and link it with the runtime into build/<version>/xcx.exe.
 
 Writes build/<version>/build.ninja and runs MSYS2 UCRT64 Ninja on it. Ninja keeps the build incremental: a chunk is
 recompiled only when it, a header it includes or its flags change.
 
-    .venv\\Scripts\\python tools\\build_game.py                     # generated/v121 -> build/v121/totk.exe
+    .venv\\Scripts\\python tools\\build_game.py                     # generated/v121 -> build/v121/xcx.exe
     .venv\\Scripts\\python tools\\build_game.py --modules subsdk0   # one module (links if it has no calls into others)
     .venv\\Scripts\\python tools\\build_game.py --jobs 8
     .venv\\Scripts\\python tools\\build_game.py --out build/v121-t2   # a separate build directory
@@ -12,9 +12,9 @@ recompiled only when it, a header it includes or its flags change.
 
 Every runtime/*.c is compiled. build/<version>/modules.c carries the layout, the linked function tables, the
 expected SHA-256 of each ExeFS file (tools/data/expected-<display version>.json) and the default game paths
-(--exefs, --romfs, --profile), which totk.exe uses unless its own command line names others. tools/romfs_index.py
+(--exefs, --romfs, --profile), which xcx.exe uses unless its own command line names others. tools/romfs_index.py
 writes build/<version>/romfs-index.bin and romfs_config.h from the RomFS directory's index.json (runtime/romfs.c reads
-the index next to totk.exe).
+the index next to xcx.exe).
 
 Private builds reuse the main build's objects. When --out differs from build/<version>, the main build's generated
 objects are up to date (checked with a dry run of its build.ninja) and every header they include from runtime/ is
@@ -42,7 +42,7 @@ from MSYS2. The libraries and headers MSYS2 supplies (Vulkan, SDL3, Opus, libvpx
 (default toolchain/deps-mingw: include/, lib/ with the import libraries and libvpx.a, bin/ with the DLLs), and the C++
 runtime is libc++ from llvm-mingw. Such a build never reuses another build's generated objects.
 
-Split build. --make-runtime-lib compiles only runtime/ into <out>/libtotkrt.a (what CI prebuilds). --runtime-lib PATH
+Split build. --make-runtime-lib compiles only runtime/ into <out>/libxcxrt.a (what CI prebuilds). --runtime-lib PATH
 then compiles only the generated C and the install-time files (modules.c and INSTALL_SIDE, which bake the player's
 game hashes and version in) and links them with that library. The library holds no game-derived data.
 
@@ -77,7 +77,7 @@ SDL3_DLLS = [UCRT / 'SDL3.dll', UCRT / 'libiconv-2.dll', UCRT / 'libopus-0.dll']
 GEN_FLAGS = ['-O1', '-fno-strict-aliasing', '-Wno-return-type', '-Wno-unused-label', '-fvisibility=hidden',
              '-march=x86-64-v3']
 RT_FLAGS = ['-O2', '-g', '-Wall', '-fno-strict-aliasing', '-march=x86-64-v3']
-LINK_FLAGS = ['-fuse-ld=lld', '-Wl,--stack,16777216', '"-Wl,--Map=$builddir/totk.map"']   # the map feeds tools/prof_report.py
+LINK_FLAGS = ['-fuse-ld=lld', '-Wl,--stack,16777216', '"-Wl,--Map=$builddir/xcx.map"']   # the map feeds tools/prof_report.py
 LINK_LIBS = ['-lpsapi', '-lbcrypt', '-lvulkan-1', '-luser32', '-lgdi32', '-ldwmapi', '-lwinmm', '-lSDL3', '-lopus', '-l:libvpx.a', '-l:libzstd.a', '-l:libstdc++.a', '-l:libwinpthread.a']   # Vulkan back end; libvpx static (movies); libzstd static (resolution.c)
 VMA_INCLUDE = UCRT.parent / 'include' / 'vma'   # vk_mem_alloc.h; MSYS2 package vulkan-memory-allocator
 # --toolchain: an llvm-mingw tree. The libraries, headers and DLLs MSYS2 supplies come from the deps directory instead.
@@ -88,13 +88,15 @@ DEFAULT_DEPS = ROOT / 'toolchain' / 'deps-mingw'
 # the patches.h of the player's game version (its patch page is the page after that version's main; ov_zstd.c's host
 # functions sit on it).
 INSTALL_SIDE = {'romfs.c', 'patches.c', 'ov_zstd.c'}
-LIB_NAME = 'libtotkrt.a'
+LIB_NAME = 'libxcxrt.a'
 AR = UCRT / 'llvm-ar.exe'
-WINDRES = UCRT / 'windres.exe'   # runtime/totk.rc: the manifest of totk.exe
+WINDRES = UCRT / 'windres.exe'   # runtime/xcx.rc: the manifest of xcx.exe
 TOOLCHAIN_BIN = None   # llvm-mingw bin directory, set by main() for --toolchain
 DEPS = None            # the deps directory of an llvm-mingw build
 # tools/data/expected-<display version>.json for each build version name.
 DISPLAY_VERSIONS = {'v0': '1.0.0', 'v112': '1.1.2', 'v121': '1.2.1', 'v143': '1.4.3'}
+# The game version the menu shows. XCX 2.0.0 (upd) keeps rt_game_version 0: the runtime's 121/143 branches are TotK's.
+GAME_NAMES = {**DISPLAY_VERSIONS, 'upd': '2.0.0'}
 
 GiB = 1 << 30
 # Peak commit of one compile, 1.2.1 at -O1 (2026-10-20): 120-180 MiB per ~3 MiB chunk, 568 MiB for main_table.c
@@ -169,7 +171,7 @@ def write_if_changed(path, text):
 
 
 def copy_romfs_patches(version, out):
-    """totk.exe loads romfs-patches beside romfs-index.bin (runtime/romfs.c overlay_init). tools/make_romfs_patches.py
+    """xcx.exe loads romfs-patches beside romfs-index.bin (runtime/romfs.c overlay_init). tools/make_romfs_patches.py
     writes them into build/<version> only, so a build in another directory ran without the 60 fps overlay (the quick
     menus' captured background turned black). Copies them when their manifest differs."""
     src = ROOT / 'build' / version / 'romfs-patches'
@@ -232,7 +234,8 @@ def module_glue(layout, linked, hashes, paths, version):
     for name in ('exefs', 'romfs', 'profile'):
         out.append(f'const char rt_default_{name}[] = {c_string(paths[name].as_posix())};')
     number = int(DISPLAY_VERSIONS[version].replace('.', '')) if version in DISPLAY_VERSIONS else 0   # 1.4.3 -> 143
-    out += [f'const int rt_game_version = {number};', f'const char rt_port_version[] = {c_string(port_version())};', '']
+    out += [f'const int rt_game_version = {number};', f'const char rt_port_version[] = {c_string(port_version())};',
+            f'const char rt_game_name[] = {c_string(GAME_NAMES.get(version, ""))};', '']
     return '\n'.join(out)
 
 
@@ -307,15 +310,15 @@ def ninja_file(gen, out, mods, pool_depth, skip=(), prebuilt=False, runtime_lib=
         sources += [out / 'modules.c']
     for src in sources:
         o = runtime_object(out, src)
-        if src.suffix == '.rc':   # windres writes no depfile: the files totk.rc embeds are listed by hand
-            lines.append(f'build {ninja_path(o)}: rc {ninja_path(src)} | {ninja_path(RUNTIME / "totk.manifest")} '
-                         f'{ninja_path(RUNTIME / "totk.ico")}')
+        if src.suffix == '.rc':   # windres writes no depfile: the files xcx.rc embeds are listed by hand
+            lines.append(f'build {ninja_path(o)}: rc {ninja_path(src)} | {ninja_path(RUNTIME / "xcx.manifest")} '
+                         f'{ninja_path(RUNTIME / "xcx.ico")}')
         else:
             lines.append(f'build {ninja_path(o)}: cc_rt {ninja_path(src)}')
         rt.append(o)
     objs['runtime'] = rt
     every = [o for v in objs.values() for o in v]
-    exe = out / 'totk.exe'
+    exe = out / 'xcx.exe'
     if make_lib:
         exe = out / LIB_NAME
         lines += ['', 'rule ar', f'  command = {cmd_arg(AR.as_posix())} rcs $out $in', '  description = AR $out', '', f'build {ninja_path(exe)}: ar ' + ' '.join(ninja_path(o) for o in every),
@@ -324,7 +327,7 @@ def ninja_file(gen, out, mods, pool_depth, skip=(), prebuilt=False, runtime_lib=
     rule = 'link'
     if runtime_lib:
         # Whole archive: the runtime's weak defaults (nvn_procs.c, nvn_api_core.c, vk_sync.c) would otherwise satisfy
-        # references before the linker pulls the members with the strong definitions, which would stay out of totk.exe.
+        # references before the linker pulls the members with the strong definitions, which would stay out of xcx.exe.
         rule = 'link_lib'
         lines += ['', 'rule link_lib',
                   f'  command = $cc $ldflags @$out.rsp -Wl,--whole-archive {cmd_path(runtime_lib)} -Wl,--no-whole-archive $libs -o $out',
@@ -607,10 +610,10 @@ def main():
                     help='comma-separated runtime/*.c names to leave out (the link needs another definition of what they '
                          'define)')
     ap.add_argument('--exefs', type=Path,
-                    help="totk.exe's default ExeFS directory (default build/extracted/<version>/exefs)")
-    ap.add_argument('--romfs', type=Path, help="totk.exe's default RomFS directory with romfs.bin and index.json "
+                    help="xcx.exe's default ExeFS directory (default build/extracted/<version>/exefs)")
+    ap.add_argument('--romfs', type=Path, help="xcx.exe's default RomFS directory with romfs.bin and index.json "
                                                '(default build/extracted/<version>/romfs)')
-    ap.add_argument('--profile', type=Path, help="totk.exe's default profile directory (default build/profile for v121, "
+    ap.add_argument('--profile', type=Path, help="xcx.exe's default profile directory (default build/profile for v121, "
                                                  "build/profile-<version> otherwise, so trying another version leaves "
                                                  "the main profile alone; saves load on 1.2.1 and 1.4.3 alike)")
     ap.add_argument('--toolchain', type=Path, help='llvm-mingw directory (with bin/clang.exe) to build with instead of '
@@ -620,7 +623,7 @@ def main():
     ap.add_argument('--deps', type=Path, help=f'with --toolchain: include/, lib/ and bin/ of Vulkan, SDL3, Opus, libvpx '
                                               f'and VMA (default {DEFAULT_DEPS.relative_to(ROOT).as_posix()})')
     ap.add_argument('--make-runtime-lib', action='store_true',
-                    help=f'build only <out>/{LIB_NAME} from runtime/ (no generated C, no totk.exe)')
+                    help=f'build only <out>/{LIB_NAME} from runtime/ (no generated C, no xcx.exe)')
     ap.add_argument('--runtime-lib', type=Path, help=f'link against this {LIB_NAME} instead of compiling runtime/ '
                                                     f'({", ".join(sorted(INSTALL_SIDE))} and modules.c still compile)')
     ap.add_argument('--expected', type=Path,
@@ -680,7 +683,7 @@ def main():
         print(f'romfs index: {count} files, {mib(size)}, {dt:.1f} s')
     else:
         romfs_index.write_placeholder(out)
-        print(f'build_game: warning: no {paths["romfs"] / "index.json"}; totk.exe will have no RomFS', file=sys.stderr)
+        print(f'build_game: warning: no {paths["romfs"] / "index.json"}; xcx.exe will have no RomFS', file=sys.stderr)
     copy_romfs_patches(args.version, out)
     global RUNTIME
     RUNTIME = (args.runtime or RUNTIME).resolve()
@@ -735,13 +738,13 @@ def main():
     code, dt, peak_one, _ = run_measured(base + [flag_path(exe)], env)
     print(f'link: {dt:.1f} s, peak {mib(peak_one)}')
     if code:
-        print(f'build_game: link failed, {flag_path(exe)} is the old one (a running totk.exe from this dir locks it)',
+        print(f'build_game: link failed, {flag_path(exe)} is the old one (a running xcx.exe from this dir locks it)',
               file=sys.stderr)
         sys.exit(code)
     if args.make_runtime_lib:
         print(f'{below_root(exe)}: {mib(exe.stat().st_size)}')
         return
-    for dll in dlls:   # dynamic SDL3 (zlib) and its libiconv (LGPL, unmodified DLL), found next to totk.exe
+    for dll in dlls:   # dynamic SDL3 (zlib) and its libiconv (LGPL, unmodified DLL), found next to xcx.exe
         shutil.copy2(dll, exe.parent / dll.name)
     sections, image = pe_sections(exe)
     print(f'{below_root(exe)}: file {mib(exe.stat().st_size)}, '

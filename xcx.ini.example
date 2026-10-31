@@ -1,5 +1,5 @@
-# totk.ini: settings for totk.exe. Copy this file to totk.ini next to totk.exe and remove the '#' of a line to change it.
-# Each line shows the default. A TOTK_* environment variable of the same name (TOTK_FPS_LIMIT for fps_limit) overrides the
+# xcx.ini: settings for xcx.exe. Copy this file to xcx.ini next to xcx.exe and remove the '#' of a line to change it.
+# Each line shows the default. A XCX_* environment variable of the same name (XCX_FPS_LIMIT for fps_limit) overrides the
 # file. Keys are case-insensitive; '#' and ';' start a comment; [sections] only group lines.
 
 [frame rate]
@@ -176,7 +176,7 @@
 # Extra lines in the log, comma separated: svc, host, ipc, fs, gfx, perf, sched, audio, present or all. The menu's
 # Performance log sets perf (frame timings). Default: none.
 # trace = perf
-# Flight recorder: keeps the last frames and saves them to a flight folder next to the folder of totk.exe when a frame
+# Flight recorder: keeps the last frames and saves them to a flight folder next to the folder of xcx.exe when a frame
 # takes longer than flight_spike_ms (0 to 60000).
 # flight = 0
 # flight_spike_ms = 100
