@@ -35,13 +35,7 @@ static Out outs[OUT_MAX];
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static int sdl_ready = -1;
 
-static uint64_t now_ns(void) {
-    static LARGE_INTEGER freq;
-    LARGE_INTEGER t;
-    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&t);
-    return (uint64_t)(t.QuadPart / freq.QuadPart * 1000000000 + t.QuadPart % freq.QuadPart * 1000000000 / freq.QuadPart);
-}
+static uint64_t now_ns(void) { return plat_now_ns(); }
 
 static Out *find(uint64_t guest) {
     for (int i = 0; i < OUT_MAX; i++)
