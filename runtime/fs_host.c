@@ -26,7 +26,7 @@
 #include "platform/platform.h"
 #include "romfs_path.h"
 
-#define TOTK_APPLICATION_ID 0x0100f2c0115b6000ull
+#define TOTK_APPLICATION_ID 0x0100453019aa8000ull   // XCX DE (the name stays to keep the diff against TotK Recomp small)
 #define FILE_BASE 0x200000000ull
 #define DIR_BASE 0x300000000ull
 #define NFILES 1024
@@ -1087,6 +1087,12 @@ static void ov_read_cache_list(Cpu *c) { ret_x(c, read_cache_list(arg_p(c, 0), a
 static void ov_close_cache_list(Cpu *c) { close_cache_list(arg_x(c, 0)); }
 // The fs priority only orders I/O inside the system fs process; host I/O is unordered.
 static void ov_set_priority(Cpu *c) { (void)c; }
+// XCX. void SetAllocator(alloc, free): the host fs allocates on its own side, so the guest allocator is never called.
+static void ov_set_allocator(Cpu *c) { (void)c; }
+// Result EnsureSaveData(const Uid &): the save directory is created on mount, so there is nothing to make ahead.
+static void ov_ensure_save(Cpu *c) { ret_x(c, my_uid(arg_p(c, 0)) ? 0 : FS_R_TARGET_NOT_FOUND); }
+// bool IsSaveDataExisting(const Uid &): the overload for the calling application.
+static void ov_save_exists_own(Cpu *c) { ret_x(c, save_exists(TOTK_APPLICATION_ID, arg_p(c, 0))); }
 #undef I32
 #undef I64
 
@@ -1157,6 +1163,9 @@ HOST_OVERRIDE(S_OPEN_CACHE_LIST, ov_open_cache_list);
 HOST_OVERRIDE(S_READ_CACHE_LIST, ov_read_cache_list);
 HOST_OVERRIDE(S_CLOSE_CACHE_LIST, ov_close_cache_list);
 HOST_OVERRIDE(S_SET_PRIORITY, ov_set_priority);
+HOST_OVERRIDE("_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", ov_set_allocator);
+HOST_OVERRIDE("_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", ov_ensure_save);
+HOST_OVERRIDE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", ov_save_exists_own);
 
 // ---- --probe-fs
 // Every check calls the overrides the way guest code does: by synthetic address through rt_call, with AAPCS64

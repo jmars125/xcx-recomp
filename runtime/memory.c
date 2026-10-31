@@ -423,7 +423,9 @@ static uint32_t stack_move(int unmap, uint64_t dst, uint64_t src, uint64_t n) {
     if (!inside(dst, n, L.stack)) return R_INVALID_REGION;
     int in_heap = inside(src, n, (RtRange){L.heap.base, heap_size});
     int in_alias = inside(src, n, L.alias);
-    if (!in_heap && !in_alias) return R_INVALID_REGION;
+    // XCX gives some threads stacks in main's .bss; Horizon lets module data be aliased like heap memory.
+    int in_module = module_data(src, n) >= 0;
+    if (!in_heap && !in_alias && !in_module) return R_INVALID_REGION;
     AcquireSRWLockExclusive(&lock);
     uint32_t r = R_OK;
     if (in_alias && !alias_all_mapped(src, n)) {

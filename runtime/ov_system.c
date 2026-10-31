@@ -467,6 +467,55 @@ static void ov_user_existence(Cpu *c) {
     ret_x(c, 0);
 }
 
+// ---- XCX: account calls TotK never makes. The host has one local user and no network service account.
+#define ACCOUNT_R_NSA_UNAVAILABLE 0x2307cu   // module 124 (account), description 280: no network service account
+
+// Result OpenUser(UserHandle *out, const Uid &)
+static void ov_open_user_uid(Cpu *c) {
+    UserHandle *out = arg_p(c, 0);
+    const Uid *u = arg_p(c, 1);
+    AcquireSRWLockExclusive(&account_lock);
+    load_uid();
+    int ok = 0;
+    if (out && same_uid(u))
+        for (int i = 0; i < 64 && !ok; i++)
+            if (!tokens[i]) {
+                tokens[i] = next_token++;
+                *out = (UserHandle){local, tokens[i]};
+                ok = 1;
+            }
+    ReleaseSRWLockExclusive(&account_lock);
+    ret_x(c, ok ? 0 : ACCOUNT_R_INVALID);
+}
+
+// Result ListAllUsers(int *count, Uid *out, int max)
+static void ov_list_users(Cpu *c) {
+    int32_t *count = arg_p(c, 0);
+    Uid *out = arg_p(c, 1);
+    int32_t max = (int32_t)arg_x(c, 2);
+    if (!count) { ret_x(c, ACCOUNT_R_INVALID); return; }
+    AcquireSRWLockExclusive(&account_lock);
+    load_uid();
+    *count = 1;
+    if (out && max > 0) out[0] = local;
+    ReleaseSRWLockExclusive(&account_lock);
+    ret_x(c, 0);
+}
+
+// Result GetLastOpenedUser(Uid *out)
+static void ov_last_user(Cpu *c) {
+    Uid *out = arg_p(c, 0);
+    if (!out) { ret_x(c, ACCOUNT_R_INVALID); return; }
+    AcquireSRWLockExclusive(&account_lock);
+    load_uid();
+    *out = local;
+    ReleaseSRWLockExclusive(&account_lock);
+    ret_x(c, 0);
+}
+
+// EnsureNetworkServiceAccountAvailable, GetNetworkServiceAccountId, LoadNetworkServiceAccountIdTokenCache: offline.
+static void ov_no_nsa(Cpu *c) { ret_x(c, ACCOUNT_R_NSA_UNAVAILABLE); }
+
 // Result GetNickname(Nickname *out, const Uid &): 33 bytes, NUL-terminated UTF-8
 static void ov_nickname(Cpu *c) {
     char *out = arg_p(c, 0);
@@ -782,6 +831,71 @@ static void ov_font_size(Cpu *c) {
     ret_x(c, fonts.size[t]);
 }
 
+// ---- XCX: oe calls TotK never makes
+static void ov_nop(Cpu *c) { (void)c; }   // Enter/LeaveExitRequestHandlingSection: the host never asks the game to exit
+static void ov_ret_zero(Cpu *c) { ret_x(c, 0); }   // inactivity extension getters: not extended
+// void GetPseudoDeviceId(util::Uuid *out): one fixed id per host, as the console gives one per application
+static void ov_pseudo_device_id(Cpu *c) {
+    uint8_t *out = arg_p(c, 0);
+    static const uint8_t id[16] = {0x78, 0x63, 0x78, 0x2d, 0x72, 0x65, 0x63, 0x6f, 0x6d, 0x70, 0x2d, 0x68, 0x6f, 0x73, 0x74, 0x31};
+    if (out) memcpy(out, id, 16);
+}
+
+// ---- XCX: nifm. The host is offline: the game's online features (NPLN) see no network and stay off.
+#define NIFM_R_NO_NETWORK 0x6a46eu   // module 110 (nifm), description 3400: network not available
+static void ov_nifm_unavailable(Cpu *c) { ret_x(c, NIFM_R_NO_NETWORK); }
+
+// ---- XCX: int clock_gettime(clockid_t, struct timespec *), musl in sdk. Its CLOCK_REALTIME path reads a time service
+// session the host never opens, so std::chrono::system_clock::now threw. Every clock comes from the host instead:
+// CLOCK_REALTIME (0) from the Windows system time, the others from the performance counter.
+static void ov_clock_gettime(Cpu *c) {
+    int64_t *ts = arg_p(c, 1);
+    if (!ts) { ret_x(c, (uint64_t)-1); return; }
+    if ((int32_t)arg_x(c, 0) == 0) {
+        FILETIME ft;
+        GetSystemTimePreciseAsFileTime(&ft);
+        uint64_t t = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) - 116444736000000000ull;   // 100 ns since 1970
+        ts[0] = (int64_t)(t / 10000000), ts[1] = (int64_t)(t % 10000000 * 100);
+    } else {
+        static LARGE_INTEGER freq;
+        LARGE_INTEGER now;
+        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&now);
+        ts[0] = now.QuadPart / freq.QuadPart, ts[1] = now.QuadPart % freq.QuadPart * 1000000000 / freq.QuadPart;
+    }
+    ret_x(c, 0);
+}
+
+// ---- XCX: add-on content count, the language list, the profanity filter, screenshots
+static void ov_aoc_count(Cpu *c) { ret_x(c, 0); }   // int CountAddOnContent(): matches ListAddOnContent
+
+// The languages a console offers, in nn::settings::Language order; each LanguageCode is 8 bytes.
+static const char languages[][8] = {"ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-TW",
+                                    "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
+#define NLANG ((int)(sizeof languages / sizeof *languages))
+static void ov_language_count(Cpu *c) { ret_x(c, NLANG); }   // int GetAvailableLanguageCodeCount()
+// int GetAvailableLanguageCodes(LanguageCode *out, int count)
+static void ov_language_codes(Cpu *c) {
+    char *out = arg_p(c, 0);
+    int n = (int)arg_x(c, 1);
+    if (n > NLANG) n = NLANG;
+    if (!out || n < 0) n = 0;
+    for (int i = 0; i < n; i++) memcpy(out + 8 * i, languages[i], 8);
+    ret_x(c, (uint64_t)n);
+}
+
+// ngc::ProfanityFilter: Initialize and SetMaskMode succeed; MaskProfanityWordsInText(int *count, char *, uint32)
+// leaves the text alone and counts nothing.
+static void ov_profanity_mask(Cpu *c) {
+    int32_t *count = arg_p(c, 0);
+    if (count) *count = 0;
+    ret_x(c, 0);
+}
+
+// Result album::SaveCurrentScreenshot(AlbumReportOption): the host has no album
+#define ALBUM_R_UNAVAILABLE 0x3cfu   // module 207 (capsrv), description 1
+static void ov_screenshot(Cpu *c) { ret_x(c, ALBUM_R_UNAVAILABLE); }
+
 // ==== registration
 HOST_OVERRIDE("_ZN2nn2oe10InitializeEv", ov_oe_initialize);
 HOST_OVERRIDE("_ZN2nn2oe18GetDesiredLanguageEv", ov_desired_language);
@@ -830,6 +944,13 @@ HOST_OVERRIDE("_ZN2nn3err9ShowErrorENS_6ResultE", ov_show_error);
 HOST_OVERRIDE("nndiagStartup", ov_diag_startup);
 HOST_OVERRIDE("_ZN2nn3aoc10InitializeEv", ov_aoc_initialize);
 HOST_OVERRIDE("_ZN2nn3aoc16ListAddOnContentEPiii", ov_aoc_list);
+HOST_OVERRIDE("_ZN2nn3aoc17CountAddOnContentEv", ov_aoc_count);
+HOST_OVERRIDE("_ZN2nn8settings29GetAvailableLanguageCodeCountEv", ov_language_count);
+HOST_OVERRIDE("_ZN2nn8settings25GetAvailableLanguageCodesEPNS0_12LanguageCodeEi", ov_language_codes);
+HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter10InitializeEPvm", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPcj", ov_profanity_mask);
+HOST_OVERRIDE("_ZN2nn5album21SaveCurrentScreenshotENS0_17AlbumReportOptionE", ov_screenshot);
 HOST_OVERRIDE("_ZN2nn3err26InitializeContextWriterApiEv", ov_err_context);
 HOST_OVERRIDE("_ZN2nn4pctl10InitializeEv", ov_pctl_initialize);
 HOST_OVERRIDE("_ZN2nn4diag34InitializeApplicationAbortObserverEv", ov_abort_observer);
@@ -847,7 +968,29 @@ HOST_OVERRIDE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", ov_close_user);
 HOST_OVERRIDE("_ZN2nn7account9GetUserIdEPNS0_3UidERKNS0_10UserHandleE", ov_user_id);
 HOST_OVERRIDE("_ZN2nn7account16GetUserExistenceEPbRKNS0_3UidE", ov_user_existence);
 HOST_OVERRIDE("_ZN2nn7account11GetNicknameEPNS0_8NicknameERKNS0_3UidE", ov_nickname);
+HOST_OVERRIDE("_ZN2nn7account8OpenUserEPNS0_10UserHandleERKNS0_3UidE", ov_open_user_uid);
+HOST_OVERRIDE("_ZN2nn7account12ListAllUsersEPiPNS0_3UidEi", ov_list_users);
+HOST_OVERRIDE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", ov_no_nsa);
+HOST_OVERRIDE("_ZN2nn7account17GetLastOpenedUserEPNS0_3UidE", ov_last_user);
+HOST_OVERRIDE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", ov_no_nsa);
+HOST_OVERRIDE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", ov_no_nsa);
+HOST_OVERRIDE("_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_10UserHandleE", ov_no_nsa);
 
+HOST_OVERRIDE("_ZN2nn2oe31EnterExitRequestHandlingSectionEv", ov_nop);
+HOST_OVERRIDE("_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", ov_nop);
+HOST_OVERRIDE("_ZN2nn2oe43GetUserInactivityDetectionTimeExtensionModeEv", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn2oe37IsUserInactivityDetectionTimeExtendedEv", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn2oe17GetPseudoDeviceIdEPNS_4util4UuidE", ov_pseudo_device_id);
+
+HOST_OVERRIDE("_ZN2nn4nifm10InitializeEv", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn4nifm18IsNetworkAvailableEv", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", ov_ret_zero);
+HOST_OVERRIDE("_ZN2nn4nifm20SubmitNetworkRequestEv", ov_nop);
+HOST_OVERRIDE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", ov_nifm_unavailable);
+HOST_OVERRIDE("_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE", ov_nifm_unavailable);
+HOST_OVERRIDE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", ov_nifm_unavailable);
+
+HOST_OVERRIDE("clock_gettime", ov_clock_gettime);
 HOST_OVERRIDE("_ZN2nn4time10InitializeEv", ov_time_initialize);
 HOST_OVERRIDE("_ZN2nn4time8FinalizeEv", ov_time_finalize);
 HOST_OVERRIDE("_ZN2nn4time13IsInitializedEv", ov_time_ready);

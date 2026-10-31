@@ -2177,6 +2177,11 @@ void kern_fiber_finalize(Cpu *c) {
 void kern_fiber_switch(Cpu *c) {
     RtThread *t = tcur;
     if (!t) rt_fatal("SwitchToFiber on a host thread");
+    // XCX switches to NULL to return to the thread's own context, as a fiber function returning NULL does (fiber_main).
+    if (!c->x[0]) {
+        if (t->fiber) fiber_switch_to(t, c, NULL);
+        return;
+    }
     Fiber *to = fiber_find(c->x[0]);
     if (!to) rt_fatal("SwitchToFiber(%#llx): not an initialized fiber", (unsigned long long)c->x[0]);
     if (to == t->fiber) return;

@@ -23,8 +23,10 @@
 #define SYM_INIT_START "_ZN2nn4init5StartEmmPFvvES2_S2_"
 // main: return addresses of nnMain's SetFocusHandlingMode call (1.2.1 from this port's analysis of main; 1.4.3 from
 // MacNativeGames' scripts/verify_boot.py) and of the first nvnBootstrapLoader call, per game version.
-#define CHECKPOINT_RET (RT_V143 ? 0xbdb48cull : 0xe7a954ull)
-#define NVN_RET (RT_V143 ? 0xbe0360ull : 0xe7eb2cull)
+// XCX 2.0.0: nnMain never calls SetFocusHandlingMode, so it has no checkpoint (0); its first nvnBootstrapLoader call
+// returns to main+0x953268 (the call is at +0x953264).
+#define CHECKPOINT_RET 0ull
+#define NVN_RET 0x953268ull
 #define CTOR_DONE 2                      // a module's constructor flag after its DT_INIT ran the init_array
 
 // The init_array sizes (1.2.1: counted in the modules; 1.4.3: DT_INIT_ARRAYSZ); MacNativeGames' boot check expects
@@ -32,7 +34,9 @@
 typedef struct { const char *name; uint64_t entries; } InitCount;
 static const InitCount inits_121[] = {{"main", 10673}, {"subsdk0", 45}, {"sdk", 116}};
 static const InitCount inits_143[] = {{"main", 10717}, {"subsdk0", 45}, {"sdk", 83}};
-#define expected_inits (RT_V143 ? inits_143 : inits_121)
+// XCX DE 2.0.0 (DT_INIT_ARRAYSZ of its modules). This fork runs only XCX, so its counts are the ones checked.
+static const InitCount inits_xcx[] = {{"main", 1998}, {"subsdk0", 45}, {"sdk", 87}};
+#define expected_inits inits_xcx
 
 static volatile LONG inits_done, checkpoint_seen;
 uint64_t rt_guest_start_ns;
@@ -122,7 +126,7 @@ void rt_boot_event(const char *what, Cpu *c, const char *detail) {
         if (ret != main_mod->base + NVN_RET)
             rt_fatal("boot: first NVN call %s(\"%s\") from %s, expected main+%#llx", "nvnBootstrapLoader", detail, at,
                      (unsigned long long)NVN_RET);
-        if (!InterlockedCompareExchange(&checkpoint_seen, 0, 0))
+        if (CHECKPOINT_RET && !InterlockedCompareExchange(&checkpoint_seen, 0, 0))
             rt_fatal("boot: first NVN call before the SetFocusHandlingMode checkpoint");
         rt_logf("boot: first NVN call nvnBootstrapLoader(\"%s\") from main+%#llx\n", detail,
                (unsigned long long)(ret - main_mod->base));

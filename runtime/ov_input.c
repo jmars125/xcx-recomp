@@ -101,6 +101,33 @@ static void ov_states_full_key(Cpu *c) { npad_states(c, STYLE_FULL_KEY); }
 static void ov_states_handheld(Cpu *c) { npad_states(c, STYLE_HANDHELD); }
 static void ov_states_joycon(Cpu *c) { npad_states(c, 0); }
 
+// XCX. void GetNpadState(<State> *out, const NpadIdType &id): GetNpadStates with a count of one.
+static void npad_state(Cpu *c, uint32_t want) {
+    Cpu one = *c;
+    one.x[2] = c->x[1];
+    one.x[1] = 1;
+    npad_states(&one, want);
+}
+static void ov_state_full_key(Cpu *c) { npad_state(c, STYLE_FULL_KEY); }
+static void ov_state_handheld(Cpu *c) { npad_state(c, STYLE_HANDHELD); }
+static void ov_state_joycon(Cpu *c) { npad_state(c, 0); }
+
+// XCX: the touch screen. The host has none, so every sample holds no touches.
+// void InitializeTouchScreen()
+static void ov_initialize_touch(Cpu *c) { (void)c; }
+// int GetTouchScreenStates<16>(TouchScreenState<16> *out, int count): the newest sample only. A state is the
+// sampling number (8 bytes), the touch count (4), padding (4) and 16 touches of 0x28 bytes.
+static void ov_touch_states(Cpu *c) {
+    uint8_t *out = arg_p(c, 0);
+    int max = (int)arg_x(c, 1);
+    static volatile LONG64 touch_sample;
+    if (!out || max <= 0) { ret_x(c, 0); return; }
+    memset(out, 0, 0x10 + 16 * 0x28);
+    int64_t n = InterlockedIncrement64(&touch_sample);
+    memcpy(out, &n, 8);
+    ret_x(c, 1);
+}
+
 // void SetNpadJoyHoldType(NpadJoyHoldType type)
 static void ov_hold_type(Cpu *c) {
     int64_t t = (int32_t)arg_x(c, 0);
@@ -484,6 +511,11 @@ HOST_OVERRIDE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyDualStateEiRKj", ov_state
 HOST_OVERRIDE("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyLeftStateEiRKj", ov_states_joycon);
 HOST_OVERRIDE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", ov_states_joycon);
 HOST_OVERRIDE("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadHandheldStateEiRKj", ov_states_handheld);
+HOST_OVERRIDE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", ov_state_full_key);
+HOST_OVERRIDE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj", ov_state_handheld);
+HOST_OVERRIDE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj", ov_state_joycon);
+HOST_OVERRIDE("_ZN2nn3hid21InitializeTouchScreenEv", ov_initialize_touch);
+HOST_OVERRIDE("_ZN2nn3hid20GetTouchScreenStatesILm16EEEiPNS0_16TouchScreenStateIXT_EEEi", ov_touch_states);
 HOST_OVERRIDE("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", ov_hold_type);
 HOST_OVERRIDE("_ZN2nn3hid14DisconnectNpadERKj", ov_disconnect);
 HOST_OVERRIDE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE",

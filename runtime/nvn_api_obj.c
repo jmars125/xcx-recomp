@@ -31,6 +31,12 @@ NVN_API(nvnTexturePoolFinalize) { (void)c; }
 NVN_API(nvnTexturePoolRegisterTexture) {
     gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
 }
+// void nvnTexturePoolRegisterImage(const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v)
+// XCX calls it; TotK never did. An image handle is a texture pool index here (nvn_api_cmd.c, BindImage), so the
+// slot takes the same registration as a sampled texture.
+NVN_API(nvnTexturePoolRegisterImage) {
+    gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
+}
 // NVNboolean nvnSamplerPoolInitialize(NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t offset, int n)
 NVN_API(nvnSamplerPoolInitialize) {
     *(dpool_t *)arg_p(c, 0) = (dpool_t){arg_p(c, 1), (int64_t)arg_x(c, 2), (int32_t)arg_x(c, 3)};
@@ -84,10 +90,12 @@ NVN_API(nvnTextureBuilderSetSize3D) {
 }
 NVN_API(nvnTextureBuilderSetLevels) { TB(c)->d.levels = (uint32_t)arg_x(c, 1); }
 NVN_API(nvnTextureBuilderSetFormat) { TB(c)->d.format = (int)arg_x(c, 1); }
-// The back end samples the depth plane; stencil-plane sampling stops.
+// The plane a depth-stencil texture samples. XCX sets STENCIL on the texture instead of a view; the back end samples
+// that texture through a STENCIL view of the same image (vk_texture.c slot_resolve).
 NVN_API(nvnTextureBuilderSetDepthStencilMode) {
-    if ((uint32_t)arg_x(c, 1) != NVN_TEXTURE_DEPTH_STENCIL_MODE_DEPTH)
-        rt_fatal("nvn: stencil-plane texture sampling is not implemented");
+    uint32_t m = (uint32_t)arg_x(c, 1);
+    if (m > NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL) rt_fatal("nvn: invalid depth-stencil mode %u", m);
+    TB(c)->d.dsmode = m;
 }
 NVN_API(nvnTextureBuilderSetSwizzle) {
     uint32_t s[4] = {(uint32_t)arg_x(c, 1), (uint32_t)arg_x(c, 2), (uint32_t)arg_x(c, 3), (uint32_t)arg_x(c, 4)};

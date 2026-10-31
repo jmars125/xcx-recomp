@@ -255,8 +255,30 @@ static LONG CALLBACK crash_handler(EXCEPTION_POINTERS *ep) {
     uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
     HMODULE self = GetModuleHandleW(NULL);
     MODULEINFO mi;
-    if (!GetModuleInformation(GetCurrentProcess(), self, &mi, sizeof mi) || rip - (uintptr_t)mi.lpBaseOfDll >= mi.SizeOfImage)
-        return EXCEPTION_CONTINUE_SEARCH;   // not our code: leave it to the handler that expects it
+    if (!GetModuleInformation(GetCurrentProcess(), self, &mi, sizeof mi) || rip - (uintptr_t)mi.lpBaseOfDll >= mi.SizeOfImage) {
+        // Not our code: leave it to the handler that expects it, but name the module, as an unhandled one ends the
+        // process with no other trace. First-chance exceptions a DLL handles itself land here too, so only the first
+        // few are logged.
+        static volatile LONG foreign;
+        if (InterlockedIncrement(&foreign) <= 20) {
+            HMODULE m = NULL;
+            wchar_t name[MAX_PATH] = L"?";
+            if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCWSTR)rip, &m))
+                GetModuleFileNameW(m, name, MAX_PATH);
+            const wchar_t *base = wcsrchr(name, L'\\');
+            Cpu *gc = kern_cpu();
+            char d[160];
+            rt_logf("exception %#lx in %ls+%#llx (thread %lu%s%s)%s%#llx\n", code, base ? base + 1 : name,
+                    (unsigned long long)(rip - (uintptr_t)m), GetCurrentThreadId(), gc ? ", guest lr " : "",
+                    gc ? ldr_describe(gc->x[30], d, sizeof d) : "",
+                    code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2 ? ", address " : "",
+                    code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2
+                        ? (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1] : 0ull);
+            fflush(stderr);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     if (InterlockedExchange(&busy, 1)) ExitProcess(71);
     char d[160];
     rt_logf("FATAL: exception %#lx at host %p (totk.exe+%#llx)", code, (void *)rip,

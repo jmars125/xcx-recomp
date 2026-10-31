@@ -149,6 +149,7 @@ static void make_key(const tex_t *t, TexKey *k) {
     memset(k, 0, sizeof *k);
     k->addr = (uintptr_t)t->mem;
     k->d = t->d;
+    k->d.dsmode = 0;   // a STENCIL-mode descriptor names the same image as its DEPTH twin (slot_resolve)
     k->has_layout = t->has_layout;
     memcpy(k->layout, t->layout, 8);
 }
@@ -963,6 +964,13 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
             view->set_swizzle = 1;
             *has_view = 1;
         }
+    }
+    // A texture built in STENCIL mode samples the stencil plane unless its view says otherwise.
+    if (e && s->t.d.dsmode == NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL && !(*has_view && view->set_dsmode)) {
+        if (!*has_view) memset(view, 0, sizeof *view);
+        view->set_dsmode = 1;
+        view->dsmode = NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL;
+        *has_view = 1;
     }
     return e;
 }
