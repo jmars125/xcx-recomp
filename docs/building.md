@@ -122,7 +122,7 @@ folder. The folder holds code and data derived from your game: for your own mach
 Before a commit:
 
 - `python tools/check_content.py --staged`: nothing game-derived is staged. CI runs the same check;
-  `git config core.hooksPath .githooks` runs it before each local commit.
+  `git config core.hooksPath .githooks` runs it before each local commit and refuses pushes to `master` or `main`.
 - `build\<ver>\xcx.exe --selftest`: layout, dispatch table and host-function registry, without game files.
 
 The lifter (`recomp/`) and the CPU headers (`runtime/cpu.h`, `runtime/simd.h`) are checked against Unicorn. Every lifter

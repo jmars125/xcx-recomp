@@ -7,7 +7,8 @@ Nothing that came out of the game goes into the repository: no game files, keys,
 Two checks enforce this:
 
 - CI runs `tools/check_content.py` on every push and pull request.
-- The same check runs before each local commit once you enable the hook:
+- The same check runs before each local commit once you enable the hooks, which also refuse a push to `master` or
+  `main` (changes go through a branch and a pull request):
 
   ```sh
   git config core.hooksPath .githooks
