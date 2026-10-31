@@ -3,7 +3,7 @@
 # xcx60 (XCX_FPS60, on): the frame rate of the frame limit XCX_FPS_LIMIT (frame_rate.c). The interval and period
 # sites are our own; the others are ported from the 60FPS mod for 1.0.1 by Fl4sh_ and StevensND
 # (github.com/Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods): each 1.0.1 site was found in the 1.0.0 main by what the
-# patch replaces, then in 2.0.0 by the surrounding instructions (unique match); the original words below are 2.0.0's. The mod's other sites (a code cave at 1.0.1 main+0x2a02ac and constant time scales at
+# patch replaces, then in 2.0.0 by the surrounding instructions (unique match); the original words below are 2.0.0's. The mod's other sites (constant time scales at
 # +0x1e245c..+0x1e24dc and +0xeb108..+0xeb128) have no clear 1.0.0 counterpart and are not ported.
 
 set xcx60 XCX_FPS60 1
@@ -31,6 +31,12 @@ site xcx60 main 56d40 72a7a108 @page:x8 b9404108
 site xcx60 main 1e28e0 1e204100 @page:x9 bd404d20 1e200900
 site xcx60 main 1e291c 1e204100 @page:x9 bd404d20 1e200900
 site xcx60 main eb408 1e204100 @page:x9 bd404d20 1e200900
+
+# The Soul Challenge ring (the timing prompt in battle): its update (around main+0x5c626c) takes a fixed amount per
+# frame, +0x120 of the prompt, off the time left at +0x11c, so above 30 fps the ring shrank fast. The amount is
+# scaled by the patch page's +0x4c (30 / frame rate), as the 1.0.1 mod's halving at 60 fps (its cave at 1.0.1
+# +0x2a02ac, called from +0x5c5874). x8 and s2 are free: every path from here calls before reading them.
+site xcx60 main 5c6284 1e213800 @page:x8 bd404d02 1e220821 1e213800
 
 # The mod's getter that returns false on Switch (1.0.1 +0x13eb280): true. Off: in 2.0.0 it crashes the title screen's
 # rendering (main+0x9530b0 reads through a bad pointer).
