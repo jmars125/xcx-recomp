@@ -1,7 +1,7 @@
 """Assemble the Linux release folder of docs/installer.md ("Linux release") and pack it as an AppImage.
 
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux \\
-        [--appimage build/release/XCX-Setup-x86_64.AppImage]
+        [--appimage build/release/XCX-Setup-linux.AppImage]
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
 
 The same model as the Windows release (tools/make_release.py, whose download cache, unpacking and checks this reuses): the
@@ -22,7 +22,7 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
     AppRun, xcx-setup.desktop, xcx-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
 --appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles
-generated/v121 and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it.
+generated/upd (2.0.0) and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it.
 
 The folder contains nothing derived from the game: check_content runs over it before the script finishes, then the
 folder's own python runs a check-only installer pass and the window's --selftest.
@@ -509,16 +509,16 @@ def check_bundle(out):
 
 
 def prove(out):
-    """Compile generated/v121 and link xcx with the folder's tools only, then run the probes beside it."""
+    """Compile generated/upd (2.0.0) and link xcx with the folder's tools only, then run the probes beside it."""
     out = out.resolve()
-    gen = MAIN_ROOT / 'generated' / 'v121'
-    ext = MAIN_ROOT / 'build' / 'extracted' / 'v121'
+    gen = MAIN_ROOT / 'generated' / mr.VERSION_TAG
+    ext = MAIN_ROOT / 'build' / 'extracted' / mr.VERSION_TAG
     chk = CHECK / 'game'
     env = dict(os.environ, PATH=os.pathsep.join([str(out / 'llvm' / 'bin'), str(out / 'bin'), '/usr/bin', '/bin']))
     t0 = time.time()
     run([out / 'python' / 'bin' / 'python3', out / 'tools' / 'build_game.py', '--toolchain', out / 'llvm',
          '--sysroot', out / 'llvm' / 'sysroot', '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime',
-         '--runtime-lib', out / 'runtime' / 'libxcxrt.a', '--ninja', out / 'bin' / 'ninja', '--gen', gen, '--out', chk,
+         '--runtime-lib', out / 'runtime' / 'libxcxrt.a', '--ninja', out / 'bin' / 'ninja', '--version', mr.VERSION_TAG, '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--gen', gen, '--out', chk,
          '--exefs', ext / 'exefs', '--romfs', ext / 'romfs', '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
     shutil.copy2(out / 'bin' / 'libSDL3.so.0', chk / 'libSDL3.so.0')

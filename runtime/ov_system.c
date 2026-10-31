@@ -451,7 +451,7 @@ static void ov_user_existence(Cpu *c) {
 static void ov_open_user_uid(Cpu *c) {
     UserHandle *out = arg_p(c, 0);
     const Uid *u = arg_p(c, 1);
-    AcquireSRWLockExclusive(&account_lock);
+    plat_mutex_lock(&account_lock);
     load_uid();
     int ok = 0;
     if (out && same_uid(u))
@@ -461,7 +461,7 @@ static void ov_open_user_uid(Cpu *c) {
                 *out = (UserHandle){local, tokens[i]};
                 ok = 1;
             }
-    ReleaseSRWLockExclusive(&account_lock);
+    plat_mutex_unlock(&account_lock);
     ret_x(c, ok ? 0 : ACCOUNT_R_INVALID);
 }
 
@@ -471,11 +471,11 @@ static void ov_list_users(Cpu *c) {
     Uid *out = arg_p(c, 1);
     int32_t max = (int32_t)arg_x(c, 2);
     if (!count) { ret_x(c, ACCOUNT_R_INVALID); return; }
-    AcquireSRWLockExclusive(&account_lock);
+    plat_mutex_lock(&account_lock);
     load_uid();
     *count = 1;
     if (out && max > 0) out[0] = local;
-    ReleaseSRWLockExclusive(&account_lock);
+    plat_mutex_unlock(&account_lock);
     ret_x(c, 0);
 }
 
@@ -483,10 +483,10 @@ static void ov_list_users(Cpu *c) {
 static void ov_last_user(Cpu *c) {
     Uid *out = arg_p(c, 0);
     if (!out) { ret_x(c, ACCOUNT_R_INVALID); return; }
-    AcquireSRWLockExclusive(&account_lock);
+    plat_mutex_lock(&account_lock);
     load_uid();
     *out = local;
-    ReleaseSRWLockExclusive(&account_lock);
+    plat_mutex_unlock(&account_lock);
     ret_x(c, 0);
 }
 
@@ -822,22 +822,12 @@ static void ov_nifm_unavailable(Cpu *c) { ret_x(c, NIFM_R_NO_NETWORK); }
 
 // ---- XCX: int clock_gettime(clockid_t, struct timespec *), musl in sdk. Its CLOCK_REALTIME path reads a time service
 // session the host never opens, so std::chrono::system_clock::now threw. Every clock comes from the host instead:
-// CLOCK_REALTIME (0) from the Windows system time, the others from the performance counter.
+// CLOCK_REALTIME (0) from the host's wall clock, the others from its monotonic clock.
 static void ov_clock_gettime(Cpu *c) {
     int64_t *ts = arg_p(c, 1);
     if (!ts) { ret_x(c, (uint64_t)-1); return; }
-    if ((int32_t)arg_x(c, 0) == 0) {
-        FILETIME ft;
-        GetSystemTimePreciseAsFileTime(&ft);
-        uint64_t t = ((uint64_t)ft.dwHighDateTime << 32 | ft.dwLowDateTime) - 116444736000000000ull;   // 100 ns since 1970
-        ts[0] = (int64_t)(t / 10000000), ts[1] = (int64_t)(t % 10000000 * 100);
-    } else {
-        static LARGE_INTEGER freq;
-        LARGE_INTEGER now;
-        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&now);
-        ts[0] = now.QuadPart / freq.QuadPart, ts[1] = now.QuadPart % freq.QuadPart * 1000000000 / freq.QuadPart;
-    }
+    uint64_t t = (int32_t)arg_x(c, 0) == 0 ? plat_unix_time_ns() : plat_now_ns();
+    ts[0] = (int64_t)(t / 1000000000u), ts[1] = (int64_t)(t % 1000000000u);
     ret_x(c, 0);
 }
 

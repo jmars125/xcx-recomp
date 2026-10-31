@@ -416,7 +416,7 @@ void movie_tick(Cpu *c) {
 }
 
 // A host decoder is live: a movie plays (frame_rate.c caps the frame rate to 30 while it does).
-int movie_playing(void) { return InterlockedCompareExchange(&g_count, 0, 0) > 0; }
+int movie_playing(void) { return plat_cas32(&g_count, 0, 0) > 0; }
 
 int movie_stats(uint64_t obj, MovieStats *out) {
     Movie *m = find(obj);

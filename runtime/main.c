@@ -268,11 +268,15 @@ static int watch_hit(EXCEPTION_POINTERS *ep) {
     return 1;
 }
 
-// Windows diagnostics ahead of the crash hook (platform/win32.c): the XCX_WATCH watchpoint, and a log line
-// naming the module of a fault outside our code, as an unhandled one ends the process with no other trace.
+// Windows diagnostics: the XCX_WATCH watchpoint ahead of the crash hook (platform/win32.c), which would take its writes
+// for crashes; behind it, a log line naming the module of a fault outside our code that nothing resolved, as an
+// unhandled one ends the process with no other trace.
+static LONG CALLBACK watch_handler(EXCEPTION_POINTERS *ep) {
+    return watch_hit(ep) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+}
+
 static LONG CALLBACK diag_handler(EXCEPTION_POINTERS *ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
-    if (watch_hit(ep)) return EXCEPTION_CONTINUE_EXECUTION;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW &&
         code != EXCEPTION_IN_PAGE_ERROR)
@@ -561,14 +565,17 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 #ifdef _WIN32
-    AddVectoredExceptionHandler(1, diag_handler);
     const char *watch = cfg_get("XCX_WATCH");
     if (watch && *watch) {
         watch_page = strtoull(watch, NULL, 16) & ~4095ull;
+        AddVectoredExceptionHandler(1, watch_handler);
         CloseHandle(CreateThread(NULL, 0, watch_thread, NULL, 0, NULL));
     }
 #endif
     plat_crash_hook(crash_handler);
+#ifdef _WIN32
+    AddVectoredExceptionHandler(0, diag_handler);
+#endif
     parse_trace();
     prof_start();
     // Timed guest waits (kernel.c block_inner) sleep in whole milliseconds; at the default 15.6 ms tick a 1 ms wait

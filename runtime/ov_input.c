@@ -120,10 +120,10 @@ static void ov_initialize_touch(Cpu *c) { (void)c; }
 static void ov_touch_states(Cpu *c) {
     uint8_t *out = arg_p(c, 0);
     int max = (int)arg_x(c, 1);
-    static volatile LONG64 touch_sample;
+    static volatile int64_t touch_sample;
     if (!out || max <= 0) { ret_x(c, 0); return; }
     memset(out, 0, 0x10 + 16 * 0x28);
-    int64_t n = InterlockedIncrement64(&touch_sample);
+    int64_t n = plat_inc64(&touch_sample);
     memcpy(out, &n, 8);
     ret_x(c, 1);
 }

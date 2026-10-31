@@ -635,8 +635,7 @@ static void aoc_dir(int index, char *out, size_t cap) { snprintf(out, cap, "%s/.
 static int aoc_present(int index) {
     char p[PATH_CAP];
     aoc_dir(index, p, sizeof p);
-    DWORD a = attributes(p);
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+    return plat_fs_kind(p) == PLAT_FS_DIR;
 }
 
 // Writes the indices of the add-on content present, from the offset-th on, at most count, and returns how many; with

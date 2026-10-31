@@ -290,41 +290,39 @@ static void series_shot(const tex_t *t, uint64_t n) {
 // and call chain, once per stall. Started by the first present, so loading before it does not count.
 // XCX_STATE_DUMP=<seconds>: the same dump three times, that long after the first present and 0.3 s apart, stall or
 // not (what the threads wait for in a frame that runs slow).
-static volatile LONG64 g_last_present_ms;
+static volatile int64_t g_last_present_ms;
 
-static DWORD WINAPI state_watch(void *arg) {
-    Sleep((DWORD)(uintptr_t)arg * 1000);
+static void state_watch(void *arg) {
+    plat_sleep_ms((uint32_t)(uintptr_t)arg * 1000);
     for (int i = 0; i < 3; i++) {
         rt_log("state dump %d", i);
         kern_hang_dump();
-        Sleep(300);
+        plat_sleep_ms(300);
     }
-    return 0;
 }
 
-static DWORD WINAPI hang_watch(void *arg) {
-    LONG64 limit = (LONG64)(uintptr_t)arg * 1000, dumped = 0;
+static void hang_watch(void *arg) {
+    int64_t limit = (int64_t)(uintptr_t)arg * 1000, dumped = 0;
     for (;;) {
-        Sleep(1000);
-        LONG64 last = InterlockedCompareExchange64(&g_last_present_ms, 0, 0), now = (LONG64)GetTickCount64();
+        plat_sleep_ms(1000);
+        int64_t last = plat_cas64(&g_last_present_ms, 0, 0), now = (int64_t)plat_now_ms();
         if (now - last < limit || last == dumped) continue;
         dumped = last;
         rt_log("hang: no frame presented for %lld s", (long long)((now - last) / 1000));
         kern_hang_dump();
     }
-    return 0;
 }
 
 static void hang_note_present(void) {
-    static volatile LONG started;
-    InterlockedExchange64(&g_last_present_ms, (LONG64)GetTickCount64());
-    if (started || InterlockedExchange(&started, 1)) return;
+    static volatile int32_t started;
+    plat_xchg64(&g_last_present_ms, (int64_t)plat_now_ms());
+    if (started || plat_xchg32(&started, 1)) return;
     const char *e = cfg_get("XCX_HANG_DUMP");
     long s = e ? strtol(e, NULL, 10) : 0;
-    if (s > 0) CloseHandle(CreateThread(NULL, 0, hang_watch, (void *)(uintptr_t)s, 0, NULL));
+    if (s > 0) plat_thread_detach(plat_thread_new(hang_watch, (void *)(uintptr_t)s, "hang_watch"));
     e = cfg_get("XCX_STATE_DUMP");
     s = e ? strtol(e, NULL, 10) : 0;
-    if (s > 0) CloseHandle(CreateThread(NULL, 0, state_watch, (void *)(uintptr_t)s, 0, NULL));
+    if (s > 0) plat_thread_detach(plat_thread_new(state_watch, (void *)(uintptr_t)s, "state_watch"));
 }
 
 // A --seconds run ends at the first present after the world clock (game time since the save's first frame,

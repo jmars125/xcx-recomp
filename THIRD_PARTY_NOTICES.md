@@ -81,7 +81,7 @@ These tools run on the developer's or player's machine during the build. They ar
 ## Distributed in the Linux release (AppImage)
 
 `tools/make_release_linux.py` assembles these into the folder of `docs/installer.md` ("Linux release") and packs it as
-`XCX-Setup-x86_64.AppImage`. Versions and sha256 of every download are pinned in that script; licence texts are in the
+`XCX-Setup-linux.AppImage`. Versions and sha256 of every download are pinned in that script; licence texts are in the
 folder's `licenses/` and in each component's own folder.
 
 | Component | Source | License | Where in the release |

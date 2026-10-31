@@ -552,10 +552,10 @@ static void upload(Tex *e) {
     const nvn_texdesc *d = &t->d;
     int bw, bh, bpb = nvn_fmt_bpb(d->format, &bw, &bh);
     if (!bpb || !t->mem) return;
-    MEMORY_BASIC_INFORMATION mi0, mi1;   // the copy below reads [mem, mem + L.size): both ends must be committed
-    if (!t->L.size || !VirtualQuery(t->mem, &mi0, sizeof mi0) || mi0.State != MEM_COMMIT ||
-        !VirtualQuery(t->mem + t->L.size - 1, &mi1, sizeof mi1) || mi1.State != MEM_COMMIT) {
-        static volatile long n_over;
+    // the copy below reads [mem, mem + L.size): both ends must be readable (a page each, cheap on every upload)
+    if (!t->L.size || !plat_mem_readable((uint64_t)(uintptr_t)t->mem, 1) ||
+        !plat_mem_readable((uint64_t)(uintptr_t)t->mem + t->L.size - 1, 1)) {
+        static volatile int32_t n_over;
         log_limited(&n_over, "texture %#llx mem %p fmt %#x target %d %ux%ux%u levels %u flags %#x stride %u tiles %u/%u "
                     "layout %d: storage %#llx bytes, pool %p+%#llx (%#llx bytes, flags %#x) is not readable; not uploaded",
                     (unsigned long long)e->pub.addr, (void *)t->mem, d->format, d->target, d->width, d->height, d->depth,

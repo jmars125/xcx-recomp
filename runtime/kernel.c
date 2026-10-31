@@ -20,6 +20,9 @@
 #include "host.h"
 #include "kernel.h"
 #include "platform/platform.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define R_OK 0u
 #define R_TIMEOUT KERN_R_TIMEOUT
@@ -1204,14 +1207,12 @@ static void crit_frame(RtThread *self, uint64_t frame) {
 // XCX_HANG_DUMP (runtime/boot.c hang_watch): every guest thread's state and its guest call chain, read without stopping
 // anything. A blocked thread's registers are the ones it entered its SVC or host call with; a running thread's only say
 // where it last dispatched.
-static int dump_readable(uint64_t a) {
-    MEMORY_BASIC_INFORMATION mbi;
-    return VirtualQuery((void *)(uintptr_t)a, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT &&
-           !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && a + 16 <= (uint64_t)(uintptr_t)mbi.BaseAddress + mbi.RegionSize;
-}
+static int dump_readable(uint64_t a) { return plat_mem_readable(a, 16); }
 
 // The host stack of thread tid: suspended for the read, unwound through the exe's unwind tables, as exe+offsets.
-static void dump_host_stack(DWORD tid) {
+// Windows only: elsewhere the dump gives the guest chain alone.
+#ifdef _WIN32
+static void dump_host_stack(uint32_t tid) {
     if (tid == GetCurrentThreadId()) return;
     HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
     if (!h) return;
@@ -1247,6 +1248,9 @@ static void dump_host_stack(DWORD tid) {
     }
     rt_log("%s", line);
 }
+#else
+static void dump_host_stack(uint32_t tid) { (void)tid; }
+#endif
 
 void kern_hang_dump(void) {
     static const char *const wk[] = {"none", "lock", "condvar", "address", "sync"};
