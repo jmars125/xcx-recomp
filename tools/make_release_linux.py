@@ -204,7 +204,8 @@ def build_bin(out, llvm, sysroot):
 def runtime_lib(out, llvm, sysroot):
     build = CHECK / 'rtlib'
     shutil.rmtree(build, ignore_errors=True)
-    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--toolchain', llvm, '--sysroot', sysroot,
+    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', mr.VERSION_TAG,
+         '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--toolchain', llvm, '--sysroot', sysroot,
          '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja', '--out', build])
     rt = out / 'runtime'
     shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
@@ -518,7 +519,8 @@ def prove(out):
     t0 = time.time()
     run([out / 'python' / 'bin' / 'python3', out / 'tools' / 'build_game.py', '--toolchain', out / 'llvm',
          '--sysroot', out / 'llvm' / 'sysroot', '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime',
-         '--runtime-lib', out / 'runtime' / 'libxcxrt.a', '--ninja', out / 'bin' / 'ninja', '--version', mr.VERSION_TAG, '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--gen', gen, '--out', chk,
+         '--runtime-lib', out / 'runtime' / 'libxcxrt.a', '--ninja', out / 'bin' / 'ninja', '--version', mr.VERSION_TAG,
+         '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--gen', gen, '--out', chk,
          '--exefs', ext / 'exefs', '--romfs', ext / 'romfs', '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
     shutil.copy2(out / 'bin' / 'libSDL3.so.0', chk / 'libSDL3.so.0')
