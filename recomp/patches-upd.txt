@@ -24,6 +24,13 @@ site xcx60 main a1f05c 1e27d001 @page:x9 bd404521
 # A 1/30 s time constant (0x3d088889, 1.0.1 +0x569c0; the mod's 1/60): 1 / limit, the page's +0x40.
 site xcx60 main 56d40 72a7a108 @page:x8 b9404108
 
+# The game's frame update (main+0x1e287c, a virtual reached through main+0x1e2b44) takes its step in 60 Hz ticks: 1.0
+# per frame whatever the frame time, as the interval is 1. It passes the step on to the field, battle and event updates
+# (main+0xeb33c and the calls at main+0x1e28e0, +0x1e291c), so at 120 fps battle prompts and cutscenes ran twice as
+# fast. s8 = step * the patch page's +0x48 (60 / limit; s1 is free: the next call clobbers it). The 1.0.1 mod set
+# constant steps at the calls inside instead (1.0.1 +0x1e245c..+0x1e24dc, +0xeb108..+0xeb128), right only at 60.
+site xcx60 main 1e2894 1e204008 @page:x9 bd404921 1e210808
+
 # The mod's getter that returns false on Switch (1.0.1 +0x13eb280): true. Off: in 2.0.0 it crashes the title screen's
 # rendering (main+0x9530b0 reads through a bad pointer).
 site xcx60g main 13db618 2a1f03e0 52800020

@@ -69,19 +69,22 @@ static void step_store(float seconds) {
 static void frame_limit_live(void);
 
 // XCX 2.0.0 (recomp/patches-upd.txt, set xcx60): the game runs one vsync per frame and its vsync period, frame-rate
-// pick and 1/30 s constant read the patch page, +0x40 the period 1 / limit and +0x44 the limit, so the game steps
-// 1 / limit per frame and the pacer shows frames at the limit. Written at start and when the limit changes; the guest
+// pick, 1/30 s constant and frame update step read the patch page, +0x40 the period 1 / limit, +0x44 the limit and
+// +0x48 the step in 60 Hz ticks, 60 / limit, so the game steps 1 / limit per frame and the pacer shows frames at the
+// limit. Written at start and when the limit changes; the guest
 // reads each word whole.
 static int xcx_rate = -2;
 static _Atomic uint32_t *xcx_words;
 
 static void xcx_rate_store(double hz) {
-    float rate = (float)hz, period = (float)(1.0 / hz);
-    uint32_t r, p;
+    float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(60.0 / hz);
+    uint32_t r, p, t;
     memcpy(&r, &rate, 4);
     memcpy(&p, &period, 4);
+    memcpy(&t, &ticks, 4);
     atomic_store_explicit(&xcx_words[0], p, memory_order_release);
     atomic_store_explicit(&xcx_words[1], r, memory_order_release);
+    atomic_store_explicit(&xcx_words[2], t, memory_order_release);
 }
 
 int frame_rate_paced(void) { return xcx_words != NULL; }
