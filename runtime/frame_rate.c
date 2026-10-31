@@ -69,31 +69,42 @@ static void step_store(float seconds) {
 static void frame_limit_live(void);
 
 // XCX 2.0.0 (recomp/patches-upd.txt, set xcx60): the game runs one vsync per frame and its vsync period, frame-rate
-// pick, 1/30 s constant and frame update step read the patch page, +0x40 the period 1 / limit, +0x44 the limit and
-// +0x48 the step in 60 Hz ticks, 60 / limit, so the game steps 1 / limit per frame and the pacer shows frames at the
-// limit. Written at start and when the limit changes; the guest
+// pick and 1/30 s constant read the patch page, +0x40 the period 1 / limit and +0x44 the limit, so the game steps
+// 1 / limit per frame and the pacer shows frames at the limit; +0x4c is 30 / frame rate, the step of the updates that
+// count 30 fps frames. Written at start and when the limit changes; the guest
 // reads each word whole.
 static int xcx_rate = -2;
 static _Atomic uint32_t *xcx_words;
 
-static void xcx_rate_store(double hz) {
-    static double stored;
-    if (hz == stored) return;
-    if ((hz == 30) != (stored == 30) && stored) rt_log("frame rate: %s", hz == 30 ? "cutscene, 30 fps" : "limit again");
+static void xcx_rate_store(double hz, double fps) {   // hz: the game's vsync rate; fps: frames per second shown
+    static double stored, stored_fps;
+    if (hz == stored && fps == stored_fps) return;
     stored = hz;
-    float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(60.0 / hz);
+    stored_fps = fps;
+    float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(30.0 / fps);
     uint32_t r, p, t;
     memcpy(&r, &rate, 4);
     memcpy(&p, &period, 4);
     memcpy(&t, &ticks, 4);
     atomic_store_explicit(&xcx_words[0], p, memory_order_release);
     atomic_store_explicit(&xcx_words[1], r, memory_order_release);
-    atomic_store_explicit(&xcx_words[2], t, memory_order_release);
+    atomic_store_explicit(&xcx_words[3], t, memory_order_release);   // +0x4c
+}
+
+// The game's frame interval in vsyncs (main+0x1d943a0, the variable of the setter main+0x13a2fd8; 1.0.1's
+// main+0x1da33a0, which the 60FPS mod's cheat sets to 2 in cutscenes): 1, or 2 in a cutscene with the vsync period
+// at 1/60 s, so a cutscene runs exactly as on the console at 30 fps: lip sync counts vsyncs.
+static void xcx_interval_store(int n) {
+    static int stored = 1;
+    if (n == stored) return;
+    stored = n;
+    __atomic_store_n((uint32_t *)(uintptr_t)(MOD_MAIN_BASE + 0x1d943a0), (uint32_t)n, __ATOMIC_RELEASE);
+    rt_log("frame rate: %s", n == 2 ? "cutscene, 30 fps (2 vsyncs of 1/60 s)" : "limit again");
 }
 
 int frame_rate_paced(void) { return xcx_words != NULL; }
 
-// Cutscenes and pre-rendered movies run at 30 fps: their text and animation advance per frame (a movie's subtitles ran
+// Cutscenes and pre-rendered movies run at 30 fps, as the console runs them: their text and animation advance per frame (a movie's subtitles ran
 // ahead of the picture at 120 fps). A movie is a live host decoder (ov_movie.c movie_playing). The game's event state, a 32-bit field at
 // main+0x1fefaf4 (+0xcc of the object at main+0x1fefa28, getter main+0xcc5a0), is 0 in normal play and 2 or more
 // while a cutscene plays, as the 1.0.1 60FPS mod's cheat reads it (1.0.1 main+0x1ffeaf4). XCX_CUTSCENE_30=0 keeps the
@@ -112,7 +123,7 @@ void frame_step_init(void) {
     xcx_rate = rt_patch_set("xcx60");
     if (rt_patch_enabled(xcx_rate)) {
         xcx_words = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 0x40);
-        xcx_rate_store(60);
+        xcx_rate_store(60, 60);
         frame_limit_live();
         rt_log("frame rate: one vsync per frame, the game's vsync period at the frame limit");
         return;
@@ -174,7 +185,8 @@ static void frame_limit_live(void) {
     if (fps60_set >= 0) rt_patch_switch(fps60_set, hz != 30);
     if (xcx_words) {
         double r = hz ? hz : gfx_window_refresh_hz();
-        xcx_rate_store(r < LIMIT_MIN_HZ ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r);
+        r = r < LIMIT_MIN_HZ ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
+        xcx_rate_store(r, r);
     }
     if ((hz > 60 || hz == 0) && !step_word && !xcx_words)
         rt_log("frame rate: limits above 60 need the real-time step (XCX_REALTIME=1); 60 fps");
@@ -188,9 +200,11 @@ uint64_t frame_step_cap_ns(void) {
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
-    if (xcx_words) {
-        if (hz > 30 && xcx_cutscene()) hz = 30;
-        xcx_rate_store(hz);   // the cutscene cap, and for "display" the window's measured rate, which settles late
+    if (xcx_words) {   // every frame: the cutscene state, and for "display" the window's measured rate, which settles late
+        int cut = hz > 30 && xcx_cutscene();
+        xcx_rate_store(cut ? 60 : hz, cut ? 30 : hz);
+        xcx_interval_store(cut ? 2 : 1);
+        if (cut) hz = 30;
     }
     return (uint64_t)(1e9 / hz + 0.5);
 }
