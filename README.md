@@ -1,6 +1,6 @@
 # XCX Recomp
 
-**XCX Recomp** is a static recompilation of *Xenoblade Chronicles X: Definitive Edition* (Nintendo Switch, 2025) into a native Windows x86-64 application ([docs/architecture.md](docs/architecture.md)).
+**XCX Recomp** is a static recompilation of *Xenoblade Chronicles X: Definitive Edition* (Nintendo Switch, 2025) into a native Windows x86-64 application ([docs/architecture.md](docs/architecture.md)). It is a fork of [TotK Recomp](https://github.com/valentderah/totk-pc-recomp) by Valiantsin Dzerakh.
 
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Xenoblade Chronicles X: Definitive Edition*, dumped from your own console: the base game and the 2.0.0 update (the add-on content is optional). Instructions for obtaining those files will not be provided.
@@ -9,8 +9,8 @@
 
 ## Status
 
-Early development. The game boots to the title screen on Windows with sound, text and the menu; gameplay past the
-title screen is not tested yet.
+Early development. New Game, cutscenes and gameplay run on Windows with sound, text and the menu, at 60 fps by
+default (30 to 360 in the settings; above 60 is experimental).
 
 Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
