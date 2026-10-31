@@ -23,12 +23,12 @@ __attribute__((section(".obs$z"), used)) static const RtHostEntry obs_stop[1];
 #else
 // ELF: the linker defines __start_<section> and __stop_<section> around a section named like a C identifier. Weak: a
 // build without observers has no such section, and both bounds are then NULL.
-extern const RtHostEntry __start_totk_ovr[] __attribute__((weak)), __stop_totk_ovr[] __attribute__((weak));
-extern const RtHostEntry __start_totk_obs[] __attribute__((weak)), __stop_totk_obs[] __attribute__((weak));
-#define ovr_start __start_totk_ovr
-#define ovr_stop __stop_totk_ovr
-#define obs_start __start_totk_obs
-#define obs_stop __stop_totk_obs
+extern const RtHostEntry __start_xcx_ovr[] __attribute__((weak)), __stop_xcx_ovr[] __attribute__((weak));
+extern const RtHostEntry __start_xcx_obs[] __attribute__((weak)), __stop_xcx_obs[] __attribute__((weak));
+#define ovr_start __start_xcx_ovr
+#define ovr_stop __stop_xcx_ovr
+#define obs_start __start_xcx_obs
+#define obs_stop __stop_xcx_obs
 #endif
 
 typedef struct {

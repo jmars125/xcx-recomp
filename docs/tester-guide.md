@@ -66,9 +66,9 @@ The line `vk: using gpu N: <name>` says which one ran.
 ## Steam Deck
 
 Build or install on Linux ([installer.md](installer.md), "Linux release"), in Desktop Mode. The game then runs in either
-mode; for Game Mode, add `totk` from the install folder to Steam as a non-Steam game.
+mode; for Game Mode, add `xcx` from the install folder to Steam as a non-Steam game.
 
-The game recognises the Deck (LCD and OLED) and uses its device profile for every setting `totk.ini` does not set:
+The game recognises the Deck (LCD and OLED) and uses its device profile for every setting `xcx.ini` does not set:
 fullscreen, game resolution 1280x720 letterboxed in the 1280x800 screen, the game's own 3D scale, vsync and a 40 fps
 limit. These are starting points, not measurements. What helps most:
 
@@ -80,7 +80,7 @@ limit. These are starting points, not measurements. What helps most:
 4. Anything that looks stretched or cut off: the game draws 16:9 only, so the profile keeps black bars above and
    below; `picture_fit = stretch` fills the screen instead.
 
-`device_profile = desktop` in `totk.ini` turns the profile off; `deck` turns it on elsewhere, to try the Deck's
+`device_profile = desktop` in `xcx.ini` turns the profile off; `deck` turns it on elsewhere, to try the Deck's
 settings on a PC.
 
 ## Switches for the developer's questions

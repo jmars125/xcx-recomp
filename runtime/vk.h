@@ -91,7 +91,7 @@ void vk_queue_unlock(void);
 // Copy of the last presented swapchain image, for probes: on, the next presents read the image back into a host buffer
 // and wait for the GPU. *px stays valid until the next present; the format is the swapchain's. Returns 0 with no frame.
 // The rectangle {x, y, w, h} of a dw x dh swapchain image a cw x ch picture is presented in (gfx_present.c,
-// TOTK_PICTURE_FIT); the rest is black.
+// XCX_PICTURE_FIT); the rest is black.
 void gfx_fit_rect(int cw, int ch, int dw, int dh, int out[4]);
 void vk_present_capture(int on);
 int vk_present_captured(const uint8_t **px, int *w, int *h, VkFormat *fmt);

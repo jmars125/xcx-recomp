@@ -413,7 +413,7 @@ static void row_window_size(void) {
 // The game resolution (resolution.c): 16:9 sizes from the game's own 1920x1080 up, and the current value when it is
 // another size.
 static void row_output_res(void) {
-    // 1280x720: the Steam Deck's (letterboxed in its 1280x800 screen, TOTK_PICTURE_FIT)
+    // 1280x720: the Steam Deck's (letterboxed in its 1280x800 screen, XCX_PICTURE_FIT)
     static const char *const vals[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3200x1800", "3840x2160"};
     enum { N = sizeof vals / sizeof *vals };
     char shown[N][32];

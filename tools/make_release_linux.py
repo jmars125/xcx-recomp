@@ -1,8 +1,8 @@
 """Assemble the Linux release folder of docs/installer.md ("Linux release") and pack it as an AppImage.
 
-    .venv/bin/python tools/make_release_linux.py --out build/release/TotK-Setup-linux \\
-        [--appimage build/release/TotK-Setup-x86_64.AppImage]
-    .venv/bin/python tools/make_release_linux.py --out build/release/TotK-Setup-linux --prove
+    .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux \\
+        [--appimage build/release/XCX-Setup-x86_64.AppImage]
+    .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
 
 The same model as the Windows release (tools/make_release.py, whose download cache, unpacking and checks this reuses): the
 folder carries the setup and a toolchain, never game code; the player's machine builds the game. Everything that runs on
@@ -14,15 +14,15 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
                file puts the folder, tools/ and recomp/ on sys.path
     llvm/      LLVM 23 (clang, lld, llvm-ar, the clang resource headers) and llvm/sysroot: the files of the sniper SDK
                sysroot the game's compile and link read, nothing else (recorded while building the runtime library)
-    runtime/   libtotkrt.a (build_game.py --make-runtime-lib --sysroot), the runtime headers, romfs.c, patches.c and
-               ov_zstd.c (compiled per install), totk.png (the window icon), deps/ (Vulkan headers 1.4.363, VMA, zstd
+    runtime/   libxcxrt.a (build_game.py --make-runtime-lib --sysroot), the runtime headers, romfs.c, patches.c and
+               ov_zstd.c (compiled per install), xcx.png (the window icon), deps/ (Vulkan headers 1.4.363, VMA, zstd
                built static; SDL3, Opus and libvpx come from the sysroot)
-    bin/       totk_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)
-    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, totk.ini.example, VERSION
-    AppRun, totk-setup.desktop, totk-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
+    bin/       xcx_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)
+    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, VERSION
+    AppRun, xcx-setup.desktop, xcx-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
 --appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles
-generated/v121 and links build/release-linux-check/totk with the folder's tools only, then runs the probes beside it.
+generated/v121 and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it.
 
 The folder contains nothing derived from the game: check_content runs over it before the script finishes, then the
 folder's own python runs a check-only installer pass and the window's --selftest.
@@ -193,8 +193,8 @@ def build_bin(out, llvm, sysroot):
     shutil.copy2(hac / 'hactool', b / 'hactool')
     xl = WORK / 'xlate-linux'
     run([sys.executable, ROOT / 'tools' / 'build_xlate.py', '--out', xl, '--llvm', llvm, '--sysroot', sysroot])
-    shutil.copy2(xl / 'totk_xlate', b / 'totk_xlate')
-    shutil.copy2(xl / 'totk_xlate.id', b / 'totk_xlate.id')
+    shutil.copy2(xl / 'xcx_xlate', b / 'xcx_xlate')
+    shutil.copy2(xl / 'xcx_xlate.id', b / 'xcx_xlate.id')
     sdl = (sysroot / 'usr' / 'lib' / 'x86_64-linux-gnu' / 'libSDL3.so.0').resolve()
     shutil.copy2(sdl, b / 'libSDL3.so.0')
 
@@ -207,7 +207,7 @@ def runtime_lib(out, llvm, sysroot):
     run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--toolchain', llvm, '--sysroot', sysroot,
          '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja', '--out', build])
     rt = out / 'runtime'
-    shutil.copy2(build / 'libtotkrt.a', rt / 'libtotkrt.a')
+    shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
     for p in sorted((ROOT / 'runtime').rglob('*')):
         if p.suffix in mr.RUNTIME_SUFFIXES and p.is_file():
             (rt / p.relative_to(ROOT / 'runtime')).parent.mkdir(parents=True, exist_ok=True)
@@ -215,9 +215,9 @@ def runtime_lib(out, llvm, sysroot):
     for name in build_game.INSTALL_SIDE:
         shutil.copy2(ROOT / 'runtime' / name, rt / name)
     from PIL import Image   # Tk loads no .ico off Windows: the window and the AppImage take a PNG
-    with Image.open(ROOT / 'runtime' / 'totk.ico') as ico:
+    with Image.open(ROOT / 'runtime' / 'xcx.ico') as ico:
         ico.size = max(ico.ico.sizes())
-        ico.convert('RGBA').save(rt / 'totk.png')
+        ico.convert('RGBA').save(rt / 'xcx.png')
     return build
 
 
@@ -242,7 +242,7 @@ def used_sysroot_files(out, llvm, sysroot, rtlib_build):
             used.update(re.findall(r'\S+', (probe / f'{i}.d').read_text().replace('\\\n', ' ')))
     trace = subprocess.run([str(c) for c in [
         llvm / 'bin' / 'clang', '--target=x86_64-linux-gnu', f'--sysroot={sysroot}', *build_game.LINK_FLAGS[:3],
-        '-Wl,--trace', '-Wl,--unresolved-symbols=ignore-all', '-Wl,--whole-archive', out / 'runtime' / 'libtotkrt.a',
+        '-Wl,--trace', '-Wl,--unresolved-symbols=ignore-all', '-Wl,--whole-archive', out / 'runtime' / 'libxcxrt.a',
         '-Wl,--no-whole-archive', '-L', out / 'runtime' / 'deps' / 'lib',
         *RELEASE_LIBS, '-o', probe / 'trace.out']],
         capture_output=True, text=True)
@@ -364,7 +364,7 @@ def build_python(out, llvm, sysroot):
     site = next(py.glob('lib/python3.*/site-packages'))
     # The release folder, tools/ and recomp/ on sys.path, as the Windows python's ._pth does: `python -m installer` and
     # the tools importing their siblings work from any directory
-    (site / 'totk-release.pth').write_text('../../../..\n../../../../tools\n../../../../recomp\n', encoding='utf-8')
+    (site / 'xcx-release.pth').write_text('../../../..\n../../../../tools\n../../../../recomp\n', encoding='utf-8')
     check = subprocess.run([str(exe), '-c', 'import tkinter, numpy, lz4.block, cryptography, cffi, pycparser; '
                             'print("python ok: Tcl", tkinter.Tcl().eval("info patchlevel"), "numpy", numpy.__version__)'],
                            cwd='/', capture_output=True, text=True)
@@ -418,10 +418,10 @@ exec "$HERE/python/bin/python3" -m installer.gui "$@"
 
 DESKTOP = '''[Desktop Entry]
 Type=Application
-Name=TotK Recomp Setup
+Name=XCX Recomp Setup
 Comment=Builds Tears of the Kingdom for this PC from your own game files
 Exec=AppRun
-Icon=totk-setup
+Icon=xcx-setup
 Categories=Game;
 Terminal=false
 '''
@@ -430,9 +430,9 @@ Terminal=false
 def build_entry(out):
     (out / 'AppRun').write_text(APPRUN, encoding='utf-8')
     (out / 'AppRun').chmod(0o755)
-    (out / 'totk-setup.desktop').write_text(DESKTOP, encoding='utf-8')
-    shutil.copy2(out / 'runtime' / 'totk.png', out / 'totk-setup.png')
-    (out / '.DirIcon').symlink_to('totk-setup.png')
+    (out / 'xcx-setup.desktop').write_text(DESKTOP, encoding='utf-8')
+    shutil.copy2(out / 'runtime' / 'xcx.png', out / 'xcx-setup.png')
+    (out / '.DirIcon').symlink_to('xcx-setup.png')
 
 
 def write_appimage(out, path):
@@ -509,7 +509,7 @@ def check_bundle(out):
 
 
 def prove(out):
-    """Compile generated/v121 and link totk with the folder's tools only, then run the probes beside it."""
+    """Compile generated/v121 and link xcx with the folder's tools only, then run the probes beside it."""
     out = out.resolve()
     gen = MAIN_ROOT / 'generated' / 'v121'
     ext = MAIN_ROOT / 'build' / 'extracted' / 'v121'
@@ -518,19 +518,19 @@ def prove(out):
     t0 = time.time()
     run([out / 'python' / 'bin' / 'python3', out / 'tools' / 'build_game.py', '--toolchain', out / 'llvm',
          '--sysroot', out / 'llvm' / 'sysroot', '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime',
-         '--runtime-lib', out / 'runtime' / 'libtotkrt.a', '--ninja', out / 'bin' / 'ninja', '--gen', gen, '--out', chk,
+         '--runtime-lib', out / 'runtime' / 'libxcxrt.a', '--ninja', out / 'bin' / 'ninja', '--gen', gen, '--out', chk,
          '--exefs', ext / 'exefs', '--romfs', ext / 'romfs', '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
     shutil.copy2(out / 'bin' / 'libSDL3.so.0', chk / 'libSDL3.so.0')
-    needed = subprocess.run(['readelf', '-d', str(chk / 'totk')], capture_output=True, text=True).stdout
+    needed = subprocess.run(['readelf', '-d', str(chk / 'xcx')], capture_output=True, text=True).stdout
     print('prove: needs', ', '.join(re.findall(r'\[(lib[^\]]+)\]', needed)))
-    glibc = sorted(set(re.findall(r'GLIBC_(\d+\.\d+)', subprocess.run(['readelf', '-V', str(chk / 'totk')],
+    glibc = sorted(set(re.findall(r'GLIBC_(\d+\.\d+)', subprocess.run(['readelf', '-V', str(chk / 'xcx')],
                                                                          capture_output=True, text=True).stdout)),
                    key=lambda v: tuple(map(int, v.split('.'))))
     print(f'prove: newest glibc symbol version {glibc[-1] if glibc else "none"}')
     failed = []
     for probe in ['--selftest', *mr.PROBES]:
-        r = subprocess.run([str(chk / 'totk'), probe], cwd=chk, capture_output=True, text=True, timeout=900)
+        r = subprocess.run([str(chk / 'xcx'), probe], cwd=chk, capture_output=True, text=True, timeout=900)
         tail = (r.stdout.strip().splitlines() or [''])[-1]
         print(f'{probe}: exit {r.returncode}: {tail}')
         if r.returncode:

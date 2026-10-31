@@ -107,23 +107,23 @@ xcx.ini.example, VERSION  the default ini; the release string (the repository's 
 
 ## Linux release
 
-`tools/make_release_linux.py` builds the same setup for Linux and packs it as `TotK-Setup-x86_64.AppImage` (the static
+`tools/make_release_linux.py` builds the same setup for Linux and packs it as `XCX-Setup-x86_64.AppImage` (the static
 type-2 runtime: no libfuse2 needed on the host). The player makes it executable and starts it; on a Steam Deck, from
 Desktop Mode. Building the release also needs `make` and `pkg-config`. The bundled Tcl/Tk 9.0.4 is rebuilt with
-Xft against the sniper sysroot so Russian text uses system TrueType fonts. The setup builds the game into the folder they pick, as on Windows, and the game is `totk` there with
+Xft against the sniper sysroot so Russian text uses system TrueType fonts. The setup builds the game into the folder they pick, as on Windows, and the game is `xcx` there with
 `libSDL3.so.0` beside it. The folder inside the AppImage:
 
 ```
 AppRun                starts python/bin/python3 -m installer.gui (no bytecode written into the read-only mount)
-totk-setup.desktop, totk-setup.png
-installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, totk.ini.example, VERSION   as on Windows
+xcx-setup.desktop, xcx-setup.png
+installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, VERSION   as on Windows
 python/               python-build-standalone 3.14 (with tkinter) + the installer's packages; a .pth puts the folder,
                       tools/ and recomp/ on sys.path
 llvm/                 LLVM 23 (clang, lld, llvm-ar) and llvm/sysroot: the files of the Steam Runtime 3 "sniper" SDK the
                       game's compile and link read (about 130 files)
-runtime/              libtotkrt.a, headers, the install-side sources, totk.png; deps/ with the Vulkan headers, VMA and a
+runtime/              libxcxrt.a, headers, the install-side sources, xcx.png; deps/ with the Vulkan headers, VMA and a
                       static zstd
-bin/                  totk_xlate, hactool, ninja, libSDL3.so.0
+bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0
 ```
 
 - What we compile is built against the sniper sysroot (glibc 2.31): the game, hostcheck, hactool and the translator
@@ -134,7 +134,7 @@ bin/                  totk_xlate, hactool, ninja, libSDL3.so.0
   message on an older system.
 - The setup's temp folder is `.setup-temp` inside the install folder (`--temp` changes it): the AppImage is mounted
   read-only, and a Steam Deck's `/home` is often too full for the generated C while the game goes to the SD card.
-- The game keeps Mesa's shader cache in `mesa-cache` beside `totk` unless `MESA_SHADER_CACHE_DIR` is set, for the
+- The game keeps Mesa's shader cache in `mesa-cache` beside `xcx` unless `MESA_SHADER_CACHE_DIR` is set, for the
   same reason: RADV fills its default folder in `~/.cache` up to 1 GB.
 - The window follows `LANG` for English or Russian, cancels through SIGTERM to the CLI's process group (the CLI handles
   it as Ctrl+Break on Windows) and opens the finished folder with `xdg-open`.

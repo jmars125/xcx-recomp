@@ -511,11 +511,11 @@ static void save_capture(const char *path) {
 }
 
 // The rectangle {x, y, w, h} of a dw x dh swapchain image the cw x ch picture goes into: the whole image with
-// TOTK_PICTURE_FIT=stretch, else the largest one of the picture's own aspect ratio, centred (a 16:9 picture on the Steam
+// XCX_PICTURE_FIT=stretch, else the largest one of the picture's own aspect ratio, centred (a 16:9 picture on the Steam
 // Deck's 1280x800 screen gets bars of 40 rows above and below; a wider window, bars at the sides).
 void gfx_fit_rect(int cw, int ch, int dw, int dh, int out[4]) {
     out[0] = out[1] = 0, out[2] = dw, out[3] = dh;
-    if (cw <= 0 || ch <= 0 || !strcmp(cfg_value("TOTK_PICTURE_FIT"), "stretch")) return;
+    if (cw <= 0 || ch <= 0 || !strcmp(cfg_value("XCX_PICTURE_FIT"), "stretch")) return;
     if ((int64_t)dw * ch > (int64_t)dh * cw) out[2] = (int)(((int64_t)dh * cw + ch / 2) / ch);   // window wider: pillarbox
     else out[3] = (int)(((int64_t)dw * ch + cw / 2) / cw);                                        // taller: letterbox
     out[2] += out[2] & 1, out[3] += out[3] & 1;   // even sizes keep the bars equal

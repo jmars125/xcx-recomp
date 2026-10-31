@@ -199,12 +199,12 @@ int cfg_load(const char *path) {
     return 1;
 }
 
-// ---- device profiles: defaults for a known machine, below the environment and totk.ini and above the table, so any
-// key the player sets wins and resetting a key in the menu returns to the profile's value. TOTK_DEVICE_PROFILE = auto
+// ---- device profiles: defaults for a known machine, below the environment and xcx.ini and above the table, so any
+// key the player sets wins and resetting a key in the menu returns to the profile's value. XCX_DEVICE_PROFILE = auto
 // (default: the Steam Deck when the firmware says so), desktop (none) or deck.
 //
 // The Steam Deck (LCD Jupiter, OLED Galileo; 1280x800, 16:10, 4 Zen 2 cores, RDNA 2 with 8 CUs sharing 16 GB): the game
-// at 1280x720 with its own 5/6 scene, letterboxed in the 16:10 screen (TOTK_PICTURE_FIT) until the game draws 16:10
+// at 1280x720 with its own 5/6 scene, letterboxed in the 16:10 screen (XCX_PICTURE_FIT) until the game draws 16:10
 // itself; fullscreen and vsync, as gamescope composes Game Mode; 40 fps, which divides 40 Hz (and 120 Hz on the OLED).
 // Starting points to replace with measured ones (docs/tester-guide.md, Steam Deck).
 static const struct { const char *key, *value; } DECK[] = {
@@ -264,7 +264,7 @@ const char *cfg_get(const char *name) {
     return NULL;
 }
 
-// Whether name's value comes from the player (the environment or totk.ini), not a profile or the table.
+// Whether name's value comes from the player (the environment or xcx.ini), not a profile or the table.
 int cfg_is_set(const char *name) { return raw_get(name) != NULL; }
 
 unsigned cfg_version(void) { return __atomic_load_n(&version, __ATOMIC_ACQUIRE); }
@@ -633,6 +633,6 @@ static void load_ini(void) {
 void cfg_init(void) {
     load_ini();
     if (profile_of())
-        rt_log("cfg: device profile Steam Deck: defaults for the keys totk.ini does not set (TOTK_DEVICE_PROFILE=desktop "
+        rt_log("cfg: device profile Steam Deck: defaults for the keys xcx.ini does not set (XCX_DEVICE_PROFILE=desktop "
                "turns it off)");
 }

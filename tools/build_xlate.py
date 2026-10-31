@@ -2,7 +2,7 @@
 
 Copies tools/vendor/ryujinx to build/xlate/ryujinx, applies tools/xlate/patches/*.patch there (tools/vendor stays
 byte-identical; 0001-0004 are MNG's, 0005-0009 are ours), then runs `dotnet publish`. Needs the .NET 10 SDK, the MSVC build
-tools and vswhere.exe (docs/building.md). Run with .venv. On Linux it builds build/xlate/totk_xlate for linux-x64, which
+tools and vswhere.exe (docs/building.md). Run with .venv. On Linux it builds build/xlate/xcx_xlate for linux-x64, which
 NativeAOT links with the system's clang (no MSVC); NativeAOT builds for the OS it runs on only.
 
 Next to the exe it writes xcx_xlate.id: the translator identity, a sha256 over everything the build reads (this script,
@@ -30,7 +30,7 @@ MNG_VENDOR = ROOT / "refs" / "MacNativeGames" / "vendor" / "ryujinx"
 XLATE = ROOT / "tools" / "xlate"
 BUILD = ROOT / "build" / "xlate"
 WIN = os.name == "nt"
-EXE = "totk_xlate.exe" if WIN else "totk_xlate"
+EXE = "xcx_xlate.exe" if WIN else "xcx_xlate"
 VSWHERE_DIR = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer"
 
 

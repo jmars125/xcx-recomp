@@ -138,8 +138,8 @@ Requirements:
   Vulkan Memory Allocator is a single header (AUR `vulkan-memory-allocator`). Without it, `build_game.py` fetches the
   version the Windows release pins (3.4.0) into `toolchain/vma/` on first use and checks its hash.
 
-The steps are the Windows ones with POSIX paths: `.venv/bin/python` in place of `.venv\Scripts\python`, and `totk` in
-place of `totk.exe`. `build_game.py` takes clang, lld and Ninja from PATH (or the ones in `<dir>/bin` with
+The steps are the Windows ones with POSIX paths: `.venv/bin/python` in place of `.venv\Scripts\python`, and `xcx` in
+place of `xcx.exe`. `build_game.py` takes clang, lld and Ninja from PATH (or the ones in `<dir>/bin` with
 `--toolchain <dir>`) and links against the system libraries, with `libstdc++` static and an `$ORIGIN` rpath;
 `build_hactool.py` builds `hactool` with make. `tools/prepare_shaders.py` reads the shader list from
 `refs/MacNativeGames` at `origin/HEAD`, which must be the pinned commit with its history (the list format changed later).
@@ -149,11 +149,11 @@ re-protecting imported memory invalidates the driver's userptr buffer on every s
 amdgpu), and importing pins the pages, which drops their write protection. Each CPU-visible pool therefore gets a
 host-visible copy (shadow storage, `runtime/vk_memory.c`): the pages the CPU wrote go in before each submit, and the GPU's
 writes come back at its fence. In play that costs about 0.2 ms a frame and doubles the memory of those pools (about
-1.1 GB). `TOTK_SHADOW=1` turns it on under Windows too. The Steam Deck's RADV has `VK_EXT_external_memory_host` as
+1.1 GB). `XCX_SHADOW=1` turns it on under Windows too. The Steam Deck's RADV has `VK_EXT_external_memory_host` as
 well: the shadow copies are chosen for the measured cost above, not for a missing extension.
 
 The Deck's GPU (Van Gogh) has no native ASTC, so its textures go through the compute decoder (`runtime/vk_astc.c`,
-`TOTK_ASTC`) as on desktop AMD GPUs without it; frame times measured there include it.
+`XCX_ASTC`) as on desktop AMD GPUs without it; frame times measured there include it.
 
 ## Checks
 

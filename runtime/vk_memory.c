@@ -827,7 +827,7 @@ static int query_stamp(uint64_t lo, uint64_t hi, uint32_t g) {
 // - GPU -> guest: the replay notes each GPU write into CPU-visible memory at record time (vk_mem_gpu_pending) and
 //   reports it at the fence (vk_gpu_written), which copies those bytes back into guest memory. Until then the CPU
 //   copies skip them: a page the CPU and the GPU both write keeps the GPU's bytes.
-// TOTK_SHADOW=1/0 forces the mode on or off; the default is on for Linux.
+// XCX_SHADOW=1/0 forces the mode on or off; the default is on for Linux.
 typedef struct { uint64_t lo, hi; } SRange;
 static PlatMutex shadow_lock = PLAT_MUTEX_INIT;   // after pool_lock; before gen_lock
 static PoolRec **stouch;                          // shadow_lock: pools resolved since the last sync
@@ -1185,14 +1185,14 @@ static void mirror_mode(int discrete) {
     const char *fi = cfg_get("XCX_FREEZE_IDLE");
     freeze_idle = fi && *fi ? atoi(fi) : 60;
     if (freeze_idle < 0) freeze_idle = 0;
-    const char *sh = cfg_get("TOTK_SHADOW");
+    const char *sh = cfg_get("XCX_SHADOW");
 #ifdef _WIN32
     shadow_on = sh && *sh && strcmp(sh, "0");
 #else
     shadow_on = !sh || !*sh || strcmp(sh, "0");
 #endif
     if (shadow_on) rt_log("mem: shadow storage: CPU-visible pools are host-visible copies of guest memory, not imports%s",
-                          sh && *sh ? " (TOTK_SHADOW)" : "");
+                          sh && *sh ? " (XCX_SHADOW)" : "");
     rt_log("mem: mode %s (%s): %s", mode == 2 ? "verify" : mode ? "mirror" : "import", why,
            mode ? "pools used as buffers get a device-local mirror" : "every CPU-visible pool is imported host memory");
 }

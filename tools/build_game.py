@@ -77,7 +77,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # them. MAIN_ROOT is where they land, so resolved paths still print and compare relative to a root.
 MAIN_ROOT = (ROOT / 'build').resolve().parent
 UCRT = Path(r'C:\msys64\ucrt64\bin')
-EXE = 'totk.exe' if WIN else 'totk'
+EXE = 'xcx.exe' if WIN else 'xcx'
 
 
 def on_path(name):
@@ -147,7 +147,7 @@ TOOLCHAIN_BIN = None   # llvm-mingw bin directory, set by main() for --toolchain
 DEPS = None            # the deps directory of an llvm-mingw build
 # tools/data/expected-<display version>.json for each build version name.
 DISPLAY_VERSIONS = {'v0': '1.0.0', 'v112': '1.1.2', 'v121': '1.2.1', 'v143': '1.4.3'}
-# The game version the menu shows. XCX 2.0.0 (upd) keeps rt_game_version 0: the runtime's 121/143 branches are TotK's.
+# The game version the menu shows. XCX 2.0.0 (upd) keeps rt_game_version 0: the runtime's 121/143 branches are XCX's.
 GAME_NAMES = {**DISPLAY_VERSIONS, 'upd': '2.0.0'}
 
 GiB = 1 << 30
@@ -245,12 +245,12 @@ RUNTIME = ROOT / 'runtime'   # --runtime: a copy of runtime/ lets a task build w
 
 
 def other_os(name):
-    """A runtime file for another OS: Win32 ones (*_win.*, platform/win32.c, totk.rc) off Windows, the SDL window's
+    """A runtime file for another OS: Win32 ones (*_win.*, platform/win32.c, xcx.rc) off Windows, the SDL window's
     (*_sdl.*) and platform/linux.c on Windows."""
     stem = name.rsplit('.', 1)[0]
     if WIN:
         return stem.endswith('_sdl') or name == 'linux.c'
-    return stem.endswith('_win') or name in ('win32.c', 'totk.rc')
+    return stem.endswith('_win') or name in ('win32.c', 'xcx.rc')
 
 
 def runtime_sources(skip=()):

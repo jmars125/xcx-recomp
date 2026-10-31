@@ -137,7 +137,7 @@ def dev_layout(root):
             llvm=tools / 'llvm', deps=tools / 'runtime' / 'deps', runtime=root / 'runtime',
             runtime_lib=root / 'build' / 'install-rtlib' / 'libxcxrt.a',
             ninja=tools / 'bin' / ('ninja' + EXE), hactool=tools / 'bin' / ('hactool' + EXE),
-            xlate=tools / 'bin' / ('totk_xlate' + EXE), dlls=release_dlls(tools),
+            xlate=tools / 'bin' / ('xcx_xlate' + EXE), dlls=release_dlls(tools),
             ini_example=root / 'xcx.ini.example', temp=root / 'build' / 'install-temp')
     return Layout(
         root=root, dev=True, release=f'{semver}-dev+{commit or "unknown"}',
@@ -163,10 +163,10 @@ def dev_layout_posix(root):
         root=root, dev=True, release=f'{semver}-dev+{dev_commit(root) or "unknown"}',
         python=Path(sys.executable), tools=root / 'tools', recomp=root / 'recomp',
         llvm=Path(clang).parent.parent if clang else root / 'toolchain' / 'clang-missing', deps=None,
-        runtime=root / 'runtime', runtime_lib=root / 'build' / 'install-rtlib' / 'libtotkrt.a',
+        runtime=root / 'runtime', runtime_lib=root / 'build' / 'install-rtlib' / 'libxcxrt.a',
         ninja=Path(ninja) if ninja else root / 'toolchain' / 'ninja-missing',
-        hactool=root / 'toolchain' / 'hactool' / 'hactool', xlate=root / 'build' / 'xlate' / 'totk_xlate',
-        shader_list=None, ini_example=root / 'totk.ini.example', temp=root / 'build' / 'install-temp')
+        hactool=root / 'toolchain' / 'hactool' / 'hactool', xlate=root / 'build' / 'xlate' / 'xcx_xlate',
+        shader_list=None, ini_example=root / 'xcx.ini.example', temp=root / 'build' / 'install-temp')
 
 
 def find(root=None):
