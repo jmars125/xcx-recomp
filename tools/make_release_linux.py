@@ -1,7 +1,7 @@
 """Assemble the Linux release folder of docs/installer.md ("Linux release") and pack it as an AppImage.
 
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux \\
-        [--appimage build/release/XCX-Setup-linux.AppImage]
+        [--appimage build/release/XCX-Setup-<version>-linux.AppImage]
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
 
 The same model as the Windows release (tools/make_release.py, whose download cache, unpacking and checks this reuses): the

@@ -1,6 +1,6 @@
 """Assemble the release folder of docs/installer.md ("Release layout") from pinned downloads.
 
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup-windows.zip]
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup-<version>-windows.zip]
     .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --from ..\\..\\totk-pc-recomp
     .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --prove
 

@@ -33,7 +33,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Requirements: Windows 10 or later, an x86-64 CPU with AVX2, a GPU with Vulkan 1.3 and `VK_EXT_external_memory_host`, about 36 GiB free during setup (20 GiB after).
 
-1. Download `XCX-Setup-windows.zip` from [Releases](../../releases/latest) and unpack it.
+1. Download `XCX-Setup-<version>-windows.zip` from [Releases](../../releases/latest) and unpack it.
 2. Start `XCX-Setup.exe`. If SmartScreen warns about an unsigned app, choose *More info*, then *Run anyway*.
 3. Pick your game files, the language and an install folder, and press *Start*. The setup builds the game once.
 4. Play `xcx.exe` from the install folder.
