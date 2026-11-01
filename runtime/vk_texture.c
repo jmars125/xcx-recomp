@@ -219,14 +219,20 @@ static VkImageAspectFlags aspect_of(const TexVkFormat *f) {
 
 // Binds img into the pool memory behind its GPU address (physical pools, virtual pools through the page table) when
 // the memory type, alignment and contiguous size allow; 0 otherwise.
+// A depth / stencil image that needs more bytes than its NVN storage (guest_size) is not bound: AMD's RDNA2 driver
+// (26.10.1) puts the depth compression metadata after the depth data, and above 1080p that tail lies over the next
+// texture of the game's heap; each depth write then scrambled it (garbage band at the top, pink glow, blocks in the
+// grass, a blue checkered scene in the menu). Colour images keep their place: the RX 9070 also sizes some of them
+// above their storage, and nothing there showed that the GPU writes the excess.
 static int format_compressed(VkFormat f) {   // vkCmdClearColorImage takes no block-compressed format
     return (f >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && f <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK) ||
            (f >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK && f <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK);
 }
 
-static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img) {
+static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img, uint64_t guest_size) {
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(c->device, img, &req);
+    if ((e->f.depth || e->f.stencil) && req.size > guest_size) return 0;
     VkMemSpan sp;
     if (!vk_mem_resolve(e->pub.addr, req.size, &sp) || !sp.alloc || sp.alloc_offset % req.alignment) return 0;
     VmaAllocationInfo info;
@@ -329,7 +335,19 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
                             .samples = (VkSampleCountFlagBits)samples, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     int bw, bh, block_views = 0;
-    if (!ds && samples == 1 && f.vk == f.ideal && nvn_fmt_bpb(d->format, &bw, &bh) && bw == 4 && bh == 4) {
+    // XCX_BLOCK_VIEWS_3D (default 0): a 3D BC image also gets block views. On RDNA2 cards (driver 26.10.1, TotK Recomp
+    // issue #5) the 32x32x32 BC4 volume TotK creates at its logo, made BLOCK_TEXEL_VIEW_COMPATIBLE and
+    // 2D_ARRAY_COMPATIBLE, took a GPU write just past the end of its memory: device lost at the first submit after it
+    // when the image ended its memory block. Draws into a 3D BC image go through a stand-in instead (vk_exec.c
+    // bc_target).
+    static int bv3d = -1;
+    if (bv3d < 0) {
+        bv3d = rt_knob("BLOCK_VIEWS_3D", "0");
+        rt_log("vk: 3D BC textures %s (XCX_BLOCK_VIEWS_3D=%d)", bv3d ? "get block views (renderable)" : "have no block views",
+               bv3d);
+    }
+    if (!ds && samples == 1 && f.vk == f.ideal && nvn_fmt_bpb(d->format, &bw, &bh) && bw == 4 && bh == 4 &&
+        (type != VK_IMAGE_TYPE_3D || bv3d)) {
         VkImageCreateInfo bc = ci;   // BC formats: renderable through views of their blocks (block_views_ok)
         bc.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         bc.flags |= VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
@@ -350,7 +368,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     e->pub.addr = k->addr;
     VkImage img = VK_NULL_HANDLE;
     if (nvn_gpu_only(k->addr)) {   // storage in a physical or virtual pool: alias the pool memory (section 3.2)
-        if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img)) {
+        if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img, L.size)) {
             vkDestroyImage(c->device, img, NULL);
             img = VK_NULL_HANDLE;
             log_limited(&n_unbound, "texture %#llx (%ux%u fmt %#x) cannot alias its pool memory; own memory instead",

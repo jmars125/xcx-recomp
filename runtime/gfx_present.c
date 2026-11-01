@@ -260,6 +260,7 @@ static void flip_locked(void) {
     vk_queue_lock();
     VkResult r = vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
     vk_queue_unlock();
+    vk_device_fault_report(r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
 }
 
@@ -547,6 +548,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         if (!create_swapchain()) goto out;
         r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
     }
+    vk_device_fault_report(r);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;     // lost, not ready: skip the frame
     if (r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
     vkResetFences(c->device, 1, &g_fence[slot]);
@@ -576,6 +578,8 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     vkBeginCommandBuffer(cb, &bi);
+    uint64_t crumb = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    vk_crumb(cb, VK_CRUMB_PRESENT, crumb);
     VkImage dst = g_sc_img[idx];
     sync_barrier(cb, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -646,6 +650,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         record_thumb(cb, dst, slot);
     }
     sync_barrier(cb, dst, last, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, last_stage, last_write, VK_PIPELINE_STAGE_2_NONE, 0);
+    vk_crumb(cb, VK_CRUMB_PRESENT_END, crumb);
     vkEndCommandBuffer(cb);
 
     VkSemaphoreSubmitInfo wait = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = g_acquire[slot],
@@ -664,6 +669,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         g_flip_idx = idx;
         if (!defer) flip_locked();
     } else {
+        vk_device_fault_report(r);
         rt_log("gfx: present submit failed (%d)", (int)r);
     }
     g_frame++;
