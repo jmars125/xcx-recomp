@@ -240,7 +240,7 @@ static int test_clear(const GfxBackend *b, uint8_t *guest, int *n_inside) {
 }
 
 // ---- draw part: the pipeline self-test, then a hand-built stream that clears an RGBA8 target, binds a census
-// vertex + fragment pair and draws one triangle; a census compute shader is dispatched. The census (build/v121/shaders,
+// vertex + fragment pair and draws one triangle; a census compute shader is dispatched. The census (build/upd/shaders,
 // tools/shader_census.py) is read the way vk_pipeline_selftest reads it: a pair is a fragment shader and a vertex
 // shader of the same source file.
 
@@ -315,7 +315,7 @@ static int dr_root(char *root, size_t n) {
     for (char *cut = plat_last_sep(exe); cut; cut = plat_last_sep(exe)) {
         *cut = 0;
         char p[PLAT_PATH_MAX * 2 + 40];
-        snprintf(p, sizeof p, "%s/build/v121/shaders/jobs.json", exe);
+        snprintf(p, sizeof p, "%s/build/upd/shaders/jobs.json", exe);
         if (plat_file_exists(p)) return snprintf(root, n, "%s", exe) < (int)n;
     }
     return 0;
@@ -330,7 +330,7 @@ static prog_t *dr_prog(const char *root, const DrawEnt *e[], int n) {
     p->magic = NVN_PROG_MAGIC, p->serial = ++serial;
     for (int i = 0; i < n; i++) {
         char path[PLAT_PATH_MAX * 2 + 128];
-        snprintf(path, sizeof path, "%s/build/v121/shaders/code/%.64s.code", root, e[i]->key);
+        snprintf(path, sizeof path, "%s/build/upd/shaders/code/%.64s.code", root, e[i]->key);
         long body;
         char *raw = dr_read(path, &body);
         if (!raw) return free(p), NULL;
@@ -396,8 +396,8 @@ static uint8_t *draw_prefix(uint8_t *q, prog_t *prog, const pool_t *pool, tex_t 
 
 static int test_draw(const GfxBackend *b, uint8_t *guest, int *n_drawn, int *n_tries, int *n_cs) {
     char root[PLAT_PATH_MAX * 2], path[PLAT_PATH_MAX * 2 + 64];
-    CHECK(dr_root(root, sizeof root), "build/v121/shaders/jobs.json not found");
-    snprintf(path, sizeof path, "%s/build/v121/shaders/jobs.json", root);
+    CHECK(dr_root(root, sizeof root), "build/upd/shaders/jobs.json not found");
+    snprintf(path, sizeof path, "%s/build/upd/shaders/jobs.json", root);
     long size;
     char *jobs = dr_read(path, &size);
     DrawEnt *e = malloc(sizeof *e * 20000);
@@ -416,7 +416,7 @@ static int test_draw(const GfxBackend *b, uint8_t *guest, int *n_drawn, int *n_t
             if (e[k].stage == GFX_STAGE_FS) pairs[np][0] = v0 + nf++ % nv, pairs[np][1] = k, np++;
         i = j;
     }
-    CHECK(np > 0 && nc > 0, "census has %d pairs and %d compute shaders", np, nc);
+    CHECK(np > 0, "census has no vertex and fragment pair");   // compute only when the game met some
 
     pool_t pool = {.magic = NVN_POOL_MAGIC, .flags = 0x22, .mem = guest + 0x700000, .size = 0xC0000,
                    .game_mem = guest + 0x700000};

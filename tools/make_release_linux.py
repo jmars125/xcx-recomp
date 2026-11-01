@@ -22,7 +22,9 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
     AppRun, xcx-setup.desktop, xcx-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
 --appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles
-generated/upd (2.0.0) and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it.
+generated/upd (2.0.0) and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it;
+it reads game-derived files, so it is a local step, never CI's. Everything else needs no game files
+(.github/workflows/release.yml): libxcxrt.a takes the module layout from tools/runtime-layout.
 
 The folder contains nothing derived from the game: check_content runs over it before the script finishes, then the
 folder's own python runs a check-only installer pass and the window's --selftest.
@@ -206,7 +208,8 @@ def runtime_lib(out, llvm, sysroot):
     shutil.rmtree(build, ignore_errors=True)
     run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', mr.VERSION_TAG,
          '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--toolchain', llvm, '--sysroot', sysroot,
-         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja', '--out', build])
+         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja', '--gen', mr.RUNTIME_LAYOUT,
+         '--out', build])
     rt = out / 'runtime'
     shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
     for p in sorted((ROOT / 'runtime').rglob('*')):
@@ -376,12 +379,6 @@ def build_python(out, llvm, sysroot):
 
 # ---- licences, AppImage entry ------------------------------------------------------------------------------------------
 
-def mng_license():
-    """MacNativeGames' licence: from refs/ when it is checked out, else the copy beside its vendored extractors."""
-    ref = MAIN_ROOT / 'refs' / 'MacNativeGames' / 'LICENSE'
-    return ref if ref.is_file() else ROOT / 'tools' / 'vendor' / 'macnativegames' / 'LICENSE'
-
-
 def collect_licenses(out, sysroot):
     lic = out / 'licenses'
     lic.mkdir(parents=True, exist_ok=True)
@@ -399,7 +396,7 @@ def collect_licenses(out, sysroot):
         (out / 'python' / 'lib' / f'python{sys_version(out)}' / 'LICENSE.txt', 'python-LICENSE.txt'),
         (ROOT / 'runtime' / 'shaders' / 'ffx' / 'LICENSE.txt', 'FidelityFX-FSR-LICENSE.txt'),
         (WORK / 'hactool-linux' / 'LICENSE', 'hactool-LICENSE.txt'),
-        (mng_license(), 'MacNativeGames-LICENSE.txt'),
+        (mr.mng_license(), 'MacNativeGames-LICENSE.txt'),
     ]
     for src, name in pairs:
         shutil.copy2(src, lic / name)
@@ -521,6 +518,7 @@ def prove(out):
     gen = MAIN_ROOT / 'generated' / mr.VERSION_TAG
     ext = MAIN_ROOT / 'build' / 'extracted' / mr.VERSION_TAG
     chk = CHECK / 'game'
+    mr.check_runtime_layout(gen)
     env = dict(os.environ, PATH=os.pathsep.join([str(out / 'llvm' / 'bin'), str(out / 'bin'), '/usr/bin', '/bin']))
     t0 = time.time()
     run([out / 'python' / 'bin' / 'python3', out / 'tools' / 'build_game.py', '--toolchain', out / 'llvm',
@@ -529,7 +527,8 @@ def prove(out):
          '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--gen', gen, '--out', chk,
          '--exefs', ext / 'exefs', '--romfs', ext / 'romfs', '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
-    shutil.copy2(out / 'bin' / 'libSDL3.so.0', chk / 'libSDL3.so.0')
+    for name in ('libSDL3.so.0', 'xcx_xlate', 'xcx_xlate.id'):   # beside the game, as in an install
+        shutil.copy2(out / 'bin' / name, chk / name)
     needed = subprocess.run(['readelf', '-d', str(chk / 'xcx')], capture_output=True, text=True).stdout
     print('prove: needs', ', '.join(re.findall(r'\[(lib[^\]]+)\]', needed)))
     glibc = sorted(set(re.findall(r'GLIBC_(\d+\.\d+)', subprocess.run(['readelf', '-V', str(chk / 'xcx')],
