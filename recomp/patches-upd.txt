@@ -93,3 +93,12 @@ site scenefull main 9dc8b4 39400028 2a1f03e8
 # stored after this are cut once more and can be one lower. x9 is written by the next instruction anyway.
 set sceneread XCX_SCENE_READ 1
 site sceneread main 9dc9a8 52a85909 @page:x9 2d0c0121 52a85909
+
+# uifit (XCX_UI_FIT, resolution.c): on a frame wider than 16:9 the runtime narrows the interface about the screen centre
+# (nvn_api_cmd.c ui_fit), which would pull anything placed from a 3D position, such as enemy labels, towards the centre.
+# Two functions project those positions into the canvas and end with x = (1 - ndc) * width / 2: main+0x560800 (the labels)
+# and main+0xa17454 (only caller main+0x402e64). ndc is multiplied by the patch page's +0x68, 1 / the narrowing, so the
+# narrowing lands them on their targets. x9 and s5 are free at both: neither is read again before it is written.
+set uifit XCX_UI_FIT 1
+site uifit main 56094c 1e323a23 @page:x9 bd406925 1e250a52 1e323a23
+site uifit main a17580 1e213801 @page:x9 bd406925 1e250821 1e213801

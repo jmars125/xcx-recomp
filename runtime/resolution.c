@@ -82,6 +82,17 @@ static void scene_scale(void) {
     rt_patch_switch(full, R.scale == 100);
 }
 
+// World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit.
+static void ui_fit_init(void) {
+    int set = rt_patch_set("uifit");
+    uint8_t *page = rt_patch_page();
+    float k = res_ui_fit(), f = 1 / k;
+    if (set < 0 || !page) return;
+    memcpy(page + 0x68, &f, sizeof f);
+    rt_patch_switch(set, k < 1);
+    rt_log("resolution: interface fit %.3f", k);
+}
+
 // TotK Recomp grows the texture heap through its HeapDef table; XCX has no such table, and the 1.0.1 mods run at
 // 3840x2160 without a bigger heap.
 uint64_t res_heap_extra_kib(void) { return 0; }
@@ -96,6 +107,7 @@ void res_heapdef_served(void) {}
 void res_init(void) {
     decide();
     scene_scale();
+    rt_patch_switch(rt_patch_set("uifit"), 0);   // ui_fit_init turns it on once the resolution is in place
     uint32_t table[4];
     if (!plat_mem_read(TABLE, table, sizeof table) || table[0] != BASE_W || table[1] != BASE_H || table[2] != 1280 ||
         table[3] != 720) {
@@ -128,6 +140,7 @@ void res_init(void) {
     plat_mem_protect(page_at, 0x1000, PLAT_PROT_READ);
     R.on = 1;
     rt_log("resolution: %ux%u (handheld %ux%u)", want[0], want[1], want[2], want[3]);
+    ui_fit_init();
 }
 
 // One side of the scene at this scale, as main+0x9dc9f4 sizes it: up to a multiple of 8. The patch page holds 0 until
@@ -150,4 +163,16 @@ void res_sizes(unsigned out[2], unsigned scene[2]) {
     float scale[2];
     memcpy(scale, used, sizeof scale);
     scene[0] = scene_side(out[0], scale[0]), scene[1] = scene_side(out[1], scale[1]);
+}
+
+// The interface's horizontal scale on a frame wider than the game's 16:9 canvas (nvn_api_cmd.c ui_fit), 1 otherwise.
+// XCX_UI_FIT=0 keeps the stretched interface.
+float res_ui_fit(void) {
+    static float k = -1;
+    if (k < 0) {
+        const char *s = cfg_get("XCX_UI_FIT");
+        float wide = 16.0f / 9 * R.oh / R.ow;
+        k = (!R.on || (s && !strcmp(s, "0")) || wide >= 1) ? 1 : wide;
+    }
+    return k;
 }
