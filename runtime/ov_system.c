@@ -720,6 +720,44 @@ static void ov_user_difference(Cpu *c) {
     ret_x(c, (uint64_t)((b->user.offset - a->user.offset) * 1000000000ll));
 }
 
+// PeriodicBenefitClaimResult ClaimPeriodicBenefitWithUserSystemClock(PeriodicBenefitClaimContext *ctx, const
+// ClockSnapshot &now, const TimeSpan &max_penalty, const TimeSpan &acceptable_diff, const CheckCalendarTimeCallback *cb):
+// the SDK's wrapper aborts unless nn::time::g_pStaticService is set, which only the SDK's Initialize does (ours
+// replaces it). Loading a save with a periodic benefit context (saves imported from a Switch or an emulator) hit that
+// abort. The claim logic itself, nn::time::detail::ClaimPeriodicBenefitWithUserSystemClock, works on the snapshots and
+// the context and runs as the game's code; its two service queries are answered below.
+static void ov_claim_benefit(Cpu *c) {
+    static uint64_t detail;
+    if (!detail &&
+        !(detail = ldr_symbol("_ZN2nn4time6detail39ClaimPeriodicBenefitWithUserSystemClockEPNS0_27PeriodicBenefitClaimContext"
+                              "ERKNS0_13ClockSnapshotERKNS_8TimeSpanES9_PKNS0_25CheckCalendarTimeCallbackE")))
+        rt_fatal("nn::time::ClaimPeriodicBenefitWithUserSystemClock: no nn::time::detail definition in the SDK");
+    ret_x(c, rt_call(c, detail, 5, arg_x(c, 0), arg_x(c, 1), arg_x(c, 2), arg_x(c, 3), arg_x(c, 4)) & 0xffffffffu);
+}
+
+// Result detail::GetStandardUserSystemClockAutomaticCorrectionUpdatedTime(SteadyClockTimePoint *out): automatic
+// correction (always on here) was last set when the steady clock started.
+static void ov_correction_updated(Cpu *c) {
+    SteadyClockTimePoint *out = arg_p(c, 0);
+    if (!out) { ret_x(c, TIME_R_INVALID); return; }
+    *out = steady_now();
+    out->value = 0;
+    ret_x(c, 0);
+}
+
+// Result detail::GetDeviceLocationNameAndUpdatedTime(LocationName *name, SteadyClockTimePoint *updated): the host zone,
+// set when the steady clock started.
+static void ov_location_updated(Cpu *c) {
+    char *name = arg_p(c, 0);
+    SteadyClockTimePoint *out = arg_p(c, 1);
+    if (name) location_name(name);
+    if (out) {
+        *out = steady_now();
+        out->value = 0;
+    }
+    ret_x(c, 0);
+}
+
 // ==== nn::pl shared fonts (shared_font.c). XCX asks for them only from its font loader, only with Simplified Chinese,
 // Korean or Traditional Chinese text, and only for type 0; tools/extract_fonts.py writes
 // them from the user's firmware. Each type is read on first use into guest-visible memory as the BFTTF file the pl
@@ -972,6 +1010,13 @@ HOST_OVERRIDE("_ZN2nn4time13ClockSnapshot29CreateWithStandardSystemClockEPS1_", 
 HOST_OVERRIDE("_ZN2nn4time20CalculateSpanBetweenEPNS_8TimeSpanERKNS0_13ClockSnapshotES5_", ov_span_between);
 HOST_OVERRIDE("_ZN2nn4time48CalculateStandardUserSystemClockDifferenceByUserERKNS0_13ClockSnapshotES3_",
               ov_user_difference);
+HOST_OVERRIDE("_ZN2nn4time39ClaimPeriodicBenefitWithUserSystemClockEPNS0_27PeriodicBenefitClaimContextERKNS0_13ClockSnapshotERKN"
+              "S_8TimeSpanES8_PKNS0_25CheckCalendarTimeCallbackE",
+              ov_claim_benefit);
+HOST_OVERRIDE("_ZN2nn4time6detail56GetStandardUserSystemClockAutomaticCorrectionUpdatedTimeEPNS0_20SteadyClockTimePointE",
+              ov_correction_updated);
+HOST_OVERRIDE("_ZN2nn4time6detail35GetDeviceLocationNameAndUpdatedTimeEPNS0_12LocationNameEPNS0_20SteadyClockTimePointE",
+              ov_location_updated);
 
 HOST_OVERRIDE("_ZN2nn2pl22GetSharedFontLoadStateENS0_14SharedFontTypeE", ov_font_state);
 HOST_OVERRIDE("_ZN2nn2pl20GetSharedFontAddressENS0_14SharedFontTypeE", ov_font_address);

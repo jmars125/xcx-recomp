@@ -102,6 +102,13 @@ static Ov ovs[] = {
     {"time.CalculateSpanBetween", "_ZN2nn4time20CalculateSpanBetweenEPNS_8TimeSpanERKNS0_13ClockSnapshotES5_"},
     {"time.UserDifference",
      "_ZN2nn4time48CalculateStandardUserSystemClockDifferenceByUserERKNS0_13ClockSnapshotES3_"},
+    {"time.ClaimPeriodicBenefit",
+     "_ZN2nn4time39ClaimPeriodicBenefitWithUserSystemClockEPNS0_27PeriodicBenefitClaimContextERKNS0_13ClockSnapshotERKN"
+     "S_8TimeSpanES8_PKNS0_25CheckCalendarTimeCallbackE"},
+    {"time.CorrectionUpdatedTime",
+     "_ZN2nn4time6detail56GetStandardUserSystemClockAutomaticCorrectionUpdatedTimeEPNS0_20SteadyClockTimePointE"},
+    {"time.LocationUpdatedTime",
+     "_ZN2nn4time6detail35GetDeviceLocationNameAndUpdatedTimeEPNS0_12LocationNameEPNS0_20SteadyClockTimePointE"},
     // pl
     {"pl.GetSharedFontLoadState", "_ZN2nn2pl22GetSharedFontLoadStateENS0_14SharedFontTypeE"},
     {"pl.GetSharedFontAddress", "_ZN2nn2pl20GetSharedFontAddressENS0_14SharedFontTypeE", 1},
@@ -222,12 +229,20 @@ static void set_s(int i, float f) {
     gc->v[i] = b;
 }
 
+// A CheckCalendarTimeCallback for ClaimPeriodicBenefitWithUserSystemClock: vtable slot 0 (this, last, now) "is a new
+// period", slot 1 (this, now) "is a valid time"; both say yes and count their calls.
+static uint64_t benefit_vtable[2];
+static int benefit_checks;
+static void benefit_yes(Cpu *c) { benefit_checks++, ret_x(c, 1); }
+
 static void bind_addresses(void) {
     for (int i = 0; i < NOV; i++) {
         GuestFn fn = hostfn_override(ovs[i].name);
         if (!fn) rt_fatal("probe-services: no HOST_OVERRIDE for %s", ovs[i].name);
         ovs[i].addr = hostfn_register(ovs[i].name, fn);
     }
+    benefit_vtable[0] = hostfn_register("probe.benefit.new_period", benefit_yes);
+    benefit_vtable[1] = hostfn_register("probe.benefit.valid", benefit_yes);
 }
 
 static void *guest_alloc(uint64_t n) { return mem_kernel_alloc(n, 16); }
@@ -456,6 +471,23 @@ static void probe_time(void) {
     CHECK(CALL("time.UserDifference", U(a), U(b)) == 0, "user clock difference");
     b[0x98] ^= 1;   // the steady clock's source id (ClockSnapshot +0x90: value, +0x98: source)
     CHECK((uint32_t)CALL("time.CalculateSpanBetween", U(&span), U(a), U(b)) == 0x18074u, "span across sources");
+    // An empty claim context (a new save) takes the current snapshot; the SDK's claim logic runs without the time
+    // service, its two service queries answered by the host.
+    b[0x98] ^= 1;
+    uint8_t *ctx = guest_alloc(0x400), *steady = guest_alloc(0x18), *where = guest_alloc(0x24);
+    uint64_t *cb = guest_alloc(16), *vt = guest_alloc(16);
+    int64_t *penalty = guest_alloc(16);
+    memcpy(vt, benefit_vtable, sizeof benefit_vtable);
+    cb[0] = U(vt);
+    penalty[0] = penalty[1] = 3600ll * 1000000000ll;
+    CHECK(CALL("time.CorrectionUpdatedTime", U(steady)) == 0 && !memcmp(steady + 8, b + 0x98, 16),
+          "automatic correction updated time: not a point of the steady clock");
+    CHECK(CALL("time.LocationUpdatedTime", U(where), U(steady)) == 0 && !strcmp((char *)where, (char *)(b + 0xa8)),
+          "device location %s, snapshot %s", (char *)where, (char *)(b + 0xa8));
+    uint32_t claim = (uint32_t)CALL("time.ClaimPeriodicBenefit", U(ctx), U(b), U(&penalty[0]), U(&penalty[1]), U(cb));
+    printf("time: periodic benefit claim of an empty context: result %u, %d callback checks, snapshot %s\n", claim,
+           benefit_checks, memcmp(ctx + 0xd0, b, 0xd0) ? "not taken" : "taken");
+    CHECK(claim <= 2, "periodic benefit claim result %u", claim);
     CHECK(CALL("time.Finalize", 0) == 0 && (uint8_t)CALL("time.IsInitialized", 0) == 0, "time finalize");
     printf("time: ToCalendarTimeInUtc/ToPosixTimeFromUtc round trip %d values %s; local %04d-%02d-%02d %02d:%02d zone %s "
            "offset %+d s; snapshot location %s\n", (int)(sizeof ts / sizeof *ts), rt_bad ? "FAILED" : "ok", local.year,
