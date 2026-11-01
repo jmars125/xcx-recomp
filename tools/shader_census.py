@@ -246,18 +246,21 @@ def inventory(romfs, exefs):
 
 def played_shaders(path):
     """Every record of a shader-programs.bin (layout: runtime/gfx_shader.c), in the shape of inventory(). A record's
-    vertex shader opens a group its fragment shader joins, as the game wrote each pair; the probes pair shaders by source."""
+    vertex shader opens a group its fragment shader joins, as the game wrote each pair; the probes pair shaders by source.
+    One shader per stage and code: the probes rebuild the control section from the job, so a record that differs only
+    there would be the same shader to them."""
     data = path.read_bytes()
     if data[:7] != b'XCXSPRG':
         raise ValueError(f'{path}: not a shader-programs.bin')
-    shaders, pos, group = {}, 16, 0
+    shaders, seen, pos, group = {}, set(), 16, 0
     while pos + 44 + 0x880 <= len(data):
         stage, length, c1 = struct.unpack_from('<III', data, pos)
         control = data[pos + 44:pos + 44 + 0x880]
         code = data[pos + 44 + 0x880:][:length]
         pos += 44 + 0x880 + length + c1
         name = PLAYED_STAGES.get(stage)
-        if name:
+        if name and (name, code) not in seen:
+            seen.add((name, code))
             group += name == 'vs'
             key = hashlib.sha256(control + code).hexdigest()
             shaders[key] = dict(stage=name, control=control, code=code, source=f'played/{group}', origin='played',
