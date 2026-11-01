@@ -42,6 +42,12 @@ site xcx60 main eb408 1e204100 @page:x9 bd404d20 1e200900
 # scaled by the patch page's +0x4c (30 / frame rate), as the 1.0.1 mod's halving at 60 fps (its cave at 1.0.1
 # +0x2a02ac, called from +0x5c5874). x8 and s2 are free: every path from here calls before reading them.
 site xcx60 main 5c6284 1e213800 @page:x8 bd404d02 1e220821 1e213800
+# Right-stick camera turn (issue #19): the camera's rotation update (main+0xab514) turns the stick, after its response
+# curve, into a pitch (main+0xab74c) and a yaw (main+0xabab8) per frame, both times the turn speed it loads here from
+# the camera parameters (+0xb4); no frame time is applied, so above 30 fps the camera turned faster. The speed is scaled
+# by the patch page's +0x4c (30 / frame rate) where it is loaded, so the pitch limits still apply to the scaled step.
+# x8 is rewritten next (main+0xab704); s16 is written before it is read.
+site xcx60 main ab700 bd40b6a8 @page:x8 bd40b6a8 bd404d10 1e300908
 
 # The mod's getter that returns false on Switch (1.0.1 +0x13eb280): true. Off: in 2.0.0 it crashes the title screen's
 # rendering (main+0x9530b0 reads through a bad pointer).
