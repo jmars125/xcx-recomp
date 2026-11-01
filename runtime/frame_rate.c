@@ -120,6 +120,8 @@ static int xcx_cutscene(void) {
     if (movie_playing()) return 1;
     uint32_t state;
     if (!plat_mem_read(MOD_MAIN_BASE + 0x1fefaf4, &state, 4)) return 0;
+    static uint32_t last = 0;
+    if (state != last) rt_log("frame rate: event state %u -> %u", last, state), last = state;
     return mode == 2 ? state == 4 : state >= 2;
 }
 

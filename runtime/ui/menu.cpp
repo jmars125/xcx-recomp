@@ -540,6 +540,8 @@ static void tab_screen(float scale) {
 static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
+    static const UiTextId cut[] = {UI_MENU_CUTSCENE_30, UI_MENU_CUTSCENE_MIXED, UI_MENU_CUTSCENE_LIMIT};
+    opt_choice("XCX_CUTSCENE_30", UI_MENU_CUTSCENE_FPS, cut, 3, UI_MENU_CUTSCENE_FPS_DESC);
     row_game_lang();
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("XCX_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
