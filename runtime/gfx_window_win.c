@@ -228,6 +228,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 static void window_main(void *arg) {
     (void)arg;
+    // Sizes in physical pixels: without this, Windows display scaling (150 % on many 4K monitors) reports the monitor
+    // as 2560x1440, so the window size list stops there, and stretches the swapchain to the screen.
+    // Looked up: the headers declare it only for _WIN32_WINNT 0x0605 and up (Windows 10 1703).
+    BOOL(WINAPI * set_dpi)(HANDLE) =
+        (BOOL(WINAPI *)(HANDLE))(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext");
+    if (set_dpi) set_dpi((HANDLE)-4);   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
     HINSTANCE inst = GetModuleHandleW(NULL);
     // Icon resource 1 of xcx.rc (runtime/xcx.ico): the title bar, the taskbar button and Alt+Tab.
     WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = wnd_proc, .hInstance = inst,

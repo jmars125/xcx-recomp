@@ -47,3 +47,10 @@ site xcx60g main 13db618 2a1f03e0 52800020
 # true. Off: on its own it does not change the frame rate, and what it halves is untested.
 site xcx60m main 13a28a4 1a9f07e0 52800020
 site xcx60m main 13a28ac 2a1f03e0 52800020
+
+# resbuf (XCX_RES_BUFFER set, resolution.c): main+0x9ccce0 sizes two buffers from a width it loads and the docked
+# height of the resolution table; both loads read the patch page's +0x50 and +0x54 instead, as the 1.0.1 resolution
+# mods (1.0.1 +0x9dcaec, +0x9dcb00) put sizes of their own there. x8 is reloaded or unused after each.
+set resbuf XCX_RES_BUFFER 0
+site resbuf main 9cccec b9400114 @page:x8 b9405114
+site resbuf main 9ccd00 b9400115 @page:x8 b9405515
