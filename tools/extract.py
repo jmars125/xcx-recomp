@@ -87,12 +87,11 @@ def version_dir(expected):
 
 
 # The embeddable Python (a ._pth file) does not put a script's directory on sys.path, so a vendored script that imports
-# its siblings fails when started by path. This stub adds the directory and tools/, puts package_select in front of the
-# vendored base game check (combined XCIs), then imports the script and calls its main().
-RUN_SCRIPT = ('import importlib, os, sys; p = sys.argv[1]; sys.path.insert(0, os.path.dirname(p)); '
+# its siblings fails when started by path. This stub adds the directory and tools/, then package_select.run() starts the
+# script (a vendored one behind its combined-XCI base check).
+RUN_SCRIPT = ('import os, sys; p = sys.argv[1]; sys.path.insert(0, os.path.dirname(p)); '
               f'sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); sys.argv = sys.argv[1:]; '
-              'import package_select; package_select.install(); '
-              'importlib.import_module(os.path.splitext(os.path.basename(p))[0]).main()')
+              'import package_select; package_select.run(p)')
 
 
 def run_logged(command, log, source=None):
