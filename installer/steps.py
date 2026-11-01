@@ -28,8 +28,8 @@ from .runner import InstallError, Step
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
 import extract  # noqa: E402
-from extract_exefs import (common_tickets, container_entries, load_keys, nca_ctr_key, nca_inventory,  # noqa: E402
-                           program_nca)
+from extract_exefs import (common_tickets, container_entries, load_keys, nca_ctr_key, nca_inventory)  # noqa: E402
+from package_select import program_nca  # noqa: E402
 from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 
 GiB = 1 << 30

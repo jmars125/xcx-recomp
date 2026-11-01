@@ -29,8 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / 'tools' / 'vendor' / 'macnativegames'
 # The vendored scripts import each other by bare module name, so their directory goes on the path before importing them.
 sys.path.insert(0, str(VENDOR))
-from extract_exefs import (common_tickets, container_entries, load_keys, nca_inventory, program_nca,  # noqa: E402
+from extract_exefs import (common_tickets, container_entries, load_keys, nca_inventory,  # noqa: E402
                            record_offset, require)
+from package_select import program_nca  # noqa: E402
 from extract_romfs import index_romfs  # noqa: E402
 from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 
@@ -86,9 +87,12 @@ def version_dir(expected):
 
 
 # The embeddable Python (a ._pth file) does not put a script's directory on sys.path, so a vendored script that imports
-# its siblings fails when started by path. This stub adds the directory, then runs the script as __main__.
-RUN_SCRIPT = ('import os, runpy, sys; p = sys.argv[1]; sys.path.insert(0, os.path.dirname(p)); sys.argv = sys.argv[1:]; '
-              "runpy.run_path(p, run_name='__main__')")
+# its siblings fails when started by path. This stub adds the directory and tools/, puts package_select in front of the
+# vendored base game check (combined XCIs), then imports the script and calls its main().
+RUN_SCRIPT = ('import importlib, os, sys; p = sys.argv[1]; sys.path.insert(0, os.path.dirname(p)); '
+              f'sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); sys.argv = sys.argv[1:]; '
+              'import package_select; package_select.install(); '
+              'importlib.import_module(os.path.splitext(os.path.basename(p))[0]).main()')
 
 
 def run_logged(command, log, source=None):
