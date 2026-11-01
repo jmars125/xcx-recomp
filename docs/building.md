@@ -117,6 +117,44 @@ your machines without MSYS2, Python or .NET. `romfs.bin` stays out unless you pa
 `romfs\` next to the exe or point `XCX_ROMFS` at its folder. Run `xcx.exe --prepare-shaders` once in the copied
 folder. The folder holds code and data derived from your game: for your own machines only.
 
+## Linux (in progress)
+
+The runtime builds and runs on x86-64 Linux with a window, input and menu on SDL3 (`*_sdl.c`) in place of the Win32
+files (`*_win.c`); `runtime/platform/linux.c` implements `platform.h`. Status: the selftest and the probes pass; 1.2.1
+plays at 60 fps on RADV (RX 7800 XT) and NVIDIA (RTX 3060); 1.4.3 builds, probes and plays on RADV (RX 6600, and the
+Vega 7 of a Ryzen 5 4600G at about 34 fps). Long play sessions and the Steam Deck itself are not verified yet.
+
+Requirements:
+
+- Linux 6.7 or later: the write watch uses userfaultfd write protection with `PAGEMAP_SCAN`. SteamOS 3.8 qualifies.
+- A Vulkan 1.3 driver with `VK_EXT_external_memory_host` (RADV, NVIDIA).
+- Packages on Arch:
+
+  ```sh
+  pacman -S --needed clang lld ninja make sdl3 opus libvpx zstd vulkan-headers vulkan-icd-loader \
+      vulkan-validation-layers shaderc spirv-tools dotnet-sdk uv git
+  ```
+
+  Vulkan Memory Allocator is a single header (AUR `vulkan-memory-allocator`). Without it, `build_game.py` fetches the
+  version the Windows release pins (3.4.0) into `toolchain/vma/` on first use and checks its hash.
+
+The steps are the Windows ones with POSIX paths: `.venv/bin/python` in place of `.venv\Scripts\python`, and `xcx` in
+place of `xcx.exe`. `build_game.py` takes clang, lld and Ninja from PATH (or the ones in `<dir>/bin` with
+`--toolchain <dir>`) and links against the system libraries, with `libstdc++` static and an `$ORIGIN` rpath;
+`build_hactool.py` builds `hactool` with make. `tools/prepare_shaders.py` reads the shader list from
+`refs/MacNativeGames` at `origin/HEAD`, which must be the pinned commit with its history (the list format changed later).
+
+Memory: on Windows the GPU imports guest memory and `GetWriteWatch` tracks the CPU's writes to it. On Linux,
+re-protecting imported memory invalidates the driver's userptr buffer on every submit (about 1.3 ms per 16 MiB on
+amdgpu), and importing pins the pages, which drops their write protection. Each CPU-visible pool therefore gets a
+host-visible copy (shadow storage, `runtime/vk_memory.c`): the pages the CPU wrote go in before each submit, and the GPU's
+writes come back at its fence. In play that costs about 0.2 ms a frame and doubles the memory of those pools (about
+1.1 GB). `XCX_SHADOW=1` turns it on under Windows too. The Steam Deck's RADV has `VK_EXT_external_memory_host` as
+well: the shadow copies are chosen for the measured cost above, not for a missing extension.
+
+The Deck's GPU (Van Gogh) has no native ASTC, so its textures go through the compute decoder (`runtime/vk_astc.c`,
+`XCX_ASTC`) as on desktop AMD GPUs without it; frame times measured there include it.
+
 ## Checks
 
 Before a commit:

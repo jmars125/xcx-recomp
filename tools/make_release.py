@@ -1,6 +1,6 @@
 """Assemble the release folder of docs/installer.md ("Release layout") from pinned downloads.
 
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup.zip]
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup-<version>-windows.zip]
     .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --from ..\\..\\totk-pc-recomp
     .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --prove
 
@@ -20,7 +20,7 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     XCX-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
 
 --from DIR takes python/, llvm/, runtime/deps/, bin/ and licenses/ from an unpacked earlier release (an XCX Recomp
-release, or the TotK Recomp release whose bin/totk_xlate.exe is the same translator) instead of downloading and
+release, or the XCX Recomp release whose bin/xcx_xlate.exe is the same translator) instead of downloading and
 unpacking them; runtime/, the sources and the launcher are still built from this checkout.
 
 --prove compiles generated/upd and links build/release-check/xcx.exe with nothing but the folder's python/, llvm/,
@@ -123,6 +123,8 @@ def fetch(name):
     url, want = PINS[name]
     DL.mkdir(parents=True, exist_ok=True)
     path = DL / Path(url.split('?')[0]).name.replace('%7E', '~')
+    if name in ('tcl-linux-src', 'tk-linux-src'):
+        path = DL / f'{name}-9.0.4.tar.gz'   # upstream archives have identical basenames
     if name == 'libvpx-src':
         path = DL / 'libvpx-1.17.0.tar.gz'
     if not path.is_file():
@@ -333,14 +335,14 @@ def collect_licenses(out):
 
 def take_prebuilt(out, src):
     """python/, llvm/, runtime/deps/, bin/ and licenses/ copied from the unpacked release src. The translator is renamed
-    to xcx_xlate when src is the TotK Recomp release."""
+    to xcx_xlate when src is the XCX Recomp release."""
     for d in ('python', 'llvm', 'licenses'):
         copy_tree(src / d, out / d, lambda r: '__pycache__' in r)
     copy_tree(src / 'runtime' / 'deps', out / 'runtime' / 'deps')
     (out / 'bin').mkdir(parents=True, exist_ok=True)
     for name in ('hactool.exe', 'ninja.exe', 'SDL3.dll', 'libopus-0.dll'):
         shutil.copy2(src / 'bin' / name, out / 'bin' / name)
-    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'totk_xlate'
+    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'xcx_xlate'
     for ext in ('.exe', '.id'):
         shutil.copy2(src / 'bin' / (stem + ext), out / 'bin' / ('xcx_xlate' + ext))
     return out / 'llvm'

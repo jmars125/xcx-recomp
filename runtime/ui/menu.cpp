@@ -1,6 +1,6 @@
 // The in-game menu core: Dear ImGui state, the event queue the window adapter fills, gamepad navigation, the Vulkan back
 // end on our device and the menu's pages. Free of any window system (menu.h). ImGui runs on the present path only,
-// under gfx_window.c's present lock; the event functions only queue.
+// under gfx_present.c's present lock; the event functions only queue.
 //
 // The Vulkan set-up follows LAS Recomp's runtime/nvn/vulkan/imgui_glue.cpp (https://github.com/peiikai/LASRecomp @
 // da35b83a9611d046a9a681aae668d7085954d37f, MIT, Copyright (c) 2026 Peiikai): dynamic rendering into the swapchain
@@ -234,7 +234,7 @@ static int vk_up(const MenuTarget *t) {
     ii.Queue = t->queue;
     ii.DescriptorPoolSize = 16;
     ii.MinImageCount = 2;
-    ii.ImageCount = 4;   // vertex buffers rotate per recorded frame: more than gfx_window.c's 2 frames in flight
+    ii.ImageCount = 4;   // vertex buffers rotate per recorded frame: more than gfx_present.c's 2 frames in flight
     ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ii.UseDynamicRendering = true;
     g_vk_fmt = t->format;
@@ -413,7 +413,8 @@ static void row_window_size(void) {
 // The game resolution (resolution.c): 16:9 sizes from the game's own 1920x1080 up, and the current value when it is
 // another size.
 static void row_output_res(void) {
-    static const char *const vals[] = {"1920x1080", "2560x1440", "3200x1800", "3840x2160"};
+    // 1280x720: the Steam Deck's (letterboxed in its 1280x800 screen, XCX_PICTURE_FIT)
+    static const char *const vals[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3200x1800", "3840x2160"};
     enum { N = sizeof vals / sizeof *vals };
     char shown[N][32];
     const char *names[N];
@@ -477,8 +478,10 @@ static void row_game_lang(void) {
 
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
 static void row_fps_limit() {
-    static const char *const vals[] = {"30", "60", "120", "144", "display"};
-    static const UiTextId ids[] = {UI_MENU_FPS_30, UI_MENU_FPS_60, UI_MENU_FPS_120, UI_MENU_FPS_144, UI_MENU_FPS_DISPLAY};
+    // 40 and 45: the Steam Deck's screen runs at 40 to 60 Hz (the OLED to 90); 40 divides 40 and 120 Hz evenly
+    static const char *const vals[] = {"30", "40", "45", "60", "90", "120", "144", "display"};
+    static const UiTextId ids[] = {UI_MENU_FPS_30, UI_MENU_FPS_40,  UI_MENU_FPS_45,  UI_MENU_FPS_60,
+                                   UI_MENU_FPS_90, UI_MENU_FPS_120, UI_MENU_FPS_144, UI_MENU_FPS_DISPLAY};
     enum { N = sizeof vals / sizeof *vals };
     const char *names[N];
     for (int i = 0; i < N; i++) names[i] = menu_text(ids[i]);
@@ -528,6 +531,8 @@ static void tab_screen(float scale) {
     row_render_scale();
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
     opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
+    static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
+    opt_choice("XCX_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
     opt_slider("XCX_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     opt_end();
 }
@@ -688,7 +693,7 @@ static void tab_advanced(float scale) {
     static char rec_path[600];   // the recording goes beside the log
     if (!rec_path[0]) {
         char dir[512];
-        snprintf(rec_path, sizeof rec_path, "%s\\input-record.txt", sysinfo_log_folder(dir, sizeof dir) ? dir : ".");
+        snprintf(rec_path, sizeof rec_path, "%s/input-record.txt", sysinfo_log_folder(dir, sizeof dir) ? dir : ".");
     }
     row_set_or_not("XCX_INPUT_RECORD", UI_MENU_INPUT_RECORD, UI_MENU_INPUT_RECORD_DESC, rec_path);
     if (opt_button("##open_log", UI_MENU_OPEN_LOG, UI_MENU_OPEN_LOG_DESC, action_value(log_note, UI_MENU_OPEN_LOG))) {
@@ -934,7 +939,7 @@ static void perf_label(UiTextId label, const ImVec4 &c) {
 static float perf_gb(float mb) { return mb < 0 ? -1 : mb / 1024; }
 
 // The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), how the
-// present scales the image to the window (gfx_window.c, the last present), the frame limit and the presentation mode
+// present scales the image to the window (gfx_present.c, the last present), the frame limit and the presentation mode
 // in use.
 static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     unsigned out[2], scene[2];

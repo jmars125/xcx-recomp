@@ -7,12 +7,12 @@
 // Guest layouts (SDK 19.3.2): AudioOutBuffer {next, data, capacity, size} at +0, +8, +0x10, +0x18, filled by the SDK's
 // own SetAudioOutBufferInfo; AudioOutParameter {int32 sample rate, uint16 channel count, uint16 0xCAFE}, 0 meaning the
 // default. The AudioOut object itself is only a key here.
-#include <windows.h>
 #include <SDL3/SDL.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "host.h"
+#include "platform/platform.h"
 
 #define OUT_MAX 8
 #define QUEUE_MAX 64
@@ -32,16 +32,10 @@ typedef struct {
 } Out;
 
 static Out outs[OUT_MAX];
-static SRWLOCK lock = SRWLOCK_INIT;
+static PlatMutex lock = PLAT_MUTEX_INIT;
 static int sdl_ready = -1;
 
-static uint64_t now_ns(void) {
-    static LARGE_INTEGER freq;
-    LARGE_INTEGER t;
-    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&t);
-    return (uint64_t)(t.QuadPart / freq.QuadPart * 1000000000 + t.QuadPart % freq.QuadPart * 1000000000 / freq.QuadPart);
-}
+static uint64_t now_ns(void) { return plat_now_ns(); }
 
 static Out *find(uint64_t guest) {
     for (int i = 0; i < OUT_MAX; i++)
@@ -71,9 +65,9 @@ static void SDLCALL device_pull(void *user, SDL_AudioStream *s, int additional, 
     (void)s, (void)additional, (void)total;
     Out *o = user;
     uint64_t ev = 0;
-    if (!TryAcquireSRWLockShared(&lock)) return;
+    if (!plat_mutex_trylock_shared(&lock)) return;
     if (o->guest && o->event && o->nq && consumed(o) >= o->q[0].end) ev = o->event;
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     if (ev) kern_signal_system_event(ev);
 }
 
@@ -85,7 +79,7 @@ static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *
     if (!channels) channels = 2;
     if (channels != 1 && channels != 2 && channels != 6) rt_fatal("audout: %u channels", channels);
     if (event) kern_bind_system_event(c, event, 1);
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = find(guest);
     if (!o) o = find(0);
     if (!o) rt_fatal("audout: more than %d AudioOuts open", OUT_MAX);
@@ -96,7 +90,7 @@ static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *
         o->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
         if (o->stream) SDL_SetAudioStreamGetCallback(o->stream, device_pull, o);
     }
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     rt_log("audout: opened %#llx, %u channels at %d Hz, %s", (unsigned long long)guest, channels, RATE,
            o->stream ? "on the default device" : "without a device (timed)");
     return 0;
@@ -119,37 +113,37 @@ static Out *need(Cpu *c, const char *fn) {
 
 // void CloseAudioOut(AudioOut *)
 static void ov_close(Cpu *c) {
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "CloseAudioOut");
     SDL_AudioStream *s = o->stream;
     memset(o, 0, sizeof *o);
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     if (s) SDL_DestroyAudioStream(s);
 }
 
 // Result StartAudioOut(AudioOut *)
 static void ov_start(Cpu *c) {
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "StartAudioOut");
     if (o->state != STATE_STARTED) {
         o->state = STATE_STARTED;
         o->start_ns = now_ns();
         if (o->stream) SDL_ResumeAudioStreamDevice(o->stream);
     }
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     ret_x(c, 0);
 }
 
 // void StopAudioOut(AudioOut *)
 static void ov_stop(Cpu *c) {
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "StopAudioOut");
     if (o->state == STATE_STARTED) {
         o->consumed_at_stop = consumed(o);
         o->state = STATE_STOPPED;
         if (o->stream) SDL_PauseAudioStreamDevice(o->stream);
     }
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
 }
 
 // bool AppendAudioOutBuffer(AudioOut *, AudioOutBuffer *)
@@ -158,7 +152,7 @@ static void ov_append(Cpu *c) {
     if (!buf) rt_fatal("nn::audio::AppendAudioOutBuffer: null buffer");
     const void *data = (const void *)(uintptr_t)LD64(buf + 8);
     uint64_t size = LD64(buf + 0x18);
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "AppendAudioOutBuffer");
     int ok = o->nq < QUEUE_MAX;
     if (ok) {
@@ -170,82 +164,82 @@ static void ov_append(Cpu *c) {
         o->appended += size;
         o->q[o->nq++] = (Queued){buf, o->appended};
     }
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     ret_x(c, (uint64_t)ok);
 }
 
 // AudioOutBuffer *GetReleasedAudioOutBuffer(AudioOut *): the oldest buffer the device has finished, else NULL
 static void ov_released(Cpu *c) {
     uint64_t buf = 0;
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "GetReleasedAudioOutBuffer");
     if (o->nq && consumed(o) >= o->q[0].end) {
         buf = o->q[0].buf;
         memmove(o->q, o->q + 1, (size_t)--o->nq * sizeof *o->q);
     }
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     ret_x(c, buf);
 }
 
 // bool ContainsAudioOutBuffer(const AudioOut *, const AudioOutBuffer *)
 static void ov_contains(Cpu *c) {
     int found = 0;
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     Out *o = need(c, "ContainsAudioOutBuffer");
     for (int i = 0; i < o->nq && !found; i++) found = o->q[i].buf == arg_x(c, 1);
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_x(c, (uint64_t)found);
 }
 
 // bool FlushAudioOutBuffers(AudioOut *): drops the data not played yet; the buffers are released at once
 static void ov_flush(Cpu *c) {
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     Out *o = need(c, "FlushAudioOutBuffers");
     if (o->stream) SDL_ClearAudioStream(o->stream);
     o->consumed_at_stop = o->appended;
     o->start_ns = now_ns();
     for (int i = 0; i < o->nq; i++) o->q[i].end = 0;
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
     ret_x(c, 1);
 }
 
 static void ov_state(Cpu *c) {
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     uint32_t s = need(c, "GetAudioOutState")->state;
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_x(c, s);
 }
 static void ov_channels(Cpu *c) {
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     uint32_t n = need(c, "GetAudioOutChannelCount")->channels;
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_x(c, n);
 }
 static void ov_rate(Cpu *c) { need(c, "GetAudioOutSampleRate"), ret_x(c, RATE); }
 static void ov_format(Cpu *c) { need(c, "GetAudioOutSampleFormat"), ret_x(c, FMT_PCM16); }
 static void ov_buffer_count(Cpu *c) {
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     int n = need(c, "GetAudioOutBufferCount")->nq;
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_x(c, (uint64_t)n);
 }
 static void ov_played(Cpu *c) {
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     Out *o = need(c, "GetAudioOutPlayedSampleCount");
     uint64_t n = consumed(o) / frame_bytes(o);
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_x(c, n);
 }
 static void ov_get_volume(Cpu *c) {
-    AcquireSRWLockShared(&lock);
+    plat_mutex_lock_shared(&lock);
     float v = need(c, "GetAudioOutVolume")->volume;
-    ReleaseSRWLockShared(&lock);
+    plat_mutex_unlock_shared(&lock);
     ret_s(c, v);
 }
 static void ov_set_volume(Cpu *c) {
-    AcquireSRWLockExclusive(&lock);
+    plat_mutex_lock(&lock);
     need(c, "SetAudioOutVolume")->volume = arg_s(c, 0);
-    ReleaseSRWLockExclusive(&lock);
+    plat_mutex_unlock(&lock);
 }
 
 // ---- the output device as the game sees it: one stereo TV output that never changes
