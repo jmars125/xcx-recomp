@@ -143,12 +143,13 @@ static int view_format(const tex_t *t, const view_t *v, int blocks, VkFormat *ou
 }
 
 // ---- 3D BC render targets
-// A 3D BC texture has no block views (vk_texture.c create_tex, XCX_BLOCK_VIEWS_3D): on RDNA2 cards such an image
-// made BLOCK_TEXEL_VIEW_COMPATIBLE and 2D_ARRAY_COMPATIBLE took GPU writes past the end of its memory (issue #5). Draws
-// into it through an uncompressed view of its blocks (agl's BC4 encoder fills 32x32x32 and 64x64x64 volumes and their
-// levels at the logo) go to a stand-in: a 2D array of the blocks of one level in the view's format, one layer per
-// depth plane. It starts with the level's content, so a pass that writes part of a plane keeps the rest, and each pass
-// end copies the planes it drew into the level (a copy between a compressed and a size-compatible uncompressed format).
+// A 3D BC texture has no block views (vk_texture.c create_tex, XCX_BLOCK_VIEWS_3D): on RDNA2 cards such an image made
+// BLOCK_TEXEL_VIEW_COMPATIBLE and 2D_ARRAY_COMPATIBLE took writes past the end of its memory (TotK Recomp issue #5).
+// Draws into it through an uncompressed view of its blocks (TotK's agl BC4 encoder fills 32x32x32 and 64x64x64 volumes
+// and their levels at the logo) go to a stand-in: a 2D array of the blocks of one level in the view's format, one layer
+// per depth plane. It starts with the level's content, so a pass that writes part of a plane keeps the rest, and each
+// pass end copies the planes it drew into the level (a copy between a compressed and a size-compatible uncompressed
+// format).
 typedef struct { VkImage bc, img; VmaAllocation alloc; VkFormat fmt; uint32_t level, w, h, d; } BcStandIn;
 #define BC_STANDINS 64   // one per level drawn: 6 volumes of up to 7 levels at the logo
 static BcStandIn bcs[BC_STANDINS];

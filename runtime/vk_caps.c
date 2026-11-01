@@ -48,7 +48,8 @@ void vk_caps_driver(VkPhysicalDevice p) {
 
 // XCX_GPL=0/1 forces graphics pipeline libraries off or on. Default off on AMD's RDNA 1/2 driver branch: every boot
 // that lost the device there had a cold pipeline cache and draws waiting on fast-linked pipelines, and a run with GPL
-// off booted (TotK Recomp issue #5); Savage Wind Recomp turns GPL off on RDNA 4 under RADV for a GPU hang at the title screen.
+// off booted (TotK Recomp issue #5); Savage Wind Recomp turns GPL off on RDNA 4 under RADV for a GPU hang at the title
+// screen.
 int vk_caps_gpl(const VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT *f,
                 const VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT *p) {
     gpl_lib = f->graphicsPipelineLibrary;
