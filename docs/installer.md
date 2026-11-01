@@ -160,19 +160,17 @@ For a release:
 1. On the release branch, bump `VERSION` and push.
 2. Tag that commit `v<VERSION>` and push the tag. A tag that differs from `VERSION` stops the run. A passing run
    creates a draft release with both packages and generated notes.
-3. Prove the packages locally. `--prove` reads `generated/upd` and `build/extracted/upd`, which are game-derived, so it
-   never runs on a runner. Download both packages from the draft, then:
+3. Prove the packages locally. `--prove` reads `generated/upd`, `build/extracted/upd` and `build/upd/shaders`, which are
+   game-derived, so it never runs on a runner. Its shader probes need a census: make one once, from the shaders a local
+   2.0.0 build met in play (`build/upd/shader-programs.bin`). Download both packages from the draft, then:
 
    ```sh
+   .venv-py314\Scripts\python tools\shader_census.py --version upd --played
    # Windows, with the zip unpacked to build/release/XCX-Setup
    .venv-py314\Scripts\python tools\make_release.py --out build/release/XCX-Setup --prove
    # Linux or WSL: run the AppImage with --appimage-extract, move squashfs-root to build/release/XCX-Setup-linux
    .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
    ```
-
-   `--probe-vkexec` and `--probe-shader` read `build/v121/shaders/jobs.json` (`runtime/vk_exec_probe.c`,
-   `runtime/gfx_shader_probe.c`). Without that 1.2.1 census they fail on every package and `--prove` exits with an
-   error, so read the build and the `--probe-kernel` and `--probe-nvn-tex` lines.
 
 4. Install from both packages with real game files and play the build.
 5. Publish the draft (a person, on the release page or with `gh release edit v<VERSION> --draft=false --latest`), then

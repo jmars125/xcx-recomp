@@ -527,7 +527,8 @@ def prove(out):
          '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--gen', gen, '--out', chk,
          '--exefs', ext / 'exefs', '--romfs', ext / 'romfs', '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
-    shutil.copy2(out / 'bin' / 'libSDL3.so.0', chk / 'libSDL3.so.0')
+    for name in ('libSDL3.so.0', 'xcx_xlate', 'xcx_xlate.id'):   # beside the game, as in an install
+        shutil.copy2(out / 'bin' / name, chk / name)
     needed = subprocess.run(['readelf', '-d', str(chk / 'xcx')], capture_output=True, text=True).stdout
     print('prove: needs', ', '.join(re.findall(r'\[(lib[^\]]+)\]', needed)))
     glibc = sorted(set(re.findall(r'GLIBC_(\d+\.\d+)', subprocess.run(['readelf', '-V', str(chk / 'xcx')],

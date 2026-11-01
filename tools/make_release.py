@@ -530,6 +530,8 @@ def prove(out):
         shutil.copy2(out / 'bin' / dll, chk / dll)
     for dll in ('libc++.dll', 'libunwind.dll', 'libwinpthread-1.dll'):   # installer/layout.py release_dlls
         shutil.copy2(out / 'llvm' / 'bin' / dll, chk / dll)
+    for name in ('xcx_xlate.exe', 'xcx_xlate.id'):   # beside the game, as in an install: the shader probes translate
+        shutil.copy2(out / 'bin' / name, chk / name)
     failed = []
     for probe in PROBES:
         r = subprocess.run([str(chk / 'xcx.exe'), probe], cwd=chk, env=clean_env(chk), capture_output=True, text=True,
