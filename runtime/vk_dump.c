@@ -21,6 +21,8 @@
 // XCX_DUMP_UBO=1: each listed pipeline also prints the first 16 vec4 of its user uniform blocks (c3 and up), read from
 // guest memory when the entry is listed. A block the submission rewrites with UpdateUniformBuffer shows its value from
 // before the submission (vk_exec_draw.c upd_note).
+// XCX_DUMP_ONLY=<w>x<h>: only images of that size are copied (the others still count as logged), so passes late in
+// the frame are reached before the PNG cap.
 // XCX_DUMP_SKIP_RUNS=1: a render pass with the same targets as the render pass before it is logged but not copied
 // (the terrain decals draw one pass each into the G-buffer and would use up both caps).
 #include <math.h>
@@ -54,6 +56,7 @@ static int nwant_tex;
 static uint64_t last_targets;          // targets_sig of the last render pass; 0 after a dispatch
 static const char *pass_skip;          // why the current pass copies nothing, or NULL
 static volatile int64_t png_bytes, inflight;
+static uint32_t only_w, only_h;   // XCX_DUMP_ONLY=<w>x<h>: copy images of that size only
 static PlatMutex rec_lock = PLAT_MUTEX_INIT, img_lock = PLAT_MUTEX_INIT;
 
 // ---- formats
@@ -296,6 +299,7 @@ static const char *copy_region(VkExec *ex, VkImage image, VkFormat vf, VkImageAs
     else if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) return "stencil only";
     uint64_t bytes = (uint64_t)w * h * d * f->bytes;
     uint64_t est = ((uint64_t)h * (1 + 4ull * w * d) + 128) * (mode_of(f) == M_FLOAT ? 2 : 1);
+    if (only_w && (w != only_w || h != only_h)) return "not the XCX_DUMP_ONLY size";
     if ((uint64_t)png_bytes + est > PNG_CAP) return "PNG cap reached";
     if ((uint64_t)inflight + bytes > INFLIGHT_CAP) return "too many copies in flight";
     Job *j = calloc(1, sizeof *j);
@@ -871,6 +875,8 @@ void vk_dump_init(void) {
     skip_runs = sr && *sr && *sr != '0';
     const char *du = cfg_get("XCX_DUMP_UBO");
     dump_ubo = du && *du && *du != '0';
+    const char *only = cfg_get("XCX_DUMP_ONLY");
+    if (only && sscanf(only, "%ux%u", &only_w, &only_h) != 2) only_w = only_h = 0;
     const char *wt = cfg_get("XCX_DUMP_TEX");
     for (char *q = (char *)wt; q && *q && nwant_tex < 16; q += *q == ',') {
         uint32_t *w = want_tex[nwant_tex++];
