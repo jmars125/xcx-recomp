@@ -376,29 +376,47 @@ static void list_gpus(VkInstance inst) {
     g_gpu_n = (int)n;
 }
 
-// Window sizes: the common 16:9 sizes that fit the monitor, the 1920x1080 default and the current size.
-static const int kSizes[][2] = {{1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800},
-                                {3840, 2160}};
-enum { MAX_SIZES = sizeof kSizes / sizeof *kSizes + 1 };
+// The sizes of the two resolution rows. Window sizes fit the monitor, but for the 1920x1080 default; the game resolution
+// has no such limit. 1280x720 is the Steam Deck's (letterboxed in its 1280x800 screen, XCX_PICTURE_FIT). Sizes of another
+// shape are listed only for a monitor of that shape, the monitor's own size and the current value always.
+static const int kWindowSizes[][2] = {{1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800},
+                                      {3840, 2160}};
+static const int kOutputSizes[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800}, {3840, 2160}};
+static const int kWideSizes[][2] = {{2560, 1080}, {3440, 1440}, {3840, 1080}, {5120, 1440}, {5160, 2160}};
+enum { MAX_SIZES = sizeof kWindowSizes / sizeof *kWindowSizes + sizeof kWideSizes / sizeof *kWideSizes + 2 };
 
-static void row_window_size(void) {
+// Within 2%: 2560x1080 and 3440x1440 are both sold as 21:9.
+static bool same_shape(int w, int h, int mw, int mh) {
+    long long a = (long long)w * mh, b = (long long)h * mw;
+    return llabs(a - b) * 50 <= b;
+}
+
+// Adds a size where its area puts it, once.
+static int size_add(int (*sz)[2], int n, int w, int h) {
+    for (int i = 0; i < n; i++)
+        if (sz[i][0] == w && sz[i][1] == h) return n;
+    int at = n;
+    while (at > 0 && (long long)sz[at - 1][0] * sz[at - 1][1] > (long long)w * h) at--;
+    memmove(sz[at + 1], sz[at], sizeof sz[0] * (n - at));
+    sz[at][0] = w, sz[at][1] = h;
+    return n + 1;
+}
+
+static void row_sizes(const char *key, UiTextId label, UiTextId desc, const int (*sizes)[2], int count, bool fit) {
     int sz[MAX_SIZES][2], n = 0, mw = 0, mh = 0, cw = 0, ch = 0;
     int have = gfx_window_monitor_size(&mw, &mh);
-    int cur_ok = sscanf(cfg_value("XCX_WINDOW_SIZE"), "%dx%d", &cw, &ch) == 2;
-    bool listed = false;
-    for (size_t i = 0; i < sizeof kSizes / sizeof *kSizes; i++) {
-        int w = kSizes[i][0], h = kSizes[i][1];
-        bool cur = cur_ok && w == cw && h == ch;
-        if (have && (w > mw || h > mh) && !cur && !(w == 1920 && h == 1080)) continue;
-        listed |= cur;
-        sz[n][0] = w, sz[n][1] = h, n++;
+    for (int i = 0; i < count; i++) {
+        int w = sizes[i][0], h = sizes[i][1];
+        if (fit && have && (w > mw || h > mh) && !(w == 1920 && h == 1080)) continue;
+        n = size_add(sz, n, w, h);
     }
-    if (cur_ok && !listed) {   // the current size where its area puts it
-        int at = n;
-        while (at > 0 && (long)sz[at - 1][0] * sz[at - 1][1] > (long)cw * ch) at--;
-        memmove(sz[at + 1], sz[at], sizeof sz[0] * (n - at));
-        sz[at][0] = cw, sz[at][1] = ch, n++;
+    for (size_t i = 0; have && i < sizeof kWideSizes / sizeof *kWideSizes; i++) {
+        int w = kWideSizes[i][0], h = kWideSizes[i][1];
+        if (!same_shape(w, h, mw, mh) || (fit && (w > mw || h > mh))) continue;
+        n = size_add(sz, n, w, h);
     }
+    if (have && mw <= 7680 && mh <= 4320) n = size_add(sz, n, mw, mh);   // resolution.c's limit
+    if (sscanf(cfg_value(key), "%dx%d", &cw, &ch) == 2) n = size_add(sz, n, cw, ch);
     char vals[MAX_SIZES][24], shown[MAX_SIZES][32];
     const char *pv[MAX_SIZES], *pn[MAX_SIZES];
     for (int i = 0; i < n; i++) {
@@ -407,24 +425,18 @@ static void row_window_size(void) {
         pv[i] = vals[i];
         pn[i] = shown[i];
     }
-    opt_choice_list("XCX_WINDOW_SIZE", UI_MENU_WINDOW_SIZE, pv, pn, n, UI_MENU_WINDOW_SIZE_DESC);
+    opt_choice_list(key, label, pv, pn, n, desc);
 }
 
-// The game resolution (resolution.c): 16:9 sizes from the game's own 1920x1080 up, and the current value when it is
-// another size.
+static void row_window_size(void) {
+    row_sizes("XCX_WINDOW_SIZE", UI_MENU_WINDOW_SIZE, UI_MENU_WINDOW_SIZE_DESC, kWindowSizes,
+              sizeof kWindowSizes / sizeof *kWindowSizes, true);
+}
+
+// The game resolution (resolution.c).
 static void row_output_res(void) {
-    // 1280x720: the Steam Deck's (letterboxed in its 1280x800 screen, XCX_PICTURE_FIT)
-    static const char *const vals[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3200x1800", "3840x2160"};
-    enum { N = sizeof vals / sizeof *vals };
-    char shown[N][32];
-    const char *names[N];
-    for (int i = 0; i < N; i++) {
-        int w = 0, h = 0;
-        sscanf(vals[i], "%dx%d", &w, &h);
-        snprintf(shown[i], sizeof shown[i], "%d × %d", w, h);   // U+00D7, the multiplication sign
-        names[i] = shown[i];
-    }
-    opt_choice_list("XCX_OUTPUT_RES", UI_MENU_OUTPUT_RES, vals, names, N, UI_MENU_OUTPUT_RES_DESC);
+    row_sizes("XCX_OUTPUT_RES", UI_MENU_OUTPUT_RES, UI_MENU_OUTPUT_RES_DESC, kOutputSizes,
+              sizeof kOutputSizes / sizeof *kOutputSizes, false);
 }
 
 static void row_render_scale(void) {
