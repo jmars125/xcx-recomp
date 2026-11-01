@@ -161,6 +161,13 @@ static int same_but_swizzle(const TexKey *a, const TexKey *b) {
     return !memcmp(&x, &y, sizeof x);
 }
 
+// Keys of the same storage, target, format and geometry, whatever their flags and swizzle.
+static int same_shape(const TexKey *a, const TexKey *b) {
+    const nvn_texdesc *x = &a->d, *y = &b->d;
+    return a->addr == b->addr && x->target == y->target && x->format == y->format && x->samples == y->samples &&
+           x->width == y->width && x->height == y->height && x->depth == y->depth && x->levels == y->levels;
+}
+
 // MNG nvn_mtl.m tex_mirrored: textures whose content the CPU provides in pool memory. Display, compressible, zcull,
 // depth, multisample and GPU-only storage stays GPU-owned.
 static int tex_mirrored(const tex_t *t) {
@@ -950,14 +957,18 @@ static Tex *slot_resolve(TexSlot *s, view_t *view, int *has_view) {
         // Prefer the live entry that differs from the slot descriptor only in its swizzle: transient render targets
         // share storage, and the newest one at the address is usually another size. The map screen samples its
         // 2250x1080 map target through an (R,G,B,1) descriptor and followed a 960x60 target at the same address.
-        Tex *own = e, *any = NULL;
+        // Next comes one of the same shape with other flags: the character shadow atlas renders through a 1536x1536
+        // D16 texture with flags COMPRESSIBLE and is sampled through one with COMPRESSIBLE | IMAGE, while a 512x512
+        // D16 texture at the same storage is newer; following that one drew every character's shadow twice.
+        Tex *own = e, *any = NULL, *shape = NULL;
         e = NULL;
         for (Tex *p = nvn_hm_get(&by_addr, &k.addr); p; p = p->next_at) {
             if (p->released) continue;
             if (!any) any = p;
             if (same_but_swizzle(&p->key, &k)) { e = p; break; }
+            if (!shape && same_shape(&p->key, &k)) shape = p;
         }
-        if (!e) e = any ? any : own;
+        if (!e) e = shape ? shape : any ? any : own;
     }
     if (!e) e = s->t.mem ? entry_of(&s->t) : NULL;
     // A followed texture is another descriptor at the same storage: its image holds the content, but sampling takes the
