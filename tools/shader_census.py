@@ -5,8 +5,10 @@ package walk of locate_shaders.py @ b75be8cf (MIT, Copyright (c) 2026 MacNativeG
 shared shader list, no spirv-cross, no bind-state variants; the module scan reads the NSO files under exefs/ directly;
 a control section must start with CONTROL_MAGIC (sharcb_shaders says why).
 
-Reads build/extracted/<version>/ (RomFS image plus index.json as tools/romfs_index.py reads them, and exefs/). Writes under
-build/<version>/shaders/ only:
+Reads build/extracted/<version>/ (RomFS image plus index.json as tools/romfs_index.py reads them, and exefs/). XCX keeps
+its shaders inside bf3.ard, which this inventory does not open, so it finds none there: --played takes them from
+build/<version>/shader-programs.bin instead, the shaders a build met in play (runtime/gfx_shader.c), which is what the
+runtime probes need. Writes under build/<version>/shaders/ only:
     code/<key>.code     translator input (graphics: SPH + instructions, compute: instructions)
     jobs.json           key -> job, source path, origin (bnsh|sharcb|main)
     spv/<key>.spv       with --translate
@@ -14,7 +16,7 @@ build/<version>/shaders/ only:
 
 The key is sha256(control[:0x880] + code), as in MNG. Needs Python 3.14 (compression.zstd), so run in .venv-py314:
 
-    .venv-py314\\Scripts\\python tools\\shader_census.py --version v121 --translate
+    .venv-py314\\Scripts\\python tools\\shader_census.py --version upd --played [--translate]
 """
 import argparse
 import compression.zstd as zstd
@@ -76,6 +78,9 @@ def sarc(data):
             raise ValueError('unsafe or duplicate SARC name')
         result[name] = checked(data, start + lo, hi - lo)
     return result
+
+
+PLAYED_STAGES = {0: 'vs', 4: 'ps', 5: 'cs'}   # GFX_STAGE_ of runtime/gfx.h; the stages the translator takes
 
 
 def bnsh_shaders(data):
@@ -201,9 +206,10 @@ def inventory(romfs, exefs):
             return raw
 
         dictionaries = {}
-        for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs'))).values():
-            d = zstd.ZstdDict(raw)
-            dictionaries[d.dict_id] = d
+        if 'Pack/ZsDic.pack.zs' in entries:   # TotK's shared dictionaries; XCX's RomFS has none
+            for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs'))).values():
+                d = zstd.ZstdDict(raw)
+                dictionaries[d.dict_id] = d
 
         def decode(raw):
             info = zstd.get_frame_info(raw)
@@ -236,6 +242,30 @@ def inventory(romfs, exefs):
         if module.name in ('main', 'sdk', 'subsdk0', 'rtld'):
             visit('main', 'module:' + module.name, nso_image(module), True)
     return shaders, rejected[0]
+
+
+def played_shaders(path):
+    """Every record of a shader-programs.bin (layout: runtime/gfx_shader.c), in the shape of inventory(). A record's
+    vertex shader opens a group its fragment shader joins, as the game wrote each pair; the probes pair shaders by source.
+    One shader per stage and code: the probes rebuild the control section from the job, so a record that differs only
+    there would be the same shader to them."""
+    data = path.read_bytes()
+    if data[:7] != b'XCXSPRG':
+        raise ValueError(f'{path}: not a shader-programs.bin')
+    shaders, seen, pos, group = {}, set(), 16, 0
+    while pos + 44 + 0x880 <= len(data):
+        stage, length, c1 = struct.unpack_from('<III', data, pos)
+        control = data[pos + 44:pos + 44 + 0x880]
+        code = data[pos + 44 + 0x880:][:length]
+        pos += 44 + 0x880 + length + c1
+        name = PLAYED_STAGES.get(stage)
+        if name and (name, code) not in seen:
+            seen.add((name, code))
+            group += name == 'vs'
+            key = hashlib.sha256(control + code).hexdigest()
+            shaders[key] = dict(stage=name, control=control, code=code, source=f'played/{group}', origin='played',
+                                startup=True)
+    return shaders
 
 
 def write_shaders(shaders, out, everything):
@@ -322,7 +352,8 @@ def translate(jobs, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--version', required=True, help='v121 (build/extracted/<version>)')
+    ap.add_argument('--version', required=True, help='upd (build/extracted/<version>)')
+    ap.add_argument('--played', action='store_true', help='take the shaders from build/<version>/shader-programs.bin')
     ap.add_argument('--all', action='store_true', help='also the layout and effect shaders MNG leaves to bind-state variants')
     ap.add_argument('--translate', action='store_true', help='translate every shader and run spirv-val')
     args = ap.parse_args()
@@ -330,7 +361,7 @@ def main():
     extracted = ROOT / 'build' / 'extracted' / args.version
     out = ROOT / 'build' / args.version / 'shaders'
     out.mkdir(parents=True, exist_ok=True)
-    shaders, rejected = inventory(extracted / 'romfs', extracted / 'exefs')
+    shaders, rejected = (played_shaders(out.parent / 'shader-programs.bin'), 0) if args.played else         inventory(extracted / 'romfs', extracted / 'exefs')
     jobs = write_shaders(shaders, out, args.all)
     a, b, c = (sum(1 for j in jobs.values() if j['origin'] == o) for o in ('bnsh', 'sharcb', 'main'))
     print(f'{len(shaders)} unique shaders found in all, {len(jobs)} selected; {rejected} .sharcb record candidates '

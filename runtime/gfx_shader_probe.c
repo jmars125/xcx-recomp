@@ -1,5 +1,5 @@
 // --probe-shader: the shader service client (gfx_shader.c) against 32 census shaders. Needs build/xlate/xcx_xlate.exe and
-// build/v121/shaders/ (tools/shader_census.py); uses a throwaway cache directory.
+// build/upd/shaders/ (tools/shader_census.py); uses a throwaway cache directory.
 //   1. Translate 32 shaders (mixed stages) through gfx_shader_get; each SPIR-V starts with the magic 0x07230203.
 //   2. Drop the memory cache and ask again: 32 hits from disk, 0 service requests. A third pass returns the same pointers.
 //   3. Send a malformed line straight to the service: it answers with an error line and still serves a valid request.
@@ -16,6 +16,7 @@ uint64_t gfx_shader_cache_hits(void);
 void gfx_shader_drop_memory(void);
 
 #define WANT 32
+#define WANT_GRAPHICS 22   // 11 vertex and 11 fragment shaders of pick_entries
 #define CHECK(cond, ...) do { if (!(cond)) { printf("probe-shader: FAILED: " __VA_ARGS__); printf("\n"); return 1; } } while (0)
 
 typedef struct { char key[65]; int stage; const char *c1; size_t c1_len; uint32_t local[3]; } Entry;
@@ -48,7 +49,7 @@ static const char *str_field(const char *from, const char *to, const char *name,
 
 static int hexval(char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 
-// The repository root: the nearest parent of xcx.exe holding build/v121/shaders/jobs.json.
+// The repository root: the nearest parent of xcx.exe holding build/upd/shaders/jobs.json.
 static int find_root(char *root, size_t n) {
     char exe[PLAT_PATH_MAX * 2];
     int len = plat_exe_path(exe, sizeof exe);
@@ -56,7 +57,7 @@ static int find_root(char *root, size_t n) {
     for (char *cut = plat_last_sep(exe); cut; cut = plat_last_sep(exe)) {
         *cut = 0;
         char p[PLAT_PATH_MAX * 2 + 40];
-        snprintf(p, sizeof p, "%s/build/v121/shaders/jobs.json", exe);
+        snprintf(p, sizeof p, "%s/build/upd/shaders/jobs.json", exe);
         if (plat_file_exists(p)) return snprintf(root, n, "%s", exe) < (int)n;
     }
     return 0;
@@ -103,7 +104,7 @@ static const GfxShader *translate(const Entry *e, int *err) {
     uint8_t c1[8192], control[0x880] = {0};
     if (e->c1_len > sizeof c1) return *err = 1, NULL;
     for (size_t b = 0; b < e->c1_len; b++) c1[b] = (uint8_t)(hexval(e->c1[b * 2]) << 4 | hexval(e->c1[b * 2 + 1]));
-    snprintf(path, sizeof path, "%s/build/v121/shaders/code/%s.code", root, e->key);
+    snprintf(path, sizeof path, "%s/build/upd/shaders/code/%s.code", root, e->key);
     size_t body_size;
     char *body = slurp(path, &body_size);
     if (!body) return *err = 1, NULL;
@@ -137,14 +138,14 @@ static void remove_dir(const char *dir) {
 
 int probe_shader(void) {
     char path[PLAT_PATH_MAX * 2 + 64];
-    CHECK(find_root(root, sizeof root), "build/v121/shaders/jobs.json not found (run tools/shader_census.py)");
-    snprintf(path, sizeof path, "%s/build/v121/shaders/jobs.json", root);
+    CHECK(find_root(root, sizeof root), "build/upd/shaders/jobs.json not found (run tools/shader_census.py --played)");
+    snprintf(path, sizeof path, "%s/build/upd/shaders/jobs.json", root);
     size_t jobs_size;
     char *jobs = slurp(path, &jobs_size);
     CHECK(jobs, "cannot read %s", path);
     static Entry entries[WANT];
     int count = pick_entries(jobs, entries);
-    CHECK(count == WANT, "only %d census shaders usable", count);
+    CHECK(count >= WANT_GRAPHICS, "only %d census shaders usable", count);   // compute only when the game met some
 
     char dir[PLAT_PATH_MAX];
     char tmp[PLAT_PATH_MAX];
@@ -155,7 +156,7 @@ int probe_shader(void) {
     // pass 1: translate through the service
     const GfxShader *first[WANT];
     uint64_t req0 = gfx_shader_requests();
-    for (int i = 0; i < WANT; i++) {
+    for (int i = 0; i < count; i++) {
         int err = 0;
         first[i] = translate(&entries[i], &err);
         FAIL_IF(!first[i], "shader %s did not translate", entries[i].key);
@@ -163,15 +164,15 @@ int probe_shader(void) {
         const uint32_t *w = gfx_shader_spirv(first[i], &words);
         FAIL_IF(words < 5 || w[0] != 0x07230203, "shader %s: bad SPIR-V magic", entries[i].key);
     }
-    FAIL_IF(gfx_shader_requests() - req0 != WANT, "pass 1 sent %llu requests, expected %d",
-            (unsigned long long)(gfx_shader_requests() - req0), WANT);
+    FAIL_IF(gfx_shader_requests() - req0 != (uint64_t)count, "pass 1 sent %llu requests, expected %d",
+            (unsigned long long)(gfx_shader_requests() - req0), count);
 
     // pass 2: memory cache dropped, so every answer comes from the disk cache
     gfx_shader_drop_memory();
     req0 = gfx_shader_requests();
     uint64_t hits0 = gfx_shader_cache_hits();
     const GfxShader *second[WANT];
-    for (int i = 0; i < WANT; i++) {
+    for (int i = 0; i < count; i++) {
         int err = 0;
         second[i] = translate(&entries[i], &err);
         FAIL_IF(!second[i], "shader %s missing from the disk cache", entries[i].key);
@@ -181,10 +182,10 @@ int probe_shader(void) {
     }
     int hits = (int)(gfx_shader_cache_hits() - hits0);
     FAIL_IF(gfx_shader_requests() != req0, "pass 2 contacted the service");
-    FAIL_IF(hits != WANT, "pass 2 had %d cache hits", hits);
+    FAIL_IF(hits != count, "pass 2 had %d cache hits", hits);
 
     // pass 3: memory hits return the same pointer
-    for (int i = 0; i < WANT; i++) {
+    for (int i = 0; i < count; i++) {
         int err = 0;
         FAIL_IF(translate(&entries[i], &err) != second[i], "repeat call for %s returned another pointer", entries[i].key);
     }
@@ -206,7 +207,7 @@ int probe_shader(void) {
     *o = 0;
     const Entry *e = &entries[0];
     snprintf(line, sizeof line,
-             "{\"job\":{\"key\":\"%.64sa\",\"stage\":\"%s\",\"debug\":false,\"c1\":\"%.*s\",\"code\":\"%s/build/v121/shaders/code/%.64s.code\"},\"out\":\"%s\"}",
+             "{\"job\":{\"key\":\"%.64sa\",\"stage\":\"%s\",\"debug\":false,\"c1\":\"%.*s\",\"code\":\"%s/build/upd/shaders/code/%.64s.code\"},\"out\":\"%s\"}",
              e->key, e->stage == GFX_STAGE_VS ? "vs" : e->stage == GFX_STAGE_FS ? "ps" : "cs", (int)(e->c1_len * 2), e->c1,
              esc_root, e->key, dir_json);
     FAIL_IF(!gfx_shader_raw_request(line, reply, sizeof reply), "service did not answer a valid request after the malformed one");

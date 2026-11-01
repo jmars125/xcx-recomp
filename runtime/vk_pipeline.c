@@ -3123,7 +3123,7 @@ void vk_pipeline_shutdown(void) {
     plat_mutex_unlock(&P.lock);
 }
 
-// ---- self-test: census shaders (build/v121/shaders, tools/shader_census.py) through gfx_shader_get into pipelines.
+// ---- self-test: census shaders (build/upd/shaders, tools/shader_census.py) through gfx_shader_get into pipelines.
 // Graphics pairs are a fragment shader and a vertex shader of the same source file, spread over the census; compute
 // shaders are spread the same way. Every pipeline is built twice (the second call must hit the cache) and the
 // dynamic state of the first graphics pipeline is recorded into a throwaway command buffer.
@@ -3153,7 +3153,7 @@ static int census_cmp(const void *x, const void *y) {
 
 static char *census_read(const char *root, size_t *size) {
     char path[PLAT_PATH_MAX * 2 + 64];
-    snprintf(path, sizeof path, "%s/build/v121/shaders/jobs.json", root);
+    snprintf(path, sizeof path, "%s/build/upd/shaders/jobs.json", root);
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     fseek(f, 0, SEEK_END);
@@ -3200,7 +3200,7 @@ static const GfxShader *census_shader(const char *root, const CensusEntry *e) {
     uint8_t control[0x880] = {0};
     if (e->c1_len > sizeof c1) return NULL;
     for (size_t b = 0; b < e->c1_len; b++) c1[b] = (uint8_t)(hexv(e->c1[b * 2]) << 4 | hexv(e->c1[b * 2 + 1]));
-    snprintf(path, sizeof path, "%s/build/v121/shaders/code/%.64s.code", root, e->key);
+    snprintf(path, sizeof path, "%s/build/upd/shaders/code/%.64s.code", root, e->key);
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     fseek(f, 0, SEEK_END);
@@ -3227,7 +3227,7 @@ static int census_root(char *root, size_t n) {
     for (char *cut = plat_last_sep(exe); cut; cut = plat_last_sep(exe)) {
         *cut = 0;
         char p[PLAT_PATH_MAX * 2 + 40];
-        snprintf(p, sizeof p, "%s/build/v121/shaders/jobs.json", exe);
+        snprintf(p, sizeof p, "%s/build/upd/shaders/jobs.json", exe);
         if (plat_file_exists(p)) return snprintf(root, n, "%s", exe) < (int)n;
     }
     return 0;
@@ -3287,7 +3287,7 @@ int vk_pipeline_selftest(void) {
     enum { MAXN = 20000, WANT_PAIRS = 64, WANT_CS = 16 };
     char root[PLAT_PATH_MAX * 2];
     if (!vk_init() || !ensure_init()) { printf("vk_pipeline selftest: FAILED: no Vulkan device\n"); return 1; }
-    if (!census_root(root, sizeof root)) { printf("vk_pipeline selftest: FAILED: build/v121/shaders/jobs.json not found\n"); return 1; }
+    if (!census_root(root, sizeof root)) { printf("vk_pipeline selftest: FAILED: build/upd/shaders/jobs.json not found\n"); return 1; }
     size_t size;
     char *jobs = census_read(root, &size);
     CensusEntry *e = malloc(sizeof *e * MAXN);
@@ -3353,7 +3353,7 @@ int vk_pipeline_selftest(void) {
            (unsigned long long)(st.push_layouts - st0.push_layouts), (unsigned long long)(st.hits - st0.hits), recorded,
            errors);
     free(pairs), free(cs), free(e), free(jobs);
-    int ok = built > 0 && cbuilt > 0 && cached && recorded && errors == 0;
+    int ok = built > 0 && (cbuilt > 0 || !nc) && cached && recorded && errors == 0;   // compute only when the game met some
     printf("vk_pipeline selftest: %s\n", ok ? "passed" : "FAILED");
     return ok ? 0 : 1;
 }
