@@ -130,11 +130,11 @@ void res_init(void) {
     rt_log("resolution: %ux%u (handheld %ux%u)", want[0], want[1], want[2], want[3]);
 }
 
-// One side of the scene at <pct> percent, as main+0x9dc9f4 sizes it: cut to an even number, then up to a multiple of 8.
-static unsigned scene_side(unsigned side, unsigned pct) {
-    if (!pct || pct >= 100) return side;
-    unsigned s = (side * pct / 100 + 1) & ~1u;
-    s = (s + 7) & ~7u;
+// One side of the scene at this scale, as main+0x9dc9f4 sizes it: up to a multiple of 8. The patch page holds 0 until
+// the first frame.
+static unsigned scene_side(unsigned side, float scale) {
+    if (!(scale > 0) || scale >= 1) return side;
+    unsigned s = ((unsigned)((float)side * scale) + 7) & ~7u;
     return s < side ? s : side;
 }
 
@@ -142,6 +142,12 @@ void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
     out[0] = R.on ? R.ow : BASE_W, out[1] = R.on ? R.oh : BASE_H;
     uint8_t *page = rt_patch_page();
-    uint32_t used = page ? __atomic_load_n((uint32_t *)(page + 0x5c), __ATOMIC_RELAXED) : 0;   // the patch set sceneread
-    scene[0] = scene_side(out[0], used & 0xff), scene[1] = scene_side(out[1], used >> 8 & 0xff);
+    uint32_t used[2] = {0, 0};   // the patch set sceneread
+    if (page) {
+        used[0] = __atomic_load_n((uint32_t *)(page + 0x60), __ATOMIC_RELAXED);
+        used[1] = __atomic_load_n((uint32_t *)(page + 0x64), __ATOMIC_RELAXED);
+    }
+    float scale[2];
+    memcpy(scale, used, sizeof scale);
+    scene[0] = scene_side(out[0], scale[0]), scene[1] = scene_side(out[1], scale[1]);
 }

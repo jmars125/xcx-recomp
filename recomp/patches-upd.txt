@@ -88,8 +88,8 @@ site scene main 9dc8c0 91009028 @page:x8 91016108
 site scene main 9dc8c4 9100a029 91000109
 set scenefull XCX_RENDER_SCALE 0
 site scenefull main 9dc8b4 39400028 2a1f03e8
-# sceneread: the page's +0x5c keeps the scale in use, the word the game stores at +0xc0 (width percent | height percent
-# << 8), for the overlay (resolution.c res_sizes). x10 and x9 are free here: only w8 is returned, then the function ends.
+# sceneread: the page's +0x60 and +0x64 keep the scale in use, for the overlay (resolution.c res_sizes). Every path of
+# main+0x9dc89c arrives here with the scale main+0x9dc9f4 sizes the scene by in s1 (width) and s0 (height); the percents
+# stored after this are cut once more and can be one lower. x9 is written by the next instruction anyway.
 set sceneread XCX_SCENE_READ 1
-site sceneread main 9dc9c4 b900c009 b900c009 @page:x10 b9005d49
-site sceneread main 9dc9ec b900c008 b900c008 @page:x9 b9005d28
+site sceneread main 9dc9a8 52a85909 @page:x9 2d0c0121 52a85909
