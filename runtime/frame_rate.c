@@ -108,15 +108,21 @@ int frame_rate_paced(void) { return xcx_words != NULL; }
 // ahead of the picture at 120 fps). A movie is a live host decoder (ov_movie.c movie_playing). The game's event state, a 32-bit field at
 // main+0x1fefaf4 (+0xcc of the object at main+0x1fefa28, getter main+0xcc5a0), is 0 in normal play and 2 or more
 // while a cutscene plays, as the 1.0.1 60FPS mod's cheat reads it (1.0.1 main+0x1ffeaf4). XCX_CUTSCENE_30=0 keeps the
-// limit in cutscenes.
+// limit in cutscenes; XCX_CUTSCENE_30=mixed keeps it in state 3 and runs 30 fps in state 4 and in movies only, as the
+// mod's "60-30FPS Cutscenes" variant (its cheat: state 3 one vsync per frame, state 4 two).
 static int xcx_cutscene(void) {
-    static int on = -1;
-    if (on < 0) {
+    static int mode = -1;   // 0 off, 1 every cutscene, 2 mixed
+    if (mode < 0) {
         const char *e = cfg_get("XCX_CUTSCENE_30");
-        on = !e || strcmp(e, "0") != 0;
+        mode = !e ? 1 : !strcmp(e, "mixed") ? 2 : strcmp(e, "0") != 0;
     }
+    if (!mode) return 0;
+    if (movie_playing()) return 1;
     uint32_t state;
-    return on && (movie_playing() || (plat_mem_read(MOD_MAIN_BASE + 0x1fefaf4, &state, 4) && state >= 2));
+    if (!plat_mem_read(MOD_MAIN_BASE + 0x1fefaf4, &state, 4)) return 0;
+    static uint32_t last = 0;
+    if (state != last) rt_log("frame rate: event state %u -> %u", last, state), last = state;
+    return mode == 2 ? state == 4 : state >= 2;
 }
 
 void frame_step_init(void) {
