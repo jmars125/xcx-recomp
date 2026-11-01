@@ -139,9 +139,47 @@ bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0
 - The window follows `LANG` for English or Russian, cancels through SIGTERM to the CLI's process group (the CLI handles
   it as Ctrl+Break on Windows) and opens the finished folder with `xdg-open`.
 - Requirements beyond Windows': Linux 6.7 or later (the write watch, `docs/building.md`) and glibc 2.34.
-- Building the release needs one game version extracted and lifted (`tools/extract.py`, `recomp/gen.py`, either
-  version): the runtime library includes the generated `layout.h`, whose shared part (`MOD_COUNT`, `MOD_MAIN_BASE`)
-  is the same for both. `tools/make_release.py` takes `generated/v121`, else `generated/v143`.
+
+## Making a release
+
+`.github/workflows/release.yml` builds both packages with no game files. `libxcxrt.a` takes `MOD_COUNT` and
+`MOD_MAIN_BASE`, all the runtime reads of the module layout, from `tools/runtime-layout/layout.h`; nothing game-derived
+reaches a runner or a package.
+
+Each run builds `XCX-Setup-<version>-windows.zip` on Windows and `XCX-Setup-<version>-linux.AppImage` on Linux, with
+`check_content`, the check-only installer pass and the window's `--selftest` inside `tools/make_release.py` and
+`tools/make_release_linux.py`. Runners have no GPU, so the host check runs on Mesa's CPU Vulkan driver
+(`.github/actions/software-vulkan`). A second runner then unpacks each package and repeats those checks
+(`tools/check_release.py`). Downloads are cached from `toolchain/release-dl/`.
+
+For a test build, start the Release workflow on a branch from the Actions tab (or `gh workflow run release.yml --ref
+<branch>`). The packages are the run's artifacts.
+
+For a release:
+
+1. On the release branch, bump `VERSION` and push.
+2. Tag that commit `v<VERSION>` and push the tag. A tag that differs from `VERSION` stops the run. A passing run
+   creates a draft release with both packages and generated notes.
+3. Prove the packages locally. `--prove` reads `generated/upd` and `build/extracted/upd`, which are game-derived, so it
+   never runs on a runner. Download both packages from the draft, then:
+
+   ```sh
+   # Windows, with the zip unpacked to build/release/XCX-Setup
+   .venv-py314\Scripts\python tools\make_release.py --out build/release/XCX-Setup --prove
+   # Linux or WSL: run the AppImage with --appimage-extract, move squashfs-root to build/release/XCX-Setup-linux
+   .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
+   ```
+
+   `--probe-vkexec` and `--probe-shader` read `build/v121/shaders/jobs.json` (`runtime/vk_exec_probe.c`,
+   `runtime/gfx_shader_probe.c`). Without that 1.2.1 census they fail on every package and `--prove` exits with an
+   error, so read the build and the `--probe-kernel` and `--probe-nvn-tex` lines.
+
+4. Install from both packages with real game files and play the build.
+5. Publish the draft (a person, on the release page or with `gh release edit v<VERSION> --draft=false --latest`), then
+   merge the release branch.
+
+Without Actions, the same two scripts build the packages locally; on Windows run `tools/build_hactool.py` and
+`tools/build_xlate.py` first (`tools/make_release.py` copies their output).
 
 ## Constraints
 

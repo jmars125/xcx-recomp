@@ -23,9 +23,13 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
 release, or the TotK Recomp release whose bin/totk_xlate.exe is the same translator) instead of downloading and
 unpacking them; runtime/, the sources and the launcher are still built from this checkout.
 
+Assembling the folder reads no game files, so it runs on a CI runner (.github/workflows/release.yml), after
+tools/build_hactool.py and tools/build_xlate.py: libxcxrt.a takes the module layout from tools/runtime-layout.
+
 --prove compiles generated/upd and links build/release-check/xcx.exe with nothing but the folder's python/, llvm/,
 runtime/ and bin/ (PATH holds the Windows system directory and those), then runs the four probes there. It needs a
-generated/upd and build/extracted/upd from the usual game build (they are read, nothing is written to them).
+generated/upd and build/extracted/upd from the usual game build (they are read, nothing is written to them), so it is a
+local step, never CI's. It takes an existing folder: one unpacked from a CI build works.
 
 The folder contains nothing derived from the game: check_content runs over it before the script finishes. Then the
 folder's own python runs a check-only installer pass (no game files: it must get through the release, toolchain and host
@@ -103,6 +107,7 @@ LLVM_SKIP_SUFFIXES = {'.idl', '.tlb'}
 # tools/ files the installer steps run (and what they import), copied from the repo.
 TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'package_select.py', 'romfs_index.py']
 TOOLS_DIRS = ['vendor/macnativegames', 'data']   # data/: expected hashes
+RUNTIME_LAYOUT = ROOT / 'tools' / 'runtime-layout'   # build_game.py --gen of libxcxrt.a
 RUNTIME_SUFFIXES = {'.h', '.inc', '.ico'}   # .ico: the installer window icon
 
 VERSION_TAG = 'upd'   # installer/layout.py version_tag: the generated/ and build/extracted/ name of 2.0.0
@@ -187,6 +192,24 @@ def mib(n):
 
 def dir_size(p):
     return sum(f.stat().st_size for f in Path(p).rglob('*') if f.is_file())
+
+
+def mng_license():
+    """MacNativeGames' licence: from refs/ when it is checked out, else the copy beside its vendored extractors."""
+    ref = MAIN_ROOT / 'refs' / 'MacNativeGames' / 'LICENSE'
+    return ref if ref.is_file() else ROOT / 'tools' / 'vendor' / 'macnativegames' / 'LICENSE'
+
+
+def check_runtime_layout(gen):
+    """The two values libxcxrt.a was built with (tools/runtime-layout/layout.h) match the game's generated layout.h."""
+    def defines(path):
+        return dict(line.split()[1:3] for line in path.read_text(encoding='utf-8').splitlines()
+                    if line.startswith('#define '))
+
+    built, game = defines(RUNTIME_LAYOUT / 'layout.h'), defines(gen / 'layout.h')
+    bad = [name for name in built if game.get(name) != built[name]]
+    if bad:
+        sys.exit(f'{RUNTIME_LAYOUT / "layout.h"} and {gen / "layout.h"} disagree on {bad}')
 
 
 # ---- python/ -------------------------------------------------------------------------------------------------------
@@ -326,7 +349,7 @@ def collect_licenses(out):
         (unpack('zstd') / 'ucrt64' / 'share' / 'licenses' / 'zstd' / 'LICENSE', 'zstd-LICENSE.txt'),
         (ROOT / 'runtime' / 'shaders' / 'ffx' / 'LICENSE.txt', 'FidelityFX-FSR-LICENSE.txt'),
         (MAIN_ROOT / 'toolchain' / 'hactool' / 'LICENSE', 'hactool-LICENSE.txt'),
-        (MAIN_ROOT / 'refs' / 'MacNativeGames' / 'LICENSE', 'MacNativeGames-LICENSE.txt'),
+        (mng_license(), 'MacNativeGames-LICENSE.txt'),
     ]
     for src, name in pairs:
         shutil.copy2(src, lic / name)
@@ -359,8 +382,8 @@ def runtime_lib(out, llvm):
     build = MAIN_ROOT / 'build' / 'release-check' / 'rtlib'
     run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', VERSION_TAG,
          '--expected', ROOT / 'tools' / 'data' / EXPECTED, '--toolchain', llvm,
-         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--out', build],
-        env=clean_env(llvm / 'bin', out / 'bin'))
+         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--gen', RUNTIME_LAYOUT,
+         '--out', build], env=clean_env(llvm / 'bin', out / 'bin'))
     rt = out / 'runtime'
     shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
     for p in sorted((ROOT / 'runtime').rglob('*')):
@@ -494,6 +517,7 @@ def prove(out):
     gen = MAIN_ROOT / 'generated' / VERSION_TAG
     ext = MAIN_ROOT / 'build' / 'extracted' / VERSION_TAG
     chk = MAIN_ROOT / 'build' / 'release-check'
+    check_runtime_layout(gen)
     env = clean_env(out / 'python', out / 'llvm' / 'bin', out / 'bin')
     t0 = time.time()
     run([out / 'python' / 'python.exe', out / 'tools' / 'build_game.py', '--version', VERSION_TAG,
