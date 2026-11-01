@@ -13,9 +13,14 @@
 // 3840x2160, 1920x1080 at 2560x1440, none at 5160x2160). The patch set "resbuf" (recomp/patches-upd.txt) loads them
 // from the patch page's +0x50 and +0x54 instead: XCX_RES_BUFFER = <w>x<h> switches it on, unset keeps the game's.
 //
-// XCX_RENDER_SCALE is TotK Recomp's scene size and has no counterpart here: XCX scales its 3D scene itself.
+// XCX_RENDER_SCALE sets the share of the game resolution the 3D scene draws in. The game picks that share itself by
+// dynamic resolution (at 100 % in every run so far, even at 19 fps), only inside its full-size render targets, so a scale
+// above 100 would draw outside them: the patch sets "scene" and "scenefull" (recomp/patches-upd.txt) replace the game's
+// share with a fixed smaller or a whole one, and a higher value counts as 100. "game" keeps the dynamic one. Supersampling
+// is a game resolution above the window's.
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cfg.h"
@@ -31,6 +36,7 @@ static struct {
     int decided;
     unsigned ow, oh;   // output (docked)
     int on;            // res_init wrote the table
+    int scale;         // XCX_RENDER_SCALE in percent, 0 for the game's own
 } R;
 
 static int parse(const char *s, unsigned *w, unsigned *h) {
@@ -51,6 +57,29 @@ static void decide(void) {
     } else {
         rt_log("resolution: XCX_OUTPUT_RES=%s is not <width>x<height> in 640x360..7680x4320; 1920x1080", o);
     }
+    const char *s = cfg_value("XCX_RENDER_SCALE");
+    int pct = s ? atoi(s) : 0;
+    if (pct >= 25) {
+        R.scale = pct > 100 ? 100 : pct;
+    } else if (s && strcmp(s, "game")) {
+        rt_log("resolution: XCX_RENDER_SCALE=%s is not game or a percentage from 25; the game's own", s);
+    }
+}
+
+// Switches the game's scene scale for XCX_RENDER_SCALE; unset keeps the game's.
+static void scene_scale(void) {
+    int part = rt_patch_set("scene"), full = rt_patch_set("scenefull");
+    uint8_t *page = rt_patch_page();
+    if (part < 0 || full < 0 || !page) {
+        if (R.scale) rt_log("resolution: this build has no 3D render scale; the game's own");
+        R.scale = 0;
+    } else {
+        float f = R.scale / 100.0f;
+        memcpy(page + 0x58, &f, sizeof f);
+        if (R.scale) rt_log("resolution: 3D render scale %d %%", R.scale);
+    }
+    rt_patch_switch(part, R.scale && R.scale < 100);
+    rt_patch_switch(full, R.scale == 100);
 }
 
 // TotK Recomp grows the texture heap through its HeapDef table; XCX has no such table, and the 1.0.1 mods run at
@@ -66,8 +95,7 @@ void res_heapdef_served(void) {}
 
 void res_init(void) {
     decide();
-    const char *s = cfg_value("XCX_RENDER_SCALE");
-    if (s && strcmp(s, "game")) rt_log("resolution: XCX_RENDER_SCALE=%s has no effect; XCX scales its 3D scene itself", s);
+    scene_scale();
     uint32_t table[4];
     if (!plat_mem_read(TABLE, table, sizeof table) || table[0] != BASE_W || table[1] != BASE_H || table[2] != 1280 ||
         table[3] != 720) {
@@ -102,8 +130,18 @@ void res_init(void) {
     rt_log("resolution: %ux%u (handheld %ux%u)", want[0], want[1], want[2], want[3]);
 }
 
+// One side of the scene at <pct> percent, as main+0x9dc9f4 sizes it: cut to an even number, then up to a multiple of 8.
+static unsigned scene_side(unsigned side, unsigned pct) {
+    if (!pct || pct >= 100) return side;
+    unsigned s = (side * pct / 100 + 1) & ~1u;
+    s = (s + 7) & ~7u;
+    return s < side ? s : side;
+}
+
 void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
     out[0] = R.on ? R.ow : BASE_W, out[1] = R.on ? R.oh : BASE_H;
-    scene[0] = out[0] * 5 / 6, scene[1] = out[1] * 5 / 6;
+    uint8_t *page = rt_patch_page();
+    uint32_t used = page ? __atomic_load_n((uint32_t *)(page + 0x5c), __ATOMIC_RELAXED) : 0;   // the patch set sceneread
+    scene[0] = scene_side(out[0], used & 0xff), scene[1] = scene_side(out[1], used >> 8 & 0xff);
 }

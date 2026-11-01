@@ -55,8 +55,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                 "more video memory and GPU time.",
     [UI_MENU_RENDER_SCALE] = "3D render scale",
     [UI_MENU_RENDER_SCALE_DESC] = "Size of the 3D scene relative to the game resolution; the game's FSR scales it to "
-                                  "that size. Above 100 % smooths jagged edges (supersampling) at a high GPU cost.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Game (83 %)",
+                                  "that size. Game leaves it to the game's dynamic resolution; a percentage fixes it. "
+                                  "For supersampling, set the game resolution above the window's. Takes effect after "
+                                  "a restart.",
+    [UI_MENU_RENDER_SCALE_GAME] = "Game (dynamic)",
     [UI_MENU_UPSCALER] = "Scaling to the window",
     [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
                               "edges and detail sharper than bilinear.",
@@ -287,8 +289,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                 "видеопамяти и времени GPU.",
     [UI_MENU_RENDER_SCALE] = "Масштаб 3D-отрисовки",
     [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до этого размера. "
-                                  "Выше 100 % сглаживает лесенки на краях (суперсэмплинг) ценой большой нагрузки на GPU.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (83 %)",
+                                  "«Как в игре» оставляет его динамическому разрешению игры; процент фиксирует его. "
+                                  "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
+                                  "перезапуска.",
+    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (динамически)",
     [UI_MENU_UPSCALER] = "Масштабирование под окно",
     [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
                               "детали чётче билинейного.",

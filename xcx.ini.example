@@ -118,8 +118,9 @@
 # Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
 # game's texture heap and memory pool grow with it. Read at start.
 # output_res = 1920x1080
-# 3D render scale: the scene's size relative to the game resolution, game (5/6, the game's own 1600x900 at 1080p) or
-# a percentage (25 to 400, at most 4096 pixels a side); above 100 supersamples the scene (anti-aliasing). Read at start.
+# 3D render scale: the scene's size relative to the game resolution: game (its dynamic resolution) or a fixed
+# percentage from 25 to 100; a higher one counts as 100. For supersampling, set output_res above window_size. Read at
+# start.
 # render_scale = game
 # Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
 # from 0 (off) to 100. Changes while the game runs take effect at once.

@@ -428,7 +428,7 @@ static void row_output_res(void) {
 }
 
 static void row_render_scale(void) {
-    static const char *const vals[] = {"game", "50", "67", "75", "100", "125", "150", "200"};
+    static const char *const vals[] = {"game", "50", "67", "75", "100"};
     enum { N = sizeof vals / sizeof *vals };
     char shown[N][32];
     const char *names[N];

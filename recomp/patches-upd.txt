@@ -72,3 +72,24 @@ site xcx60m main 13a28ac 2a1f03e0 52800020
 set resbuf XCX_RES_BUFFER 0
 site resbuf main 9cccec b9400114 @page:x8 b9405114
 site resbuf main 9ccd00 b9400115 @page:x8 b9405515
+
+# The 3D render scale (issue #33). The game runs dynamic resolution: each frame main+0x97730c compares the time from
+# main+0x13a28dc with a target and steps a level from 0 to 10, which moves the scale of its record (renderer +0x528) from
+# a maximum (+0x14, +0x18) to a minimum (+0x1c, +0x20), all read from /monolib/shader/lib_nx.ini. Then the renderer
+# (main+0x971c00) has main+0x9dc89c take the current scale, the record's floats at +0x24 (width) and +0x28 (height), cut
+# to whole percents; with scaling off in the record it is 1, with main+0x9dc980 as the exit. The scene draws in that part
+# of its full-size targets, and the game's FSR pass scales it up.
+# scene: both pointers go to the patch page's +0x58, one float, the scale XCX_RENDER_SCALE asks for. x8 and x9 are
+# what the next instructions load through, so nothing else reads them.
+# scenefull: the enable byte reads as 0, the game's own unscaled path. 100 % goes this way because main+0x9dc9f4 rounds
+# a scaled size up to a multiple of 8, past the target at a height of 900 or 1800.
+set scene XCX_RENDER_SCALE 0
+site scene main 9dc8c0 91009028 @page:x8 91016108
+site scene main 9dc8c4 9100a029 91000109
+set scenefull XCX_RENDER_SCALE 0
+site scenefull main 9dc8b4 39400028 2a1f03e8
+# sceneread: the page's +0x5c keeps the scale in use, the word the game stores at +0xc0 (width percent | height percent
+# << 8), for the overlay (resolution.c res_sizes). x10 and x9 are free here: only w8 is returned, then the function ends.
+set sceneread XCX_SCENE_READ 1
+site sceneread main 9dc9c4 b900c009 b900c009 @page:x10 b9005d49
+site sceneread main 9dc9ec b900c008 b900c008 @page:x9 b9005d28
