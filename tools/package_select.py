@@ -2,11 +2,13 @@
 
 The vendored program_nca() accepts one content set only. A combined XCI carries the base set and an update set (its
 Meta NCA under the update title ID, its Program NCA a BKTR patch). base_records() drops the update set so the base
-checks run unchanged; install() puts that in front of the vendored program_nca() for scripts run from it."""
-import extract_exefs
+checks run unchanged; run() puts that in front of the vendored program_nca() for the vendored scripts it starts."""
+import importlib
+import runpy
+from pathlib import Path
 
+VENDOR = Path(__file__).resolve().parent / 'vendor' / 'macnativegames'
 BASE_TITLE = '0100453019AA8000'
-_vendor_program_nca = extract_exefs.program_nca
 
 
 def is_bktr(hdr):
@@ -25,8 +27,19 @@ def base_records(records):
 
 
 def program_nca(records, update=False):
-    return _vendor_program_nca(records if update else base_records(records), update=update)
+    import extract_exefs
+    return extract_exefs.program_nca(records if update else base_records(records), update=update)
 
 
-def install():
-    extract_exefs.program_nca = program_nca
+def run(path):
+    """Run the script at path as __main__. A vendored script is imported and its main() called instead, after its
+    module's program_nca is replaced: runpy would define a fresh, unreplaced program_nca in __main__."""
+    path = Path(path).resolve()
+    if path.parent != VENDOR:
+        runpy.run_path(str(path), run_name='__main__')
+        return
+    import extract_exefs
+    vendor_program_nca = extract_exefs.program_nca
+    extract_exefs.program_nca = lambda records, update=False: vendor_program_nca(
+        records if update else base_records(records), update=update)
+    importlib.import_module(path.stem).main()
