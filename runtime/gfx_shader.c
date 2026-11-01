@@ -26,7 +26,7 @@
 // Reflection: every shader that enters the cache has its .res.json parsed into GfxShaderRes arrays and its SPIR-V
 // scanned for interface Locations and the workgroup size (gfx.h accessors at the end of the file).
 //
-// Provenance: the c2 handle ranges of handle_slot are those of MacNativeGames' xcx_xlate Service.cs (MIT).
+// Provenance: the c2 handle ranges of handle_slot are those of MacNativeGames' totk_xlate Service.cs (MIT).
 // The code layout the translator sees (graphics: code[0x30..], compute: code[0..]; c1 = code[c1..length]
 // with c1 and length at control+0x700) follows tools/shader_census.py, itself MacNativeGames' xcx shader tooling (MIT).
 #include <ctype.h>
