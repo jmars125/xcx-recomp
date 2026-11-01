@@ -1170,6 +1170,7 @@ static MirrorAcc macc;                 // mirror_stat_lock: since the last summa
 static PlatMutex mirror_stat_lock = PLAT_MUTEX_INIT;
 static volatile int64_t m_live_n, m_live_bytes, m_refused_n[MR_N], m_refused_bytes[MR_N];
 static volatile int64_t m_host_n, m_host_bytes;   // mirrors in host memory (counted apart from m_live_*)
+static volatile int64_t m_host_logged;            // all of them ever made: caps the log line in mirror_create
 static volatile int64_t m_flush_calls, m_flush_bytes, v_pages, v_skipped, v_mismatch;
 
 static void mirror_mode(int discrete) {
@@ -1321,7 +1322,8 @@ static void mirror_create(PoolRec *r) {
         return refuse(r, MR_ALLOC, why);
     }
     r->mhost = (uint8_t)host;
-    if (host && plat_inc64(&m_host_n) <= 4)
+    if (host) plat_inc64(&m_host_n);
+    if (host && plat_inc64(&m_host_logged) <= 4)   // short-lived small pools come back all session long
         rt_log("mem: pool %#llx+%#llx gets its mirror in host memory: its %.1f MiB do not fit the VRAM budget (%.0f of "
                "%.0f MiB in use)", (unsigned long long)r->lo, (unsigned long long)r->size, n / 1048576.0,
                used / 1048576.0, budget / 1048576.0);
