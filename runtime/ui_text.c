@@ -55,8 +55,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                 "more video memory and GPU time.",
     [UI_MENU_RENDER_SCALE] = "3D render scale",
     [UI_MENU_RENDER_SCALE_DESC] = "Size of the 3D scene relative to the game resolution; the game's FSR scales it to "
-                                  "that size. Above 100 % smooths jagged edges (supersampling) at a high GPU cost.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Game (83 %)",
+                                  "that size. Game leaves it to the game's dynamic resolution; a percentage fixes it. "
+                                  "For supersampling, set the game resolution above the window's. Takes effect after "
+                                  "a restart.",
+    [UI_MENU_RENDER_SCALE_GAME] = "Game (dynamic)",
     [UI_MENU_UPSCALER] = "Scaling to the window",
     [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
                               "edges and detail sharper than bilinear.",
@@ -216,6 +218,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "The validation layer is not installed.",
     [UI_MENU_VK_DYN_VERTEX] = "Dynamic vertex state",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "Forces dynamic vertex input on or off; the default depends on the GPU.",
+    [UI_MENU_VK_DYN_A2C] = "Dynamic alpha to coverage",
+    [UI_MENU_VK_DYN_A2C_DESC] = "Forces dynamic alpha to coverage on or off. Default: off on AMD's driver for RDNA 2 and "
+                                "older, which applies alpha to coverage while it is set off, on elsewhere.",
     [UI_MENU_VK_SUBGROUP_PIN] = "Pin subgroup size", [UI_MENU_VK_SUBGROUP_PIN_DESC] = "Fixes the shader subgroup size.",
     [UI_MENU_TRACE] = "Performance log", [UI_MENU_TRACE_DESC] = "Writes frame timings to a file.",
     [UI_MENU_FLIGHT] = "Flight recorder",
@@ -284,8 +289,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                 "видеопамяти и времени GPU.",
     [UI_MENU_RENDER_SCALE] = "Масштаб 3D-отрисовки",
     [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до этого размера. "
-                                  "Выше 100 % сглаживает лесенки на краях (суперсэмплинг) ценой большой нагрузки на GPU.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (83 %)",
+                                  "«Как в игре» оставляет его динамическому разрешению игры; процент фиксирует его. "
+                                  "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
+                                  "перезапуска.",
+    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (динамически)",
     [UI_MENU_UPSCALER] = "Масштабирование под окно",
     [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
                               "детали чётче билинейного.",
@@ -447,6 +454,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "Слой проверки не установлен.",
     [UI_MENU_VK_DYN_VERTEX] = "Динамическое состояние вершин",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "Принудительно включает или выключает динамический ввод вершин; по умолчанию зависит от GPU.",
+    [UI_MENU_VK_DYN_A2C] = "Динамический alpha to coverage",
+    [UI_MENU_VK_DYN_A2C_DESC] = "Принудительно включает или выключает динамический alpha to coverage. По умолчанию "
+                                "выключен на драйвере AMD для RDNA 2 и более старых GPU, который применяет alpha to "
+                                "coverage, даже когда он выключен, и включён на остальных.",
     [UI_MENU_VK_SUBGROUP_PIN] = "Фиксировать размер подгруппы",
     [UI_MENU_VK_SUBGROUP_PIN_DESC] = "Фиксирует размер подгруппы шейдера.",
     [UI_MENU_TRACE] = "Журнал производительности", [UI_MENU_TRACE_DESC] = "Пишет время кадров в файл.",

@@ -275,6 +275,17 @@ static int ensure_init(void) {
         P.dyn_wmask = e3.extendedDynamicState3ColorWriteMask && PROC(set_wmask, "vkCmdSetColorWriteMaskEXT");
         P.dyn_a2c = e3.extendedDynamicState3AlphaToCoverageEnable && PROC(set_a2c, "vkCmdSetAlphaToCoverageEnableEXT");
     }
+    // XCX_VK_DYN_A2C=0/1 forces dynamic alpha to coverage off or on. Default off on AMD's Windows driver branch for
+    // RDNA 2 and older (vk_caps.amd_sc), which applies alpha to coverage while the dynamic state says off: on an RX 590
+    // (24.9.1) TotK Recomp, whose game never turns it on, drew characters with depth but no colour (black silhouettes)
+    // and dithered other surfaces into checkerboards (TotK Recomp issue #67, RX 470/570/580). Taken out of the dynamic
+    // state, it goes into the pipeline key and the characters draw.
+    const char *da = cfg_get("XCX_VK_DYN_A2C");   // no fixed default: it depends on the driver, see above
+    int da_on = da && *da ? strcmp(da, "0") != 0 : !vk_caps.amd_sc;
+    if (!da_on && P.dyn_a2c) {
+        P.dyn_a2c = 0;
+        rt_log("vk_pipeline: dynamic alpha to coverage off (%s)", da && *da ? "XCX_VK_DYN_A2C=0" : "AMD's driver for RDNA 2 and older");
+    }
 #undef PROC
     static const VkDynamicState core[] = {
         VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT, VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT, VK_DYNAMIC_STATE_DEPTH_BIAS,
@@ -1837,6 +1848,7 @@ static struct {
 // record changes meaning without changing size.
 #define KEYS_VERSION 3                 // 3: shaders named by input id (gfx_shader.c)
 typedef struct { char magic[8]; uint32_t version, rec_size; } KeysHeader;
+#define KEYS_MAGIC "XCXPKEY"            // 8 bytes with its NUL: the writer and the reader use this one spelling
 typedef struct {
     uint8_t vs[32], fs[32];            // gfx_shader_input_id of each stage; fs all zero with has_fs 0
     uint32_t has_fs, pad;
@@ -1927,7 +1939,7 @@ static void keys_flush(void) {
         FILE *f = fopen(K.path, K.header_ok ? "ab" : "wb");
         int ok = f != NULL;
         if (ok && !K.header_ok) {
-            KeysHeader h = {{'T', 'O', 'T', 'K', 'P', 'K', 'E', 'Y'}, KEYS_VERSION, sizeof(KeyRec)};
+            KeysHeader h = {KEYS_MAGIC, KEYS_VERSION, sizeof(KeyRec)};
             ok = fwrite(&h, sizeof h, 1, f) == 1;
         }
         if (ok) ok = fwrite(r, sizeof *r, n, f) == n;
@@ -1954,7 +1966,7 @@ static void keys_open(void) {
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "XCXPKEY", 8) &&
+    if (len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, KEYS_MAGIC, 8) &&
         h.version == KEYS_VERSION && h.rec_size == sizeof(KeyRec)) {
         K.header_ok = 1;
         size_t n = ((size_t)len - sizeof h) / sizeof(KeyRec);
