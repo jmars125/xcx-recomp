@@ -147,7 +147,7 @@ TOOLCHAIN_BIN = None   # llvm-mingw bin directory, set by main() for --toolchain
 DEPS = None            # the deps directory of an llvm-mingw build
 # tools/data/expected-<display version>.json for each build version name.
 DISPLAY_VERSIONS = {'v0': '1.0.0', 'v112': '1.1.2', 'v121': '1.2.1', 'v143': '1.4.3'}
-# The game version the menu shows. XCX 2.0.0 (upd) keeps rt_game_version 0: the runtime's 121/143 branches are XCX's.
+# The game version the menu shows. XCX 2.0.0 (upd) keeps rt_game_version 0: the runtime's 121/143 branches are TotK's.
 GAME_NAMES = {**DISPLAY_VERSIONS, 'upd': '2.0.0'}
 
 GiB = 1 << 30

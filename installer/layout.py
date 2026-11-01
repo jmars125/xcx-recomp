@@ -137,7 +137,7 @@ def dev_layout(root):
             llvm=tools / 'llvm', deps=tools / 'runtime' / 'deps', runtime=root / 'runtime',
             runtime_lib=root / 'build' / 'install-rtlib' / 'libxcxrt.a',
             ninja=tools / 'bin' / ('ninja' + EXE), hactool=tools / 'bin' / ('hactool' + EXE),
-            xlate=tools / 'bin' / ('xcx_xlate' + EXE), dlls=release_dlls(tools),
+            xlate=tools / 'bin' / ('totk_xlate' + EXE), dlls=release_dlls(tools),
             ini_example=root / 'xcx.ini.example', temp=root / 'build' / 'install-temp')
     return Layout(
         root=root, dev=True, release=f'{semver}-dev+{commit or "unknown"}',

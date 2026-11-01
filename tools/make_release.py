@@ -20,7 +20,7 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     XCX-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
 
 --from DIR takes python/, llvm/, runtime/deps/, bin/ and licenses/ from an unpacked earlier release (an XCX Recomp
-release, or the XCX Recomp release whose bin/xcx_xlate.exe is the same translator) instead of downloading and
+release, or the TotK Recomp release whose bin/totk_xlate.exe is the same translator) instead of downloading and
 unpacking them; runtime/, the sources and the launcher are still built from this checkout.
 
 --prove compiles generated/upd and links build/release-check/xcx.exe with nothing but the folder's python/, llvm/,
@@ -335,14 +335,14 @@ def collect_licenses(out):
 
 def take_prebuilt(out, src):
     """python/, llvm/, runtime/deps/, bin/ and licenses/ copied from the unpacked release src. The translator is renamed
-    to xcx_xlate when src is the XCX Recomp release."""
+    to xcx_xlate when src is the TotK Recomp release."""
     for d in ('python', 'llvm', 'licenses'):
         copy_tree(src / d, out / d, lambda r: '__pycache__' in r)
     copy_tree(src / 'runtime' / 'deps', out / 'runtime' / 'deps')
     (out / 'bin').mkdir(parents=True, exist_ok=True)
     for name in ('hactool.exe', 'ninja.exe', 'SDL3.dll', 'libopus-0.dll'):
         shutil.copy2(src / 'bin' / name, out / 'bin' / name)
-    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'xcx_xlate'
+    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'totk_xlate'
     for ext in ('.exe', '.id'):
         shutil.copy2(src / 'bin' / (stem + ext), out / 'bin' / ('xcx_xlate' + ext))
     return out / 'llvm'
