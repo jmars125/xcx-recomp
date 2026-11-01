@@ -69,18 +69,22 @@ static void step_store(float seconds) {
 static void frame_limit_live(void);
 
 // XCX 2.0.0 (recomp/patches-upd.txt, set xcx60): the game runs one vsync per frame and its vsync period, frame-rate
-// pick and 1/30 s constant read the patch page, +0x40 the period 1 / limit and +0x44 the limit, so the game steps
-// 1 / limit per frame and the pacer shows frames at the limit; +0x4c is 30 / frame rate, the step of the updates that
-// count 30 fps frames. Written at start and when the limit changes; the guest
-// reads each word whole.
+// pick and 1/30 s constant read the patch page, +0x40 the period and +0x44 the rate, so the game steps one period per
+// frame; +0x4c is 30 / frame rate, the step of the updates that count 30 fps frames. In play the period is the
+// measured frame time (the 5-frame average of display intervals, at most 1/15 s, frame_step_present), so the game
+// keeps real time when frames miss the limit; in cutscenes it is 1/60 s with 2 vsyncs a frame, as on the console.
+// +0x48 is the game limiter's wait, the frame time of the limit; the pacer shows frames at the limit. The guest reads
+// each word whole.
 static int xcx_rate = -2;
 static _Atomic uint32_t *xcx_words;
+static int xcx_cut;   // a cutscene runs at 30 fps: the step stays 1/30 s
 
 static void xcx_rate_store(double hz, double fps) {   // hz: the game's vsync rate; fps: frames per second shown
     static double stored, stored_fps;
     if (hz == stored && fps == stored_fps) return;
     stored = hz;
     stored_fps = fps;
+    step_now = 1.0 / fps;
     float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(30.0 / fps);
     uint32_t r, p, t;
     memcpy(&r, &rate, 4);
@@ -89,6 +93,13 @@ static void xcx_rate_store(double hz, double fps) {   // hz: the game's vsync ra
     atomic_store_explicit(&xcx_words[0], p, memory_order_release);
     atomic_store_explicit(&xcx_words[1], r, memory_order_release);
     atomic_store_explicit(&xcx_words[3], t, memory_order_release);   // +0x4c
+}
+
+static void xcx_wait_store(double seconds) {
+    float w = (float)seconds;
+    uint32_t b;
+    memcpy(&b, &w, 4);
+    atomic_store_explicit(&xcx_words[2], b, memory_order_release);   // +0x48
 }
 
 // The game's frame interval in vsyncs (main+0x1d943a0, the variable of the setter main+0x13a2fd8; 1.0.1's
@@ -130,8 +141,10 @@ void frame_step_init(void) {
     if (rt_patch_enabled(xcx_rate)) {
         xcx_words = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 0x40);
         xcx_rate_store(60, 60);
+        xcx_wait_store(1.0 / 60);
         frame_limit_live();
-        rt_log("frame rate: one vsync per frame, the game's vsync period at the frame limit");
+        rt_log("frame rate: one vsync per frame, the game steps the measured frame time (5-frame average of display "
+               "intervals, at most 1/15 s)");
         return;
     }
     int fps60 = rt_patch_set("fps60"), realtime = rt_patch_set("realtime"), cloth = rt_patch_set("cloth");
@@ -208,9 +221,13 @@ uint64_t frame_step_cap_ns(void) {
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
     if (xcx_words) {   // every frame: the cutscene state, and for "display" the window's measured rate, which settles late
         int cut = hz > 30 && xcx_cutscene();
-        xcx_rate_store(cut ? 60 : hz, cut ? 30 : hz);
+        if (cut != xcx_cut) sample_count = sample_next = 0;   // the average starts again at the new rate
+        if (cut) xcx_rate_store(60, 30);
+        else if (xcx_cut || !sample_count) xcx_rate_store(hz, hz);   // until frame_step_present has samples again
+        xcx_cut = cut;
         xcx_interval_store(cut ? 2 : 1);
         if (cut) hz = 30;
+        xcx_wait_store(1.0 / hz);
     }
     return (uint64_t)(1e9 / hz + 0.5);
 }
@@ -318,7 +335,7 @@ static void world_clock(double dt, double step) {
 void frame_step_present(uint64_t display_ns, int interval) {
     frame_limit_live();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
-    if (step_word && last_ns) {
+    if ((step_word || xcx_words) && last_ns) {
         if (dt > STEP_RESET_S || dt < 0.001) {
             sample_count = sample_next = 0;
         } else {
@@ -328,13 +345,14 @@ void frame_step_present(uint64_t display_ns, int interval) {
             double sum = 0;
             for (unsigned i = 0; i < sample_count; i++) sum += samples[i];
             step = sum / sample_count;
-            step_store((float)step);
+            if (step_word) step_store((float)step);
+            else if (!xcx_cut) xcx_rate_store(1.0 / step, 1.0 / step);
         }
     }
     last_ns = display_ns;
     // The game clock of untimed script lines: what the game stepped this frame, the patch page's step with the
     // real-time step (kept through a reset), whole vsyncs without it.
-    double game = step_word ? step_now : (interval > 0 ? interval : 1) / 60.0;
+    double game = step_word || xcx_words ? step_now : (interval > 0 ? interval : 1) / 60.0;
     atomic_store_explicit(&game_us, atomic_load_explicit(&game_us, memory_order_relaxed) + (uint64_t)(game * 1e6 + 0.5),
                           memory_order_relaxed);
     world_clock(dt, step);
