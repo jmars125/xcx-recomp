@@ -1844,6 +1844,7 @@ void gfx_shader_prepare_recorded(int threads, int procs) {
 // ---- prepared variants (shader-prepared.bin next to pipeline-keys.bin)
 // "XCXSPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
 // them in priority order, one per input id; gfx_shader_warm_list reads them at boot.
+#define PRP_MAGIC "XCXSPRP"   // 8 bytes with its NUL: the writer and the reader use this one spelling
 #define PRP_VERSION 1
 #define PRP_REC 36
 
@@ -1870,7 +1871,7 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
         by[r[1]]++, stages[r[0]]++, u++;
     }
     free(seen.v);
-    RecHeader h = {{'T', 'O', 'T', 'K', 'S', 'P', 'R', 'P'}, PRP_VERSION, PRP_REC};
+    RecHeader h = {PRP_MAGIC, PRP_VERSION, PRP_REC};
     uint8_t *file = recs ? malloc(sizeof h + u * PRP_REC + 1) : NULL;
     int ok = file != NULL;
     if (ok) {
@@ -1902,7 +1903,7 @@ size_t gfx_shader_warm_list(GfxWarmEnt **out) {
     plat_mutex_lock(&rec_io);                      // no append meanwhile
     rec_read(RC.ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ab, &an);
     plat_mutex_unlock(&rec_io);
-    rec_read(prp, "XCXSPRP", PRP_VERSION, PRP_REC, &pb, &pn);
+    rec_read(prp, PRP_MAGIC, PRP_VERSION, PRP_REC, &pb, &pn);
     size_t na = an / ANS_REC, np = pn / PRP_REC, n = 0;
     GfxWarmEnt *e = calloc(na + np + 1, sizeof *e);
     Set64 seen = {0};
