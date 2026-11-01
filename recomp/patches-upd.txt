@@ -18,6 +18,11 @@ site xcx60 main 13db540 52800040 52800020
 # waits interval * period and the frame time is the same product. The patch page's +0x40 instead (frame_rate.c, the
 # frame limit XCX_FPS_LIMIT: 1 / limit), so one interval is one frame at the limit.
 site xcx60 main 13baa34 72a79108 @page:x8 b9404108
+# The limiter's wait, interval * that period (main+0x13a9af4, then * 0.998 and compared with the time since the last
+# frame): the page's +0x48 instead, the frame time of the limit (2/60 s in cutscenes). The period above follows the
+# measured frame time (frame_rate.c, the real-time step); waiting that long would hold every frame to the slowest
+# recent one. x8 is reloaded before its next use.
+site xcx60 main 13a9af4 1e210800 @page:x8 bd404900
 # The game's frame-rate pick, flag ? 60.0 : 30.0, then stored with its reciprocal (1.0.1 +0xa2ee5c): both arms the
 # limit, the page's +0x44 (x9 is free here: the next use loads it).
 site xcx60 main a1f05c 1e27d001 @page:x9 bd404521
