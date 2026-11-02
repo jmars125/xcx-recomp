@@ -659,19 +659,36 @@ NVN_API(nvnCommandBufferBindVertexBuffer) {
 #define UI_BIND_LR (MOD_MAIN_BASE + 0x95ce04)
 #define UI_FULL_WIDTH 1.9f
 static _Thread_local int ui_on_output, ui_in_rect;
+static _Thread_local uint64_t ui_pages[8];   // ui_readable's 64 KiB pages, plus one so that 0 means none
+
+// Whether a guest stack frame can be read. The walks below ask often, so each thread remembers the last pages it asked
+// about until the render target changes.
+static int ui_readable(uint64_t a, uint64_t n) {
+    static _Thread_local unsigned next;
+    uint64_t first = (a >> 16) + 1, last = ((a + n - 1) >> 16) + 1;
+    int have = 0;
+    for (int i = 0; i < 8; i++) have |= (ui_pages[i] == first) | (ui_pages[i] == last) << 1;
+    if (first == last) have |= have << 1;
+    if (have == 3) return 1;
+    if (!plat_mem_readable(a, n)) return 0;
+    ui_pages[next++ % 8] = first;
+    if (last != first) ui_pages[next++ % 8] = last;
+    return 1;
+}
 
 static void ui_note_target(const tex_t *t) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     ui_on_output = t && t->d.width == out[0] && t->d.height == out[1];
     ui_in_rect = 0;
+    memset(ui_pages, 0, sizeof ui_pages);
 }
 
 // Whether the guest call chain runs through the interface renderer.
 static int ui_caller(const Cpu *c) {
     if (c->x[30] - (MOD_MAIN_BASE + 0xa1c000) < 0x2c000) return 1;
     uint64_t fp = c->x[29];
-    for (int i = 0; i < 6 && fp && !(fp & 7) && plat_mem_readable(fp, 16); i++) {
+    for (int i = 0; i < 6 && fp && !(fp & 7) && ui_readable(fp, 16); i++) {
         uint64_t next = *(uint64_t *)(uintptr_t)fp, ret = *(uint64_t *)(uintptr_t)(fp + 8);
         if (ret - (MOD_MAIN_BASE + 0xa1c000) < 0x2c000) return 1;
         if (next <= fp) break;
@@ -688,7 +705,7 @@ static int ui_caller(const Cpu *c) {
 #define UI_LIST_LR (MOD_MAIN_BASE + 0xa3b8cc)   // a node reached through the parent's list: made at run time, world labels
 static uint64_t ui_node(const Cpu *c) {
     uint64_t a = c->x[29], below = 0, lr = 0;
-    for (int d = 0; d < 16 && a && plat_mem_readable(a, 0x48); d++) {
+    for (int d = 0; d < 16 && a && ui_readable(a, 0x48); d++) {
         const uint64_t *q = (const uint64_t *)(uintptr_t)a;
         if (q[1] == UI_ROOT_LR) return lr == UI_LIST_LR ? 0 : below;
         below = q[8], lr = q[1];
@@ -735,9 +752,10 @@ static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
 static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     static _Thread_local struct { uint64_t addr; float x; } done[64];
     float k = res_ui_fit();
-    if (k >= 1 || !ui_on_output || ui_in_rect || st != 0 || c->x[30] != UI_BIND_LR || size < 0x80 || size > 0x400 ||
-        !plat_mem_readable(addr, 0x40))
+    if (k >= 1 || !ui_on_output || ui_in_rect || st != 0 || c->x[30] != UI_BIND_LR || size < 0x80 || size > 0x400)
         return;
+    // The address is read as is, as the uniform snapshots do: asking the system about it on every bind took the game from
+    // 60 fps to 10 on a wide frame.
     float *f = (float *)(uintptr_t)addr;
     if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0 || fabsf(f[0]) >= UI_FULL_WIDTH) return;
     unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
