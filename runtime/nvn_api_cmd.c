@@ -761,7 +761,7 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
     if (done[slot].addr == addr && done[slot].x == f[0]) return;
     float a = f[3], b = f[3] + f[0], lo = a < b ? a : b, hi = a < b ? b : a;
-    if (hi - lo >= 1 && (lo <= -0.99f || hi >= 0.99f)) return;   // a shade laid over a whole side keeps its full reach
+    if (hi - lo >= 1 && fabsf(f[5]) >= 1 && (lo <= -0.99f || hi >= 0.99f)) return;   // a tall shade over a whole side keeps its full reach
     float shift = ui_shift(ui_node(c), lo, hi, k);
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
     done[slot].addr = addr, done[slot].x = f[0];
