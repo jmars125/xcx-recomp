@@ -754,16 +754,21 @@ static uint64_t ui_node(const Cpu *c) {
 // so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the pane had opened in a node drawn at
 // the centre before, and kept the Hint box at the 16:9 edge (#104). A node's first frame uses its running average. A
 // node on one side stays there until its average comes back within UI_EDGE_STAY of the centre, so that one near the
-// threshold does not flip from frame to frame. A node with element centres past UI_EDGE_SIDE on both sides in the last
-// frame spans the screen and stays: the Affinity Chart's dark side bands and its info pane hang off one node, and when
-// the pane opened on the right the average moved the bands right with it (#91).
+// threshold does not flip from frame to frame. A node that had an element at least UI_EDGE_BAND wide (in clip space)
+// centred past UI_EDGE_SIDE on each side in the last frame frames the screen and stays: the Affinity Chart's dark side
+// bands (0.31 wide, centres at -0.846 and 0.846) and its info pane hang off one node, and when the pane opened on the
+// right the average moved the bands right with it (#91). Element centres on both sides are not enough: the field HUD's
+// right-hand node (the minimap, the save notice, the right Hint box) also has a small piece at the left edge (0.04 wide),
+// and still goes right.
 #define UI_EDGE_STAY 0.25f
+#define UI_EDGE_BAND 0.2f
+static int ui_spans(float lw, float rw) { return lw >= UI_EDGE_BAND && rw >= UI_EDGE_BAND; }
 #define UI_NODE_STALE 30   // frames without the node: its last layout is forgotten
 static volatile uint32_t ui_frames;
 void nvn_ui_frame(void) { __atomic_add_fetch(&ui_frames, 1, __ATOMIC_RELAXED); }
 
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
-    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last, lo, hi; int have, side, both; } seen[32];
+    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last, lw, rw; int have, side, both; } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
     uint32_t frame = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
@@ -772,22 +777,22 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     if (i == 32) {
         i = next++ % 32;
         seen[i].node = node, seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].have = seen[i].side = 0;
-        seen[i].lo = seen[i].hi = 0, seen[i].both = 0;
+        seen[i].lw = seen[i].rw = 0, seen[i].both = 0;
     }
     if (seen[i].frame != frame) {
         int stale = frame - seen[i].frame > UI_NODE_STALE;
         seen[i].have = !stale && seen[i].n > 0;
         if (seen[i].have) seen[i].last = seen[i].sum / seen[i].n;
-        seen[i].both = seen[i].have && seen[i].lo < -UI_EDGE_SIDE && seen[i].hi > UI_EDGE_SIDE;
+        seen[i].both = seen[i].have && ui_spans(seen[i].lw, seen[i].rw);
         if (stale) seen[i].side = 0;
-        seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].lo = seen[i].hi = 0;
+        seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].lw = seen[i].rw = 0;
     }
     float centre = (lo + hi) / 2;
     seen[i].sum += centre, seen[i].n += 1;
-    if (centre < seen[i].lo) seen[i].lo = centre;
-    if (centre > seen[i].hi) seen[i].hi = centre;
+    if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
+    if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
     float mid = seen[i].have ? seen[i].last : seen[i].sum / seen[i].n;
-    if (seen[i].both || (!seen[i].have && seen[i].lo < -UI_EDGE_SIDE && seen[i].hi > UI_EDGE_SIDE)) seen[i].side = 0;
+    if (seen[i].both || (!seen[i].have && ui_spans(seen[i].lw, seen[i].rw))) seen[i].side = 0;
     else if (!(seen[i].side && mid * seen[i].side > UI_EDGE_STAY))
         seen[i].side = mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
