@@ -735,6 +735,7 @@ static int ui_caller(const Cpu *c) {
 #define UI_ROOT_LR (MOD_MAIN_BASE + 0xa434b4)
 #define UI_EDGE_SIDE 0.33f
 #define UI_EDGE_EXACT 0.002f   // an element end this close to a canvas edge is placed on the screen edge (ui_fit)
+#define UI_EDGE_WIDE 0.5f      // ... when the element is at least this wide in clip space
 #define UI_LIST_LR (MOD_MAIN_BASE + 0xa3b8cc)   // a node reached through the parent's list: made at run time, world labels
 static uint64_t ui_node(const Cpu *c) {
     uint64_t a = c->x[29], below = 0, lr = 0;
@@ -753,14 +754,16 @@ static uint64_t ui_node(const Cpu *c) {
 // so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the pane had opened in a node drawn at
 // the centre before, and kept the Hint box at the 16:9 edge (#104). A node's first frame uses its running average. A
 // node on one side stays there until its average comes back within UI_EDGE_STAY of the centre, so that one near the
-// threshold does not flip from frame to frame.
+// threshold does not flip from frame to frame. A node with element centres past UI_EDGE_SIDE on both sides in the last
+// frame spans the screen and stays: the Affinity Chart's dark side bands and its info pane hang off one node, and when
+// the pane opened on the right the average moved the bands right with it (#91).
 #define UI_EDGE_STAY 0.25f
 #define UI_NODE_STALE 30   // frames without the node: its last layout is forgotten
 static volatile uint32_t ui_frames;
 void nvn_ui_frame(void) { __atomic_add_fetch(&ui_frames, 1, __ATOMIC_RELAXED); }
 
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
-    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last; int have, side; } seen[32];
+    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last, lo, hi; int have, side, both; } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
     uint32_t frame = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
@@ -769,17 +772,23 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     if (i == 32) {
         i = next++ % 32;
         seen[i].node = node, seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].have = seen[i].side = 0;
+        seen[i].lo = seen[i].hi = 0, seen[i].both = 0;
     }
     if (seen[i].frame != frame) {
         int stale = frame - seen[i].frame > UI_NODE_STALE;
         seen[i].have = !stale && seen[i].n > 0;
         if (seen[i].have) seen[i].last = seen[i].sum / seen[i].n;
+        seen[i].both = seen[i].have && seen[i].lo < -UI_EDGE_SIDE && seen[i].hi > UI_EDGE_SIDE;
         if (stale) seen[i].side = 0;
-        seen[i].frame = frame, seen[i].sum = seen[i].n = 0;
+        seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].lo = seen[i].hi = 0;
     }
-    seen[i].sum += (lo + hi) / 2, seen[i].n += 1;
+    float centre = (lo + hi) / 2;
+    seen[i].sum += centre, seen[i].n += 1;
+    if (centre < seen[i].lo) seen[i].lo = centre;
+    if (centre > seen[i].hi) seen[i].hi = centre;
     float mid = seen[i].have ? seen[i].last : seen[i].sum / seen[i].n;
-    if (!(seen[i].side && mid * seen[i].side > UI_EDGE_STAY))
+    if (seen[i].both || (!seen[i].have && seen[i].lo < -UI_EDGE_SIDE && seen[i].hi > UI_EDGE_SIDE)) seen[i].side = 0;
+    else if (!(seen[i].side && mid * seen[i].side > UI_EDGE_STAY))
         seen[i].side = mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
@@ -851,9 +860,12 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     float shift = ui_shift(nd, lo, hi, k);
     // An unturned element of a menu's own list (no node, so no shift) that ends on a canvas edge without reaching past the
     // centre, such as the shade behind the map's survey rates, keeps that end on the screen edge; its inner end narrows like
-    // the rest. Otherwise it would stop at the 16:9 edge while the map behind it now reaches the screen edge.
+    // the rest. Otherwise it would stop at the 16:9 edge while the map behind it now reaches the screen edge. Only a wide
+    // one does: the map's tiles (0.27 of the canvas width in clip space), segment outlines and icons sit on the same list
+    // and end on a canvas edge whenever the map scrolls them there, and the tiles past that edge are drawn too, so
+    // stretching one smeared it over its neighbours (#90, #91).
     int right = fabsf(hi - 1) < UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT, left = fabsf(lo + 1) < UI_EDGE_EXACT && hi <= UI_EDGE_EXACT;
-    if (!nd && hi > lo && f[1] == 0 && f[4] == 0 && (right || left)) {
+    if (!nd && hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 && (right || left)) {
         float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
         f[0] *= p, f[3] = f[3] * p + q;
         done[slot].addr = addr, done[slot].x = f[0];
