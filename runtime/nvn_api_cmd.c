@@ -762,7 +762,12 @@ static uint64_t ui_node(const Cpu *c) {
 // frame frames the screen and stays: the Affinity Chart's dark side bands (0.31 wide, centres at -0.846 and 0.846) and its
 // info pane hang off one node, and when the pane opened on the right it moved the bands right with it (#91). Element
 // centres on both sides are not enough: the field HUD's right-hand node (the minimap, the save notice) also has a small
-// piece at the left edge (0.04 wide), and still goes right.
+// piece at the left edge (0.04 wide), and still goes right. A node goes to a side only if one of its elements reaches
+// within UI_EDGE_REACH of that side's canvas edge: the HUD that belongs on a side (the minimap, the party list, the Hint
+// and info boxes, the button prompts) ends on the canvas edge, while pieces the game places from the centre or the world
+// do not, and they moved to an edge when the median of their centres passed the side line: the right half of the battle
+// arts palette, the weapon change prompt, the Morale gauge and a targeted enemy part's marker (#121).
+#define UI_EDGE_REACH 0.85f
 #define UI_EDGE_STAY 0.25f
 #define UI_EDGE_BAND 0.2f
 static int ui_spans(float lw, float rw) { return lw >= UI_EDGE_BAND && rw >= UI_EDGE_BAND; }
@@ -783,16 +788,18 @@ static float ui_median(const float *v, int n) {
     return n & 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 
-static int ui_side_for(int side, float mid) {
-    if (side && mid * side > UI_EDGE_STAY) return side;
-    return mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+// lo and hi: the node's leftmost and rightmost element ends in the frame.
+static int ui_side_for(int side, float mid, float lo, float hi) {
+    int want = side && mid * side > UI_EDGE_STAY ? side : mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+    if ((want < 0 && lo > -UI_EDGE_REACH) || (want > 0 && hi < UI_EDGE_REACH)) return 0;
+    return want;
 }
 
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
     static _Thread_local struct {
         uint64_t node;
         uint32_t frame, centred;   // the frame drawn last, the first frame of its current run at the centre
-        float c[UI_NODE_CENTRES], lw, rw;
+        float c[UI_NODE_CENTRES], lw, rw, lo, hi;   // lo, hi: the leftmost and rightmost element ends
         int n, have, side, hold;
     } seen[32];
     static _Thread_local unsigned next;
@@ -803,27 +810,31 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     if (i == 32) {
         i = next++ % 32;
         memset(&seen[i], 0, sizeof seen[i]);
-        seen[i].node = node, seen[i].frame = seen[i].centred = frame;
+        seen[i].node = node, seen[i].frame = seen[i].centred = frame, seen[i].lo = 1, seen[i].hi = -1;
     }
     if (seen[i].frame != frame) {   // the node's last frame decides its side for this one
         int stale = frame - seen[i].frame > UI_NODE_STALE;
         seen[i].have = !stale && seen[i].n > 0;
         if (stale) seen[i].side = seen[i].hold = 0, seen[i].centred = frame;
         if (seen[i].have) {
-            int want = ui_spans(seen[i].lw, seen[i].rw) ? 0 : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n));
+            int want = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi);
             if (want == seen[i].side) seen[i].hold = 0;
             else if (seen[i].side || frame - seen[i].centred < UI_NODE_SETTLED || ++seen[i].hold >= UI_SIDE_HOLD)
                 seen[i].side = want, seen[i].hold = 0;
             if (seen[i].side) seen[i].centred = frame;
         }
-        seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0;
+        seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0, seen[i].lo = 1, seen[i].hi = -1;
     }
     float centre = (lo + hi) / 2;
     if (seen[i].n < UI_NODE_CENTRES) seen[i].c[seen[i].n++] = centre;
     if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
     if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
+    if (lo < seen[i].lo) seen[i].lo = lo;
+    if (hi > seen[i].hi) seen[i].hi = hi;
     if (!seen[i].have)   // the node's first frame: what it has drawn so far
-        seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0 : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n));
+        seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi);
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
 
