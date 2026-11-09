@@ -748,27 +748,53 @@ static uint64_t ui_node(const Cpu *c) {
     return 0;
 }
 
-// What a node's elements add to their clip-space x once narrowed. The average of the node's element centres in the last
-// frame decides, so that one stray wide element in a node on the right does not hold the rest back, every element of a
-// node moves by the same amount within a frame, and a node follows its layout as it is now: an average over all frames
-// so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the pane had opened in a node drawn at
-// the centre before, and kept the Hint box at the 16:9 edge (#104). A node's first frame uses its running average. A
-// node on one side stays there until its average comes back within UI_EDGE_STAY of the centre, so that one near the
-// threshold does not flip from frame to frame. A node that had an element at least UI_EDGE_BAND wide (in clip space)
-// centred past UI_EDGE_SIDE on each side in the last frame frames the screen and stays: the Affinity Chart's dark side
-// bands (0.31 wide, centres at -0.846 and 0.846) and its info pane hang off one node, and when the pane opened on the
-// right the average moved the bands right with it (#91). Element centres on both sides are not enough: the field HUD's
-// right-hand node (the minimap, the save notice, the right Hint box) also has a small piece at the left edge (0.04 wide),
-// and still goes right.
+// What a node's elements add to their clip-space x once narrowed. The median of the node's element centres in the last
+// frame decides, so that every element of a node moves by the same amount within a frame and a node follows its layout as
+// it is now: an average over all frames so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the
+// pane had opened in a node drawn at the centre before. A median rather than a mean, so that a few stray pieces do not
+// hold the rest back: the field Hint box's node also draws an unseen piece at the canvas's left edge (0.15 wide, three
+// times a frame), which pulled the mean of its centres to 0.11 and kept the box at the 16:9 edge (#104, #107). A node's
+// first frame uses the median so far. A node on one side stays there until its median comes back within UI_EDGE_STAY of
+// the centre, so that one near the threshold does not flip from frame to frame. A node that has been drawn at the centre
+// for UI_NODE_SETTLED frames moves to a side only once it has asked for that side UI_SIDE_HOLD frames in a row, so that a
+// node near the threshold does not jump for a moment when its pieces change: the battle arts palette flickered (#121). A
+// node that had an element at least UI_EDGE_BAND wide (in clip space) centred past UI_EDGE_SIDE on each side in the last
+// frame frames the screen and stays: the Affinity Chart's dark side bands (0.31 wide, centres at -0.846 and 0.846) and its
+// info pane hang off one node, and when the pane opened on the right it moved the bands right with it (#91). Element
+// centres on both sides are not enough: the field HUD's right-hand node (the minimap, the save notice) also has a small
+// piece at the left edge (0.04 wide), and still goes right.
 #define UI_EDGE_STAY 0.25f
 #define UI_EDGE_BAND 0.2f
 static int ui_spans(float lw, float rw) { return lw >= UI_EDGE_BAND && rw >= UI_EDGE_BAND; }
-#define UI_NODE_STALE 30   // frames without the node: its last layout is forgotten
+#define UI_NODE_STALE 30     // frames without the node: its last layout is forgotten
+#define UI_NODE_SETTLED 60   // frames at the centre after which a node needs UI_SIDE_HOLD frames to move to a side
+#define UI_SIDE_HOLD 60
+#define UI_NODE_CENTRES 64   // element centres kept per node and frame for the median
 static volatile uint32_t ui_frames;
 void nvn_ui_frame(void) { __atomic_add_fetch(&ui_frames, 1, __ATOMIC_RELAXED); }
 
+static float ui_median(const float *v, int n) {
+    float s[UI_NODE_CENTRES];
+    for (int i = 0; i < n; i++) {
+        int j = i;
+        for (; j > 0 && s[j - 1] > v[i]; j--) s[j] = s[j - 1];
+        s[j] = v[i];
+    }
+    return n & 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+static int ui_side_for(int side, float mid) {
+    if (side && mid * side > UI_EDGE_STAY) return side;
+    return mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+}
+
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
-    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last, lw, rw; int have, side, both; } seen[32];
+    static _Thread_local struct {
+        uint64_t node;
+        uint32_t frame, centred;   // the frame drawn last, the first frame of its current run at the centre
+        float c[UI_NODE_CENTRES], lw, rw;
+        int n, have, side, hold;
+    } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
     uint32_t frame = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
@@ -776,25 +802,28 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     while (i < 32 && seen[i].node != node) i++;
     if (i == 32) {
         i = next++ % 32;
-        seen[i].node = node, seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].have = seen[i].side = 0;
-        seen[i].lw = seen[i].rw = 0, seen[i].both = 0;
+        memset(&seen[i], 0, sizeof seen[i]);
+        seen[i].node = node, seen[i].frame = seen[i].centred = frame;
     }
-    if (seen[i].frame != frame) {
+    if (seen[i].frame != frame) {   // the node's last frame decides its side for this one
         int stale = frame - seen[i].frame > UI_NODE_STALE;
         seen[i].have = !stale && seen[i].n > 0;
-        if (seen[i].have) seen[i].last = seen[i].sum / seen[i].n;
-        seen[i].both = seen[i].have && ui_spans(seen[i].lw, seen[i].rw);
-        if (stale) seen[i].side = 0;
-        seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].lw = seen[i].rw = 0;
+        if (stale) seen[i].side = seen[i].hold = 0, seen[i].centred = frame;
+        if (seen[i].have) {
+            int want = ui_spans(seen[i].lw, seen[i].rw) ? 0 : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n));
+            if (want == seen[i].side) seen[i].hold = 0;
+            else if (seen[i].side || frame - seen[i].centred < UI_NODE_SETTLED || ++seen[i].hold >= UI_SIDE_HOLD)
+                seen[i].side = want, seen[i].hold = 0;
+            if (seen[i].side) seen[i].centred = frame;
+        }
+        seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0;
     }
     float centre = (lo + hi) / 2;
-    seen[i].sum += centre, seen[i].n += 1;
+    if (seen[i].n < UI_NODE_CENTRES) seen[i].c[seen[i].n++] = centre;
     if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
     if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
-    float mid = seen[i].have ? seen[i].last : seen[i].sum / seen[i].n;
-    if (seen[i].both || (!seen[i].have && ui_spans(seen[i].lw, seen[i].rw))) seen[i].side = 0;
-    else if (!(seen[i].side && mid * seen[i].side > UI_EDGE_STAY))
-        seen[i].side = mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+    if (!seen[i].have)   // the node's first frame: what it has drawn so far
+        seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0 : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n));
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
 
