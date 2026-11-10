@@ -23,6 +23,10 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - HDR10 output with peak, game and HUD brightness settings
 - Keyboard, mouse and gamepad
 
+## Experimental source mods
+
+This feature branch supports explicitly enabled Lua source packages, settings/actions in F1/Esc → Mods, optional trusted native providers and one checked Online-menu shortcut to the existing Mods page. Start with the [mod-author guide](docs/mods/README.md). Linux candidate tests are recorded in the [reviewer guide](docs/review/lua-mod-support.md); native Windows acceptance for these additions is pending. This is separate from emulator asset mods and does not expose gameplay APIs or game-native content windows.
+
 ## Planned
 
 - Linux and the Steam Deck

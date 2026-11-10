@@ -11,18 +11,21 @@ import subprocess
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--out', type=Path, default=Path('build/controller-keyboard-tests'))
+p.add_argument('--mods', action='store_true', help='Run combined keyboard and Mods UI checks')
 a = p.parse_args()
 a.out.mkdir(parents=True, exist_ok=True)
 ninja = ['ninja', '-f', str(a.build / 'build.ninja')]
 replacements = {}
-for rel, src in [('ui/menu', Path('tests/controller_keyboard_check.cpp')),
-                 ('gfx_window_probe', a.out / 'probe.c')]:
+entries=[('ui/menu',Path('tests/mods_ui_check.cpp') if a.mods else Path('tests/controller_keyboard_check.cpp')),('gfx_window_probe',a.out/'probe.c')]
+if a.mods:
+    empty=a.out/'mods_empty.cpp';empty.write_text('// Source included in private menu test object.\n');entries.append(('ui/mods_page',empty))
+for rel, src in entries:
     if rel == 'gfx_window_probe':
         src.write_text('extern int controller_keyboard_checks(void);\nint probe_window(void) { return controller_keyboard_checks(); }\n')
     obj = a.build / 'obj' / 'runtime' / (rel + '.o')
     new = a.out / (Path(rel).name + '.o')
     cmd = shlex.split(subprocess.check_output(ninja + ['-t', 'commands', str(obj)], text=True).splitlines()[-1])
-    original = 'runtime/' + rel + ('.cpp' if rel == 'ui/menu' else '.c')
+    original = 'runtime/' + rel + ('.cpp' if rel.startswith('ui/') else '.c')
     cmd = [str(src) if x == original else str(new) if x == str(obj) else x for x in cmd]
     # Dependency files also belong to the private test output.
     cmd = [str(new) + '.d' if x == str(obj) + '.d' else x for x in cmd]
