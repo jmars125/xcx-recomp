@@ -30,6 +30,7 @@ typedef enum {
     UI_MENU_PRESENT_IN_USE,   // "in use: %s" under the value when the swapchain got another mode than the setting
     UI_MENU_GPU, UI_MENU_GPU_DESC, UI_MENU_GPU_AUTO,
     UI_MENU_PERF_OVERLAY, UI_MENU_PERF_OVERLAY_DESC, UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL,
+    UI_MENU_PERF_SCALE, UI_MENU_PERF_SCALE_DESC,
     UI_PERF_LINE_FPS,
     UI_MENU_GRAPHICS,         // group heading over the resolution rows
     UI_MENU_OUTPUT_RES, UI_MENU_OUTPUT_RES_DESC,
