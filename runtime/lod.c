@@ -35,10 +35,6 @@ void rt_lod_update(void) {
     const char *level = cfg_get("XCX_LOD_DETAIL");
     float bias = 0;
     const char *mode = "original";
-    if (!cfg_is_set("XCX_LOD_DETAIL")) {   // keep the earlier patch switch working until a detail mode is explicitly set
-        const char *legacy = cfg_get("XCX_LOD_FORCE");
-        if (legacy && *legacy && strcmp(legacy, "0")) bias = -1.0f, mode = "legacy";
-    }
     for (size_t i = 0; i < sizeof levels / sizeof *levels; i++)
         if (level && !strcmp(level, levels[i].name)) bias = levels[i].bias, mode = levels[i].name;
     uint32_t word;

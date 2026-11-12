@@ -10,10 +10,10 @@ set xcx60 XCX_FPS60 1
 set xcx60g XCX_FPS60_GETTER 0
 set xcx60m XCX_FPS60_MODE 0
 
-# The known LOD fix forces -1.0 at this float input. runtime/lod.c writes the configurable value to page+0x78; other
-# values are experimental. XCX_LOD_FORCE remains a legacy alias for -1.0 when XCX_LOD_DETAIL is unset. x9 is dead after
-# the prior call, while x8 holds data needed by the following call.
-set lod XCX_LOD_FORCE 0
+# The known LOD fix forces -1.0 at this float input. runtime/lod.c writes the selected bias to page+0x78; other values
+# are experimental. runtime/lod.c turns this set on for non-original XCX_LOD_DETAIL choices. x9 is dead after the prior
+# call, while x8 holds data needed by the following call.
+set lod XCX_LOD_PATCH 0
 site lod main 9582c8 bd401680 @page:x9 bd407920
 
 # The game's frame interval in vsyncs, set once at boot (main+0x13db530 calls the setter main+0x13a2fd8 with 2). The
