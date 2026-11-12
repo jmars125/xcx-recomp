@@ -46,6 +46,7 @@ void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
+int rt_patch_set(const char *name);
 double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
@@ -572,6 +573,10 @@ static void tab_screen(float scale) {
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
     row_render_scale();
+    if (rt_patch_set("lod") >= 0) {
+        static const UiTextId lod[] = {UI_MENU_LOD_ORIGINAL, UI_MENU_LOD_EXTENDED, UI_MENU_LOD_MAXIMUM};
+        opt_choice("XCX_LOD_DETAIL", UI_MENU_LOD_DETAIL, lod, 3, UI_MENU_LOD_DETAIL_DESC, NULL);
+    }
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR, UI_MENU_UPSCALER_DLSS};
     opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 3, UI_MENU_UPSCALER_DESC);
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};

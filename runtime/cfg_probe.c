@@ -139,6 +139,9 @@ int probe_cfg(void) {
           "meta: prefix and case are accepted");
     m = cfg_meta("RUMBLE_STRENGTH");
     CHECK(m && EQ(m->def, "130") && EQ(m->values, "0..300"), "meta: rumble strength 130 in 0..300");
+    m = cfg_meta("LOD_DETAIL");
+    CHECK(m && EQ(m->def, "original") && EQ(m->values, "original|extended|maximum") && !m->live,
+          "meta: distant detail is original by default and needs a restart");
     m = cfg_meta("PERF_OVERLAY");
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
     CHECK(cfg_meta("BIND_A") == NULL && cfg_meta("FPS_COUNTER") == NULL && cfg_meta("NO_SUCH") == NULL,
@@ -335,6 +338,11 @@ int probe_cfg(void) {
     plat_setenv("XCX_MOUSE_SENS", NULL);
     plat_setenv("XCX_FREE_CORES", NULL);
     CHECK(cfg_bool("XCX_FPS60") == 1, "default: unset FPS60 is on");
+    plat_setenv("XCX_LOD_DETAIL", NULL);
+    CHECK(EQ(cfg_value("XCX_LOD_DETAIL"), "original"), "distant detail defaults to original");
+    plat_setenv("XCX_LOD_DETAIL", "maximum");
+    CHECK(EQ(cfg_value("XCX_LOD_DETAIL"), "maximum"), "distant detail takes an environment value");
+    plat_setenv("XCX_LOD_DETAIL", NULL);
     CHECK(EQ(cfg_value("XCX_VK_PRESENT"), "mailbox") && cfg_int("XCX_SPLIT_DRAWS") == 64, "default: text and integer");
     plat_setenv("XCX_MOUSE_SENS", "2.5");
     CHECK(cfg_double("XCX_MOUSE_SENS") == 2.5, "double: the environment value");
