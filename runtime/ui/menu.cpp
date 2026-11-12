@@ -571,6 +571,7 @@ static void tab_screen(float scale) {
     row_gpu();
     static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
     opt_choice("XCX_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
+    opt_slider("XCX_PERF_OVERLAY_SCALE", UI_MENU_PERF_SCALE, 50, 125, UI_MENU_PERF_SCALE_DESC, 5, "%.0f %%");
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
     row_render_scale();
@@ -1337,12 +1338,19 @@ static int g_save_pending;   // a changed setting still waits for its write to x
 // Off, it costs a cfg_version load per present.
 static unsigned g_perf_ver = ~0u;
 static int g_perf_mode;                  // 0 off, 1 fps, 2 full
+static float g_perf_scale = 1;           // XCX_PERF_OVERLAY_SCALE as a multiplier, 0.5 through 1.25
 static std::atomic<int> g_perf_save;     // F10 changed the mode: xcx.ini is written on the present thread
 static uint64_t g_perf_last_ns, g_perf_win_ns, g_perf_max_ns;
 static int g_perf_frames;
 static char g_perf_text[96];
 
 static int perf_mode_of(const char *s) { return !strcmp(s, "full") ? 2 : !strcmp(s, "fps") ? 1 : 0; }
+
+static float perf_scale_of(const char *s) {
+    int percent = s ? atoi(s) : 100;
+    if (percent < 50 || percent > 125) percent = 100;
+    return percent / 100.0f;
+}
 
 extern "C" void menu_perf_cycle(void) {
     static const char *const modes[] = {"off", "fps", "full"};
@@ -1380,6 +1388,7 @@ static void perf_tick(uint64_t now, const MenuTarget *t) {
     if (cfg_version() != g_perf_ver) {
         g_perf_ver = cfg_version();
         int m = perf_mode_of(cfg_value("XCX_PERF_OVERLAY"));
+        g_perf_scale = perf_scale_of(cfg_value("XCX_PERF_OVERLAY_SCALE"));
         if (m != g_perf_mode) {
             g_perf_last_ns = 0, g_perf_text[0] = 0;
             if (m == 2) perf_gpu_once(t);
@@ -1484,17 +1493,25 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
 
 static void perf_full_draw(const MenuTarget *t, float scale) {
     float w = (float)t->width;
+    float perf_scale = g_perf_scale;
     PerfStats s;
     perfmon_snapshot(&s);
     ImGui::SetNextWindowPos(ImVec2(w - 12 * scale, 12 * scale), ImGuiCond_Always, ImVec2(1, 0));
     ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGuiStyle &style = ImGui::GetStyle();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(style.WindowPadding.x * perf_scale, style.WindowPadding.y * perf_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                        ImVec2(style.ItemSpacing.x * perf_scale, style.ItemSpacing.y * perf_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+                        ImVec2(style.CellPadding.x * perf_scale, style.CellPadding.y * perf_scale));
     ImGui::Begin("##perf", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
     // under the menu while it is open (the settings stay readable), else over everything
     if (g_open.load(std::memory_order_relaxed)) ImGui::BringWindowToDisplayBack(ImGui::GetCurrentWindow());
     else ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
-    ImGui::SetWindowFontScale(0.72f);
+    ImGui::SetWindowFontScale(0.72f * perf_scale);
     const ImVec4 gpu_c(0.55f, 0.83f, 0.31f, 1), cpu_c(0.18f, 0.59f, 0.80f, 1), ram_c(0.80f, 0.45f, 0.70f, 1),
         fps_c(0.95f, 0.95f, 0.95f, 1), wait_c(0.93f, 0.76f, 0.33f, 1), pic_c(0.62f, 0.70f, 0.95f, 1);
     if (ImGui::BeginTable("##perft", 4, ImGuiTableFlags_SizingFixedFit)) {
@@ -1536,7 +1553,7 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
     // as wide as the panel the tables size; the plot does not count toward that width, so the panel can still shrink
     ImGuiWindow *win = ImGui::GetCurrentWindow();
     float max_x = win->DC.CursorMaxPos.x;
-    ImGui::PlotLines("##ft", s.frame_ms, PERF_HISTORY, 0, nullptr, 0, top, ImVec2(-FLT_MIN, 48 * scale));
+    ImGui::PlotLines("##ft", s.frame_ms, PERF_HISTORY, 0, nullptr, 0, top, ImVec2(-FLT_MIN, 48 * scale * perf_scale));
     win->DC.CursorMaxPos.x = max_x;
     // per frame, averaged over the last half second; the labels' column stretches, so the numbers end at the panel's
     // right edge, and the table still asks for no more than its widest label and number
@@ -1560,6 +1577,7 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
     if (s.gpu_name[0]) ImGui::TextDisabled("%s", s.gpu_name);
     if (s.cpu_name[0]) ImGui::TextDisabled("%s", s.cpu_name);
     ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 static void perf_draw(const MenuTarget *t, float scale) {
@@ -1568,11 +1586,14 @@ static void perf_draw(const MenuTarget *t, float scale) {
     if (!g_perf_mode || !g_perf_text[0]) return;
     // with the menu open: under its window, over the dimming layout_menu drew before
     ImDrawList *dl = g_open.load(std::memory_order_relaxed) ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
-    ImVec2 sz = ImGui::CalcTextSize(g_perf_text);
-    float pad = 6 * scale;
+    ImFont *font = ImGui::GetFont();
+    float font_size = ImGui::GetFontSize() * g_perf_scale;
+    ImVec2 sz = font->CalcTextSizeA(font_size, FLT_MAX, 0, g_perf_text);
+    float pad = 6 * scale * g_perf_scale;
     ImVec2 p(w - 12 * scale - sz.x - pad * 2, 12 * scale);   // the top right corner: the game's HUD leaves it empty
-    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 150), 4 * scale);
-    dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 150),
+                      4 * scale * g_perf_scale);
+    dl->AddText(font, font_size, ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
 }
 
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {

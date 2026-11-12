@@ -89,10 +89,14 @@ int probe_cfg(void) {
         "romfs_mods = C:\\mods\r\n"
         "\r\n"
         "[audio]\r\n"
-        "volume = 40\r\n";
+        "volume = 40\r\n"
+        "\r\n"
+        "[display]\r\n"
+        "perf_overlay_scale = 75\r\n";
     plat_setenv("XCX_MOTION", NULL);
     plat_setenv("XCX_VOLUME", NULL);
     plat_setenv("XCX_RUMBLE_STRENGTH", NULL);
+    plat_setenv("XCX_PERF_OVERLAY_SCALE", NULL);
     CHECK(plat_file_write(path, before, sizeof before - 1), "write the save ini");
     CHECK(cfg_load(path) == 1, "load the save ini");
     unsigned v0 = cfg_version();
@@ -100,7 +104,8 @@ int probe_cfg(void) {
     cfg_set("XCX_MOTION", "0");
     cfg_set("XCX_RUMBLE_STRENGTH", "80");
     cfg_set("XCX_VOLUME", "40");
-    CHECK(cfg_version() == v0 + 4, "cfg_set bumps the version");
+    cfg_set("XCX_PERF_OVERLAY_SCALE", "75");
+    CHECK(cfg_version() == v0 + 5, "cfg_set bumps the version");
     CHECK(EQ(cfg_get("XCX_FPS60"), "0") && EQ(cfg_get("XCX_VOLUME"), "40"), "cfg_set values are read back at once");
     CHECK(cfg_save_to(path) == 1, "cfg_save_to writes");
     uint64_t got_n = 0;
@@ -115,7 +120,8 @@ int probe_cfg(void) {
     free(got);
     CHECK(cfg_load(path) == 1 && EQ(cfg_get("XCX_FPS60"), "0") && EQ(cfg_get("XCX_MOTION"), "0") &&
           EQ(cfg_get("XCX_RUMBLE_STRENGTH"), "80") && EQ(cfg_get("XCX_VOLUME"), "40") &&
-          EQ(cfg_get("XCX_ROMFS_MODS"), "C:\\mods"), "the saved file reads back");
+          EQ(cfg_get("XCX_PERF_OVERLAY_SCALE"), "75") && EQ(cfg_get("XCX_ROMFS_MODS"), "C:\\mods"),
+          "the saved file reads back");
     const char *held = cfg_get("XCX_VOLUME");
     plat_setenv("XCX_VOLUME", "70");
     cfg_set("XCX_VOLUME", "90");
@@ -141,6 +147,9 @@ int probe_cfg(void) {
     CHECK(m && EQ(m->def, "130") && EQ(m->values, "0..300"), "meta: rumble strength 130 in 0..300");
     m = cfg_meta("PERF_OVERLAY");
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
+    m = cfg_meta("PERF_OVERLAY_SCALE");
+    CHECK(m && EQ(m->def, "100") && EQ(m->values, "50..125") && m->live,
+          "meta: perf_overlay_scale is live, 100 percent by default");
     CHECK(cfg_meta("BIND_A") == NULL && cfg_meta("FPS_COUNTER") == NULL && cfg_meta("NO_SUCH") == NULL,
           "meta: keys the menu does not show are NULL");
 

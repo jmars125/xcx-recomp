@@ -107,6 +107,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PERF_OVERLAY_DESC] = "Frame rate in the top right corner. Full adds frame times with a graph, CPU, GPU and "
                                   "memory load, temperatures and the render thread's waits. F10 cycles the modes.",
     [UI_MENU_PERF_OFF] = "Off", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Full",
+    [UI_MENU_PERF_SCALE] = "Performance overlay scale",
+    [UI_MENU_PERF_SCALE_DESC] = "Size of the performance overlay. Lower it to fit the full panel in an ultrawide sidebar.",
     // printf format of the overlay line in FPS mode: the frame rate
     [UI_PERF_LINE_FPS] = "%.0f fps",
     [UI_MENU_GRAPHICS] = "Picture",
@@ -438,6 +440,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "загрузку ЦП, GPU и памяти, температуры и ожидания потока отрисовки. F10 переключает "
                                   "режимы.",
     [UI_MENU_PERF_OFF] = "Выкл.", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Полный",
+    [UI_MENU_PERF_SCALE] = "Масштаб индикатора производительности",
+    [UI_MENU_PERF_SCALE_DESC] = "Размер индикатора производительности. Уменьшите его, чтобы полный индикатор поместился "
+                                "в боковой полосе на широком экране.",
     [UI_PERF_LINE_FPS] = "%.0f к/с",
     [UI_MENU_GRAPHICS] = "Изображение",
     [UI_MENU_OUTPUT_RES] = "Разрешение игры",
