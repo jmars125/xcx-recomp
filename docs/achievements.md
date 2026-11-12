@@ -9,35 +9,23 @@ list format and the channel, and nothing of the library is copied.
 ## Events
 
 The list is an `events` list: RecompLauncher hosts it and maps each event name to an achievement, so achievements can
-be added or changed without a game update, and an event no list names does nothing. A thread reads the game's own data
-twice a second (no work on the game's threads):
+be added or changed without a game update, and an event no list names does nothing. The events are the game's own
+achievements: `ach_<ID>` when the game awards its achievement with that ID, 1 to 843 (below). A thread reads the
+game's own data twice a second (no work on the game's threads).
 
-| Event | When |
-| --- | --- |
-| `ach_1` … `ach_843` | The game itself awards its own achievement with that ID (below) |
-| `level_10`, `level_20`, `level_30`, `level_40`, `level_50`, `level_60` | Any character reaches that level |
-| `funds_1m`, `funds_10m` | Funds reach 1,000,000 or 10,000,000 |
-| `funds_max` | Funds reach the cap, 99,999,999 |
-| `tickets_max` | Tickets reach the cap, 9,999 |
-| `prologue` | The prologue is over (chapter 1 starts) |
-| `chapter_1` … `chapter_12` | That chapter is cleared |
-| `chapter_13_act_1`, `chapter_13_act_2` | Chapter 13 (new in the Definitive Edition): that act is cleared |
-| `chapter_13`, `story_cleared` | Chapter 13, act 3 is cleared: the end of the story |
-
-An event fires only when the game is seen without it first, with the values settled for 10 s after the last save load. A
-save that already has an achievement, a level, the Funds or a chapter never fires anything when it loads. The game data
-object is filled with defaults for the first moments after boot and then rewritten in place by the save the game reads
-at start, or by a load from the menu. A load is seen when 3 or more characters' levels change in one look, a level or
-the scenario number goes down, the scenario number skips a chapter (play only ever moves it one step, or from one
-chapter's last step to the next chapter's first), an earned achievement turns unearned, or more than 8 achievements are
-earned in one look (half a second). A load that changes only Funds or Tickets, moves the scenario by less than that and
-adds 8 or fewer achievements is not seen, so their events could fire on it.
+An achievement fires only when the game is seen without it first, with the values settled for 10 s after the last save
+load, so a save that already has it never fires it when it loads. The game data object is filled with defaults for the
+first moments after boot and then rewritten in place by the save the game reads at start, or by a load from the menu.
+A load is seen when an earned achievement turns unearned, more than 8 achievements are earned in one look (half a
+second), 3 or more characters' levels change in one look, a level or the scenario number goes down, or the scenario
+number skips a chapter (play only ever moves it one step, or from one chapter's last step to the next chapter's first).
+The levels and the scenario number serve only this. A load none of these catch (another save at nearly the same story
+point and levels, with 8 or fewer achievements more) is not seen, and its extra achievements could fire.
 
 What the game reads, build `EC4ED46BBC4A9EBB` of update 2.0.0: the game data object's pointer at main + `0x1DC1408`;
-Funds a `u32` at `+0x1B5CC`, Tickets a `u32` at `+0x1B5D4`; 23 character slots `0x7F8` apart from the object, the level
-a `u16` at `+0x172` in each; the scenario number a `u16` at `+0x7867A`; the game's achievement records from
-`+0x91528`. `XCX_ACH_TRACE=1` logs the values read (and how many of the game's achievements are earned) when they
-change, and each load.
+the game's achievement records from `+0x91528`; 23 character slots `0x7F8` apart from the object, the level a `u16` at
+`+0x172` in each; the scenario number a `u16` at `+0x7867A`. `XCX_ACH_TRACE=1` logs the top level, the scenario number
+and how many achievements are earned when they change, and each load.
 
 ### The game's own achievements
 
@@ -158,9 +146,6 @@ of the 843 can be added the same way, as `ach_<ID>`.
 }
 ```
 
-The `level_…`, `funds_…`, `tickets_max` and story events above are ours, from before the game's own achievements were
-read; the game has its own for levels, credits and the story too.
-
 ## Testing without the launcher
 
 `tests/achievements_fake_launcher.py` plays the launcher's side on Windows: it creates the pipe, starts the game with
@@ -170,14 +155,7 @@ read; the game has its own for levels, credits and the story too.
 python tests/achievements_fake_launcher.py --seconds 120 -- <install>/xcx.exe --seconds 100
 ```
 
-With `XCX_ACH_TRACE=1` and a cheat that sets Funds while a button is held (a mod's `cheats/EC4ED46BBC4A9EBB.txt`,
-pressed by `XCX_INPUT_SCRIPT`), `funds_1m`, `funds_10m` and `funds_max` fire once each, after `casual`.
-
-The story events the same way, with cheats that write the scenario number while a button is held (`58000000 01DC1408`,
-`78000000 0007867A`, `62000000 00000000 <value>`), on a copy of a New Los Angeles save (scenario 1001): 1012 then
-2007 fire `chapter_1` and `chapter_2` (`prologue` does not: the save already had it); 15026 from there skips chapters,
-so it is a load (`save_loaded`, nothing fires); 14037 then 15026 fire `chapter_13` and `story_cleared`.
-
-The game's own achievements the same way, with a cheat that writes a record's flags while a button is held
-(`58000000 01DC1408`, `78000000 <0x91528 + ID * 16>`, `64000000 00000000 00000003`): on a copy of a New Los Angeles
-save (15 earned), the load sends nothing for those 15 and the cheat sends `ach_<ID>` once.
+With `XCX_ACH_TRACE=1` and a cheat that writes a record's flags while a button is held (a mod's
+`cheats/EC4ED46BBC4A9EBB.txt` with `80000200`, `58000000 01DC1408`, `78000000 <0x91528 + ID × 16>`,
+`64000000 00000000 00000003`, `20000000`, pressed by `XCX_INPUT_SCRIPT`), on a copy of a New Los Angeles save (15
+earned): the load sends `save_loaded` and nothing for those 15, and the cheat sends `casual`, then `ach_<ID>` once.

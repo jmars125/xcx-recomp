@@ -5,18 +5,15 @@
 // RecompLauncher starts the game with RL_SESSION naming a local channel (a named pipe on Windows, a Unix socket
 // elsewhere; platform.h plat_ipc_*). Without it this file does nothing. Both sides send one JSON object per line.
 //
-// The list is an "events" list: the launcher maps each event name below to an achievement, so events can be added to
-// a list without changing the game, and an event no list names does nothing. A thread looks at the game's own data
-// twice a second; nothing runs on the game's threads. What it reads, all from the game data object whose pointer is at
-// main + GAME_DATA (runtime/cheats.c, the port's Max Funds, reads the same):
-//   Funds        u32 at +FUNDS (the game caps them at 99,999,999)
-//   Tickets      u32 at +TICKETS (cap 9,999)
+// The list is an "events" list: the launcher maps each event name to an achievement, and an event no list names does
+// nothing. The events are the game's own achievements: ach_<id> when the game awards its achievement <id>. The
+// launcher unlocks an achievement once. A thread looks at the game's own data twice a second; nothing runs on the
+// game's threads. What it reads, all from the game data object whose pointer is at main + GAME_DATA (runtime/cheats.c,
+// the port's Max Funds, reads the same object):
+//   achievements ACH_IDS records ACH_STRIDE apart from +ACH_RECORDS, one per row of the game's own list (below)
 //   characters   CHARACTERS slots CHARACTER_STRIDE apart from the object, the level a u16 at +LEVEL in each
 //   story        u16 at +STORY, the scenario number (below)
-//   achievements ACH_IDS records ACH_STRIDE apart from +ACH_RECORDS, one per row of the game's own list (below)
-// Events: ach_<id> when the game itself awards its achievement <id>; level_<n> when any character reaches level n (10,
-// 20, 30, 40, 50, 60), funds_1m, funds_10m, funds_max, tickets_max, and the story ones of stories[]. The launcher
-// unlocks an achievement once.
+// The levels and the scenario number only tell a save load from play.
 //
 // The game's achievements are the rows of its table SCL_AchiveList (844 rows: IDs 1..843, then ACHIVE_END, an empty
 // row), and <id> is the row's ID. Each row names a statistic and a count; the game awards the achievement when that
@@ -29,20 +26,18 @@
 // The scenario number is what the game's scripts read with getScenario (its native at main+0x3ed320 asks the flag
 // store at main+0xc96d0 for 16-bit value 1). The flag store lives inside the game data object at +0x72E78 and keeps its
 // 16-bit values from +0x5800 in it, so value 1 is at +STORY. It counts chapter * 1000 + step: the prologue runs 1..8,
-// chapter 1 starts at 1001, chapter 12 at 12001, and the Definitive Edition's chapter 13 (acts M31, M32, M33 in the
-// game data) runs 13002..15026, 15027 being the end. The game's own conditions say when a chapter is cleared:
-// FLD_ConditionList_Scenario's COND_SCEN_CLEAR_M01..M12 (1012 .. 12023) and COND_SCEN_0009/0010/0011_CLEAR_M31/M32/M33
-// (13021, 14037, 15026). The value only grows in play, by one step or from one chapter's last step to the next one's
-// first.
+// chapter 1 starts at 1001, chapter 12 at 12001, and the Definitive Edition's chapter 13 runs 13002..15026, 15027 being
+// the end. The value only grows in play, by one step or from one chapter's last step to the next one's first.
 //
-// A load must not fire anything: the object holds defaults (10,000 Funds) for the first moments after boot, then the
-// save the game reads at start, and loading another save rewrites it in place (the pointer stays). A load is when the
+// A load must not fire anything: the object holds defaults for the first moments after boot, then the save the game
+// reads at start, and loading another save rewrites it in place (the pointer stays). A load is when the
 // object first appears or changes to another one, when LOAD_LEVELS or more characters' levels change in one look, when
 // any level or the scenario goes down, when the scenario skips a chapter, when an earned achievement is no longer
-// earned, or when more than LOAD_ACH achievements are earned in one look. An event arms only once it was seen false
-// with the values settled SETTLE_MS since the last load, and fires when it then holds: what a save already has never
-// fires (as the spec's memory rules wait for a false frame). A load that changes only Funds or Tickets, or moves the
-// scenario less than a chapter on, is not seen; their events could then fire on it.
+// earned, or when more than LOAD_ACH achievements are earned in one look. An achievement arms only once it was seen not
+// earned with the values settled SETTLE_MS since the last load, and fires when it is then earned: what a save already
+// has never fires (as the spec's memory rules wait for a false frame). A load none of these catch (another save at
+// nearly the same story point and levels, with at most LOAD_ACH more achievements) is not seen; its extra achievements
+// could then fire.
 //
 // Also sent: hello on connect; save_loaded at each load after the object first appears (the save read at start is one);
 // casual "cheats" while a cheat is switched on, so its unlocks are kept as Casual. From the launcher, peek (its dev
@@ -63,8 +58,6 @@
 #define PERIOD_MS 500
 #define RECONNECT_MS 5000
 #define GAME_DATA 0x1DC1408u   // main + this: the game data object's pointer, 2.0.0 (build EC4ED46BBC4A9EBB)
-#define FUNDS 0x1B5CCu
-#define TICKETS 0x1B5D4u
 #define CHARACTERS 23
 #define CHARACTER_STRIDE 0x7F8u
 #define LEVEL 0x172u
@@ -79,30 +72,6 @@
 #define ACH_FLAGS 7u            // every flag the game sets; other bits mean the offsets do not fit this build
 #define LOAD_ACH 8              // achievements earned in one look: more is a save loaded, not play
 #define SETTLE_MS 10000
-
-typedef struct {
-    const char *name;
-    int armed;   // seen false since the save loaded: it may fire
-    int fired;   // sent this session
-} Event;
-
-static const int levels[] = {10, 20, 30, 40, 50, 60};
-enum { LEVELS = sizeof levels / sizeof levels[0] };
-// Story events: the scenario number reached. chapter_13 and story_cleared are the same moment, the end of the
-// Definitive Edition's chapter 13, act 3 (its last scenario step before 15027).
-static const struct {
-    const char *name;
-    uint16_t at;
-} stories[] = {{"prologue", 1001},          {"chapter_1", 1012},         {"chapter_2", 2007},   {"chapter_3", 3010},
-               {"chapter_4", 4012},         {"chapter_5", 5015},         {"chapter_6", 6015},   {"chapter_7", 7008},
-               {"chapter_8", 8023},         {"chapter_9", 9012},         {"chapter_10", 10010}, {"chapter_11", 11011},
-               {"chapter_12", 12023},       {"chapter_13_act_1", 13021}, {"chapter_13_act_2", 14037},
-               {"chapter_13", 15026},       {"story_cleared", 15026}};
-enum { STORIES = sizeof stories / sizeof stories[0], FIRST_STORY = LEVELS + 4, EVENTS = FIRST_STORY + STORIES };
-// From FIRST_STORY on, the names of stories[] (achievements_start fills them in).
-static Event events[EVENTS] = {{.name = "level_10"}, {.name = "level_20"}, {.name = "level_30"}, {.name = "level_40"},
-                               {.name = "level_50"}, {.name = "level_60"}, {.name = "funds_1m"}, {.name = "funds_10m"},
-                               {.name = "funds_max"}, {.name = "tickets_max"}};
 
 // The game's achievements, by ID: earned in the last look, seen not earned since the last load (settled), sent.
 static uint8_t ach_earned[ACH_IDS + 1], ach_armed[ACH_IDS + 1], ach_fired[ACH_IDS + 1];
@@ -143,11 +112,11 @@ static void say_hello(void) {
     send_line(line);
 }
 
-static void send_event(Event *e) {
+static void send_achievement(int id) {
     char line[160];
-    snprintf(line, sizeof line, "{\"t\":\"event\",\"name\":\"%s\",\"frame\":%" PRIu64 "}", e->name, frame);
+    snprintf(line, sizeof line, "{\"t\":\"event\",\"name\":\"ach_%d\",\"frame\":%" PRIu64 "}", id, frame);
     send_line(line);
-    rt_log("achievements: event %s", e->name);
+    rt_log("achievements: event ach_%d", id);
 }
 
 // Where the value of a line's top-level field "key" starts (spaces around the colon allowed), NULL without it. The
@@ -221,16 +190,12 @@ static void read_channel(void) {
     }
 }
 
-static int read_u32(uint64_t addr, uint32_t *out) { return plat_mem_read(addr, out, sizeof *out); }
-
 static uint16_t last_levels[CHARACTERS], last_story;
 
-// One look at the game: the events that hold now and *loaded when the levels or the scenario changed as only a load
-// changes them; 0 when the data does not fit.
-static int look(uint64_t data, int hold[EVENTS], int *loaded) {
-    uint32_t funds = 0, tickets = 0;
+// One look at the game: fills ach_earned, and sets *loaded when the achievements, the levels or the scenario changed
+// as only a load changes them; 0 when the data does not fit.
+static int look(uint64_t data, int *loaded) {
     uint16_t story = 0;
-    if (!read_u32(data + FUNDS, &funds) || !read_u32(data + TICKETS, &tickets)) return 0;
     if (!plat_mem_read(data + STORY, &story, sizeof story) || story > STORY_MAX) return 0;
     int top = 0, changed = 0, down = 0;
     uint16_t now[CHARACTERS];
@@ -262,19 +227,10 @@ static int look(uint64_t data, int hold[EVENTS], int *loaded) {
     *loaded = changed >= LOAD_LEVELS || down || story_jump || lost || gained > LOAD_ACH;
     memcpy(last_levels, now, sizeof now);
     last_story = story;
-    for (int k = 0; k < LEVELS; k++) hold[k] = top >= levels[k];
-    hold[LEVELS + 0] = funds >= 1000000u;
-    hold[LEVELS + 1] = funds >= 10000000u;
-    hold[LEVELS + 2] = funds >= 99999999u;
-    hold[LEVELS + 3] = tickets >= 9999u;
-    for (int k = 0; k < STORIES; k++) hold[FIRST_STORY + k] = story >= stories[k].at;
-    static int64_t last_top = -1, last_funds = -1, last_tickets = -1, last_traced_story = -1, last_earned = -1;
-    if (trace && (top != last_top || funds != last_funds || tickets != last_tickets || story != last_traced_story ||
-                  earned_count != last_earned)) {
-        rt_log("achievements: top level %d, funds %u, tickets %u, scenario %u, game achievements earned %d", top, funds,
-               tickets, story, earned_count);
-        last_top = top, last_funds = funds, last_tickets = tickets, last_traced_story = story;
-        last_earned = earned_count;
+    static int64_t last_top = -1, last_traced_story = -1, last_earned = -1;
+    if (trace && (top != last_top || story != last_traced_story || earned_count != last_earned)) {
+        rt_log("achievements: top level %d, scenario %u, game achievements earned %d", top, story, earned_count);
+        last_top = top, last_traced_story = story, last_earned = earned_count;
     }
     return 1;
 }
@@ -293,7 +249,6 @@ static void achievements_thread(void *arg) {
                 rt_log("achievements: connected to RecompLauncher");
                 say_hello();
                 casual_sent = 0;
-                for (int k = 0; k < EVENTS; k++) events[k].fired = 0;
                 memset(ach_fired, 0, sizeof ach_fired);
             }
         }
@@ -308,16 +263,15 @@ static void achievements_thread(void *arg) {
             last_data = 0;
             continue;
         }
-        int hold[EVENTS], loaded = 0;
-        if (!look(data, hold, &loaded)) {
+        int loaded = 0;
+        if (!look(data, &loaded)) {
             if (!bad_logged) rt_log("achievements: the game data does not fit this build's offsets; no events");
             bad_logged = 1;
             continue;
         }
-        if (data != last_data || loaded) {   // a save loaded: every event waits to be seen false again, settled
+        if (data != last_data || loaded) {   // a save loaded: every achievement waits to be seen unearned, settled
             last_data = data;
             settled_from = now + SETTLE_MS;
-            for (int k = 0; k < EVENTS; k++) events[k].armed = 0;
             memset(ach_armed, 0, sizeof ach_armed);
             if (loads++) {   // the first is the boot's defaults, or the save read at start
                 char line[96];
@@ -328,21 +282,11 @@ static void achievements_thread(void *arg) {
             continue;
         }
         int settled = now >= settled_from;
-        for (int k = 0; k < EVENTS; k++) {
-            Event *e = &events[k];
-            if (!hold[k]) e->armed |= settled;
-            else if (e->armed && !e->fired) {
-                e->fired = 1;
-                send_event(e);
-            }
-        }
         for (int id = 1; id <= ACH_IDS; id++) {
             if (!ach_earned[id]) ach_armed[id] |= settled;
             else if (ach_armed[id] && !ach_fired[id]) {
                 ach_fired[id] = 1;
-                char name[16];
-                snprintf(name, sizeof name, "ach_%d", id);
-                send_event(&(Event){.name = name});
+                send_achievement(id);
             }
         }
     }
@@ -350,7 +294,6 @@ static void achievements_thread(void *arg) {
 
 void achievements_start(void) {
     if (!plat_getenv("RL_SESSION", session, sizeof session) || !*session) return;
-    for (int k = 0; k < STORIES; k++) events[FIRST_STORY + k].name = stories[k].name;
     char t[8];
     trace = plat_getenv("XCX_ACH_TRACE", t, sizeof t) && t[0] == '1';
     rt_log("achievements: RecompLauncher session channel given");
