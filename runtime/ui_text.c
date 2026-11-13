@@ -119,6 +119,12 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                   "For supersampling, set the game resolution above the window's. Takes effect after "
                                   "a restart.",
     [UI_MENU_RENDER_SCALE_GAME] = "Game (dynamic)",
+    [UI_MENU_LOD_DETAIL] = "Distant detail",
+    [UI_MENU_LOD_DETAIL_DESC] = "Detail of anything far from the camera. Original keeps the game's own LOD value; "
+                                "Extended and Maximum replace it with -8 and -16, which brings distant geometry and "
+                                "textures in sharper and costs a little GPU time. Takes effect after a restart.",
+    [UI_MENU_LOD_ORIGINAL] = "Original", [UI_MENU_LOD_EXTENDED] = "Extended",
+    [UI_MENU_LOD_MAXIMUM] = "Maximum",
     [UI_MENU_UPSCALER] = "Upscaler",
     [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
                               "edges and detail sharper than bilinear. NVIDIA DLSS (RTX cards) also replaces the game's "
@@ -449,6 +455,12 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
                                   "перезапуска.",
     [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (динамически)",
+    [UI_MENU_LOD_DETAIL] = "Детализация вдали",
+    [UI_MENU_LOD_DETAIL_DESC] = "Детализация всего, что далеко от камеры. «Как в игре» оставляет значение LOD игры; "
+                                "«Расширенная» и «Максимальная» подставляют -8 и -16, и дальняя геометрия и текстуры "
+                                "становятся чётче, но нагрузка на GPU немного растёт. Применяется после перезапуска.",
+    [UI_MENU_LOD_ORIGINAL] = "Как в игре", [UI_MENU_LOD_EXTENDED] = "Расширенная",
+    [UI_MENU_LOD_MAXIMUM] = "Максимальная",
     [UI_MENU_UPSCALER] = "Масштабирование",
     [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
                               "детали чётче билинейного. NVIDIA DLSS (видеокарты RTX) также заменяет сглаживание игры: "

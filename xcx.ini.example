@@ -124,6 +124,9 @@
 # percentage from 25 to 100; a higher one counts as 100. For supersampling, set output_res above window_size. Read at
 # start.
 # render_scale = game
+# Distant detail: original (the game's own LOD value), extended (-8) or maximum (-16), which brings distant geometry
+# and textures in sharper at a small GPU cost. Read at start.
+# lod_detail = original
 # Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
 # from 0 (off) to 100. Changes while the game runs take effect at once. dlss (NVIDIA RTX cards, nvngx_dlss.dll next to
 # xcx.exe) also runs DLSS on the 3D scene in place of the game's FXAA: DLAA at render_scale game or 100, DLSS upscaling

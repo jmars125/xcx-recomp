@@ -274,6 +274,8 @@ void res_sizes(unsigned out[2], unsigned scene[2]);      // the output and scene
 // ---- code patches (patches.c) and the frame step (frame_rate.c)
 void rt_patches_init(void);                                // after ldr_load: switches from the environment, the patch
                                                            // page committed; logs the sets
+void rt_lod_init(void);                                     // after patches: initializes the live LOD patch value
+void rt_lod_update(void);                                   // at every present: applies live LOD settings
 int rt_patch_set(const char *name);                        // index of a set of generated patches.h, -1 if absent
 int rt_patch_enabled(int set);                             // the set is on (0 for -1)
 void rt_patch_disable(int set);                            // before the guest starts: a set needs another that is off
