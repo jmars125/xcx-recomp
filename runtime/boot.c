@@ -410,6 +410,7 @@ void rt_boot(void) {
     PlatThread *warm = plat_thread_new(prewarm_main, NULL, "prewarm");
     ldr_load(rt_config()->exefs);
     rt_patches_init();
+    rt_aniso_init();
     frame_step_init();
     res_init();
     cheats_start();
