@@ -468,7 +468,7 @@ NVN_API(nvnCommandBufferUpdateUniformBuffer) {
 }
 
 static void ui_note_target(const tex_t *t);
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport);
+static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int viewport);
 static void ui_undo_rects(cmd_t *o);
 // ---------- CommandBuffer: render state, payloads of nvn_obj.h
 // void nvnCommandBufferSetRenderTargets(NVNcommandBuffer *cmd, int n, const NVNtexture *const *colors,
@@ -534,7 +534,7 @@ NVN_API(nvnCommandBufferSetViewports) {
     if (first != 0 || n != 1) return set_viewports(cmd_of(c), first, n, v);
     float one[4];   // the game's array stays as it is: it may set the same one again
     memcpy(one, v, sizeof one);
-    ui_rect(c, &one[0], &one[2], 1);
+    ui_rect(c, &one[0], &one[2], one[1], one[3], 1);
     ui_keep_rect(0, v, one[0], one[2]);
     set_viewports(cmd_of(c), 0, 1, one);
 }
@@ -542,7 +542,7 @@ NVN_API(nvnCommandBufferSetViewports) {
 NVN_API(nvnCommandBufferSetViewport) {
     float v[4] = {(float)(int)arg_x(c, 1), (float)(int)arg_x(c, 2), (float)(int)arg_x(c, 3), (float)(int)arg_x(c, 4)};
     float x = v[0], w = v[2];
-    ui_rect(c, &x, &w, 1);
+    ui_rect(c, &x, &w, v[1], v[3], 1);
     ui_keep_rect(0, v, x, w);
     v[0] = x, v[2] = w;
     set_viewports(cmd_of(c), 0, 1, v);
@@ -553,7 +553,7 @@ static void set_scissor(cmd_t *o, int x, int y, int w, int h) { *REC(o, OP_SCISS
 NVN_API(nvnCommandBufferSetScissor) {
     float x = (float)(int)arg_x(c, 1), w = (float)(int)arg_x(c, 3);
     const float raw[4] = {x, (float)(int)arg_x(c, 2), w, (float)(int)arg_x(c, 4)};
-    ui_rect(c, &x, &w, 0);
+    ui_rect(c, &x, &w, raw[1], raw[3], 0);
     ui_keep_rect(1, raw, x, w);
     set_scissor(cmd_of(c), (int)x, (int)arg_x(c, 2), (int)w, (int)arg_x(c, 4));
 }
@@ -571,7 +571,7 @@ NVN_API(nvnCommandBufferSetScissors) {
     if (first == 0 && n > 0) {
         float x = (float)r[0], w = (float)r[2];
         const float raw[4] = {x, (float)r[1], w, (float)r[3]};
-        ui_rect(c, &x, &w, 0);
+        ui_rect(c, &x, &w, raw[1], raw[3], 0);
         ui_keep_rect(1, raw, x, w);
         set_scissor(cmd_of(c), (int)x, r[1], (int)w, r[3]);
     }
@@ -838,9 +838,48 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
 
+// Elements of a menu's own list have no node, so ui_shift leaves them at their narrowed 16:9 place. A pane among them
+// that the game lays against a canvas edge is framed by a wide unturned shade ending exactly on that edge: the light
+// border of the pause menu's character pane (lower right, #166), the gradient behind the map's survey rates. Such a shade
+// (side -1 or 1 from ui_fit) and the list's elements that lie inside it move to that screen edge together, as a node's
+// would; the shade's rect is taken from the frame before, since the pane's boxes are drawn before its border. A shade
+// over a layer that scrolls past the canvas (the map's tiles, the Affinity Chart's portraits: an element of the list lay
+// wholly off the canvas in this frame or the last) instead keeps its inner end and reaches out to the screen edge
+// (UI_PANE_STRETCH), as moving it would also move the tiles under it. Returns the side to move an element to.
+#define UI_PANE_STRETCH 2
+#define UI_PANE_MAX 4
+#define UI_PANE_ABOVE 0.1f   // clip-space height above a shade whose elements still belong to its pane (the name row)
+static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade) {
+    typedef struct { int n, off; float lo[UI_PANE_MAX], hi[UI_PANE_MAX], ylo[UI_PANE_MAX], yhi[UI_PANE_MAX];
+                     int side[UI_PANE_MAX]; } panes_t;
+    static _Thread_local panes_t cur, last;
+    static _Thread_local uint32_t frame;
+    uint32_t now = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
+    if (now != frame) {
+        last = now - frame == 1 ? cur : (panes_t){0};
+        memset(&cur, 0, sizeof cur);
+        frame = now;
+    }
+    if (hi < -1 || lo > 1) cur.off = 1;
+    if (shade) {
+        if (cur.off || last.off) return UI_PANE_STRETCH;
+        if (cur.n < UI_PANE_MAX) {
+            int i = cur.n++;
+            cur.lo[i] = lo, cur.hi[i] = hi, cur.ylo[i] = ylo, cur.yhi[i] = yhi, cur.side[i] = shade;
+        }
+        return shade;
+    }
+    if (last.off) return 0;
+    for (int i = 0; i < last.n; i++) {
+        int in = last.side[i] > 0 ? lo >= last.lo[i] - UI_EDGE_EXACT : hi <= last.hi[i] + UI_EDGE_EXACT;
+        if (in && ylo <= last.yhi[i] + UI_PANE_ABOVE && yhi >= last.ylo[i]) return last.side[i];
+    }
+    return 0;
+}
+
 // A viewport or scissor of the interface narrows like its elements. Elements inside a smaller viewport are placed in that
 // viewport's clip space, which is narrow already, so ui_fit leaves them.
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
+static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int viewport) {
     float k = res_ui_fit();
     if (k >= 1 || !ui_on_output) return;
     unsigned out[2], scene[2];
@@ -851,7 +890,13 @@ static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
     }
     if (!ui_caller(c)) return;
     float mid = out[0] / 2.0f, lo = *x / mid - 1, hi = (*x + *w) / mid - 1;
-    *x = mid + (*x - mid) * k + ui_shift(ui_node(c), lo, hi, k) * mid;
+    uint64_t nd = ui_node(c);
+    float shift = ui_shift(nd, lo, hi, k);
+    if (!nd) {   // a list's rect inside an edge pane (the pause pane's portrait and level rings) moves with the pane
+        int side = ui_edge_pane(lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0);
+        shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
+    }
+    *x = mid + (*x - mid) * k + shift * mid;
     *w *= k;
     if (viewport) ui_in_rect = 1;
 }
@@ -904,17 +949,22 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     uint64_t nd = ui_node(c);
     float shift = ui_shift(nd, lo, hi, k);
     // An unturned element of a menu's own list (no node, so no shift) that ends on a canvas edge without reaching past the
-    // centre, such as the shade behind the map's survey rates, keeps that end on the screen edge; its inner end narrows like
-    // the rest. Otherwise it would stop at the 16:9 edge while the map behind it now reaches the screen edge. Only a wide
-    // one does: the map's tiles (0.27 of the canvas width in clip space), segment outlines and icons sit on the same list
-    // and end on a canvas edge whenever the map scrolls them there, and the tiles past that edge are drawn too, so
-    // stretching one smeared it over its neighbours (#90, #91).
+    // centre is a pane's shade (ui_edge_pane): it and its pane move to that screen edge, or over a scrolling layer such as
+    // the map the shade keeps its inner end and reaches out to the screen edge. Only a wide one counts: the map's tiles
+    // (0.27 of the canvas width in clip space), segment outlines, icons and world markers sit on such lists and end on a
+    // canvas edge whenever they are scrolled there, and stretching one smeared it over its neighbours (#90, #91).
     int right = fabsf(hi - 1) < UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT, left = fabsf(lo + 1) < UI_EDGE_EXACT && hi <= UI_EDGE_EXACT;
-    if (!nd && hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 && (right || left)) {
-        float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
-        f[0] *= p, f[3] = f[3] * p + q;
-        done[slot].addr = addr, done[slot].x = f[0];
-        return;
+    if (!nd) {
+        float y0 = f[7], y1 = f[7] + f[5];
+        int side = ui_edge_pane(lo, hi, y0 < y1 ? y0 : y1, y0 < y1 ? y1 : y0,
+                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? right - left : 0);
+        if (side == UI_PANE_STRETCH) {
+            float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
+            f[0] *= p, f[3] = f[3] * p + q;
+            done[slot].addr = addr, done[slot].x = f[0];
+            return;
+        }
+        shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
     }
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
     done[slot].addr = addr, done[slot].x = f[0];
