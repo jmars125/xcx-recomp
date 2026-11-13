@@ -10,6 +10,7 @@ This repository is public. Game data lives outside it and every derived file sta
 - Everything extracted or generated goes under `build/` or `generated/`. The one exception is the execution profile of
   the profile-guided build, `tools/data/pgo/` ([docs/building.md](docs/building.md), "Profile-guided build").
 - Every file the code generator emits carries the marker defined as `GENERATED_MARKER` in `tools/check_content.py`.
+- The game's own text is game data too: window and message texts, button and screen labels. Do not quote it in code, tests, docs, comments or commit messages; describe the window in plain words. To find a message in the game's memory, use the table's shape, the row ID and the string's length and hash, and keep a copy of the original bytes in memory while running ([docs/mods/05-native-ui-hooks.md](docs/mods/05-native-ui-hooks.md), "How the borrowed rows are found").
 - Run `python tools/check_content.py --staged` before proposing a commit. It is the same check CI runs.
 
 ## Reusing code

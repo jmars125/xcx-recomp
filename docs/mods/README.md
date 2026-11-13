@@ -13,6 +13,7 @@ Start with [01 · Start Here](01-start-here.md), then use the small examples and
 - [Settings API](../lua-mods.md)
 - [Actions, status and provider commands](../provider-actions.md)
 - [Menu registration v1](03-menu-registration.md)
+- [Native Online screens v1](05-native-ui-hooks.md)
 - [Compatibility, capabilities and troubleshooting](04-compatibility.md)
 - [Native provider loading](../native-providers.md)
 

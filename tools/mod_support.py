@@ -5,7 +5,7 @@ PUBLIC_FILES = (
     'LICENSE', 'THIRD_PARTY_NOTICES.md',
     'runtime/mod_provider_abi.h', 'runtime/mod_provider_service_abi.h',
     'docs/mods/README.md', 'docs/mods/01-start-here.md', 'docs/mods/02-first-mod.md',
-    'docs/mods/03-menu-registration.md', 'docs/mods/04-compatibility.md',
+    'docs/mods/03-menu-registration.md', 'docs/mods/04-compatibility.md', 'docs/mods/05-native-ui-hooks.md',
     'docs/lua-mods.md', 'docs/native-providers.md', 'docs/provider-actions.md',
     'examples/mods/hello/mod.ini', 'examples/mods/hello/main.lua',
 )

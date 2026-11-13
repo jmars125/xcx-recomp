@@ -41,7 +41,12 @@ void mod_ui_start_failed(const char *reason);
 void mod_settings_load(ModView *view);
 int mod_settings_save(ModView *view);
 
-typedef struct ModIntent {uint64_t generation,session;char mod[65],action[65];} ModIntent;
+// native is set only by mod_ui_native_intent_submit: the intent came from a registered native game screen, not from the
+// Mods overlay, so it does not depend on the overlay session.
+// text: what the player typed on the native screen (the Join passcode), at most 15 characters, "" when the intent carries none.
+typedef struct ModIntent {uint64_t generation,session;char mod[65],action[65];int native;char text[16];} ModIntent;
+int mod_ui_native_intent_submit(const char *mod,const char *action);
+int mod_ui_native_intent_submit_text(const char *mod,const char *action,const char *text);
 int mod_ui_intent_submit(const ModIntent *intent);
 int mod_ui_intent_pop(ModIntent *intent);
 int mod_ui_intent_current(const ModIntent *intent);

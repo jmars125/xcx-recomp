@@ -23,6 +23,7 @@ Chunks are sized from a per-instruction estimate of the C they produce, so their
 the input; a chunk whose text did not change is not rewritten and keeps its mtime.
 """
 import mod_menu
+import native_ui
 import argparse
 import json
 import multiprocessing as mp
@@ -210,8 +211,9 @@ def partition(est, max_fns, max_bytes, big_fn):
 class Emitter:
     """C for the functions of one module. starts is the set of every function start of the module."""
 
-    def __init__(self, mod, starts, patched=None, reg_locals=regs.LOCALS, callee_saved=True, spins=None, mod_menu_hook=False):
+    def __init__(self, mod, starts, patched=None, reg_locals=regs.LOCALS, callee_saved=True, spins=None, mod_menu_hook=False, native_ui_hook=False):
         self.mod_menu_hook = mod_menu_hook and mod.name == "main"
+        self.native_ui_hook = native_ui_hook and mod.name == "main"
         self.mod = mod
         self.appendage = appendage.verified(mod)
         self.romfs_mods = romfs_mods.verified(mod)
@@ -416,6 +418,8 @@ class Emitter:
 
         if self.mod_menu_hook and entry in mod_menu.LIFETIME:
             out.append('    rt_mod_menu_invalidate();')
+        if self.native_ui_hook and (hook := native_ui.entry_hook(entry)):
+            out.append('    ' + hook)
         if self.mod_menu_hook and entry == mod_menu.LABEL_ENTRY:
             out.append('    uint64_t menu_label = rt_mod_menu_label(c->x[0], c->x[1], c->x[2], c->x[3]);')
 
@@ -673,8 +677,9 @@ def main():
                     help='reload X19-X29 and SP after every call too, instead of trusting AAPCS64 (slower; for '
                          'telling a broken callee from a generator bug)')
     ap.add_argument("--mod-menu-hook", action="store_true", help="validated XCX 2.0.0 registered Online-child insertion")
+    ap.add_argument("--native-ui-hook", action="store_true", help="validated XCX 2.0.0 native UI hook points for mods (online entry and squad screen)")
     args = ap.parse_args()
-    opts = {'reg_locals': args.reg_locals, 'callee_saved': not args.no_callee_saved_trust, 'mod_menu_hook': args.mod_menu_hook}
+    opts = {'reg_locals': args.reg_locals, 'callee_saved': not args.no_callee_saved_trust, 'mod_menu_hook': args.mod_menu_hook, 'native_ui_hook': args.native_ui_hook}
 
     t0 = time.perf_counter()
     mods = layout(args.exefs)
@@ -684,11 +689,20 @@ def main():
         main = Module('main', args.exefs / 'main', next(b for n, b, _ in mods if n == 'main'), 'c')
         mod_menu.validate(main, (args.exefs / 'main').read_bytes())
         del main
+    if args.native_ui_hook:
+        if args.limit or 'main' not in args.modules.split(','):
+            raise SystemExit('Native UI hooks: main must be generated without --limit')
+        main = Module('main', args.exefs / 'main', next(b for n, b, _ in mods if n == 'main'), 'c')
+        native_ui.validate(main, (args.exefs / 'main').read_bytes())
+        del main
     write_layout(mods, args.out)
     write_if_changed(args.out / 'mod_menu_config.h', '// ' + GENERATED_MARKER + '\n#pragma once\n#define MOD_MENU_HOOKS ' + str(int(args.mod_menu_hook)) + '\n')
     table = patches.load(args.patches, mods) if args.patches else patches.Table()
     if args.mod_menu_hook:
         mod_menu.validate_patches(table)
+    if args.native_ui_hook:
+        native_ui.validate_patches(table)
+    write_if_changed(args.out / 'native_ui_config.h', '// ' + GENERATED_MARKER + '\n#pragma once\n#define NATIVE_UI_HOOKS ' + str(int(args.native_ui_hook)) + '\n')
     write_if_changed(args.out / 'patches.h', patches.header_text(table, GENERATED_MARKER))
     want = args.modules.split(',')
     unknown = set(want) - {n for n, _, _ in mods}

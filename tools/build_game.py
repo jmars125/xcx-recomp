@@ -182,8 +182,8 @@ LLVM_LINK_LIBS = ['-lpsapi', '-lbcrypt', '-lwinhttp', '-luser32', '-lgdi32', '-l
 DEFAULT_DEPS = ROOT / 'toolchain' / 'deps-mingw'
 # Runtime sources compiled per install, not in the library: romfs.c includes romfs_config.h, patches.c and ov_zstd.c
 # the patches.h of the player's game version (its patch page is the page after that version's main; ov_zstd.c's host
-# functions sit on it). The menu adapter reads the generated per-install capability header.
-INSTALL_SIDE = {'romfs.c', 'patches.c', 'ov_zstd.c', 'mod_menu_adapter.c'}
+# functions sit on it). The menu and native-UI adapters read the generated per-install capability headers.
+INSTALL_SIDE = {'romfs.c', 'patches.c', 'ov_zstd.c', 'mod_menu_adapter.c', 'native_ui_adapter.c'}
 LIB_NAME = 'libxcxrt.a'
 AR = UCRT / 'llvm-ar.exe' if WIN else on_path('llvm-ar')
 WINDRES = UCRT / 'windres.exe'   # runtime/xcx.rc: the manifest of xcx.exe

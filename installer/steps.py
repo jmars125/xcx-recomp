@@ -775,7 +775,7 @@ class Lift(Step):
 
         args = ['--exefs', ctx.dest / 'exefs', '--out', gen]
         if game_version(ctx) == '2.0.0':
-            args += ['--mod-menu-hook']
+            args += ['--mod-menu-hook', '--native-ui-hook']
         plain = layout.recomp / PATCHES   # the 60 fps sites and the other sets of 2.0.0
         # The code cheats of the built-in cheat list and of the mods' cheat files become patch sets, off until switched
         # on in the Cheats tab (tools/cheats.py); its status file tells the runtime what the build has. A failure costs

@@ -2,6 +2,7 @@
 #include "mod_internal.h"
 #include "mod_provider.h"
 #include "mod_menu.h"
+#include "mod_native_ui.h"
 #include "mod_text.h"
 #include "lua.h"
 #include "lauxlib.h"
@@ -19,7 +20,7 @@ typedef struct {
     size_t used, peak, attempts, denied;
     ModView view;
     int action_field;
-    char action_id[65];ModServiceEvent service_event;
+    char action_id[65],action_text[16];ModServiceEvent service_event;
     int refs[6], failed, initialized, phase, instructions, logs;
 } ModState;
 struct ModRuntime {
@@ -81,6 +82,7 @@ static void select_fields(lua_State *L,int original,const char *const *names) {
 static int settings_register(lua_State *L);
 static int settings_get(lua_State *L);
 static int menu_register(lua_State *L);
+static int native_ui_register(lua_State *L);static int native_ui_report(lua_State *L);static int native_ui_toast(lua_State *L);static int native_ui_details_status(lua_State *L);static int native_ui_set_session(lua_State *L);
 static int provider_status(lua_State *L);
 static int provider_submit(lua_State *L);
 static int ui_status(lua_State *L);
@@ -107,6 +109,7 @@ static int setup(lua_State *L) {
     lua_newtable(L);lua_pushcfunction(L,provider_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,provider_submit);lua_setfield(L,-2,"submit");lua_setfield(L,-2,"provider");
     lua_newtable(L);lua_pushcfunction(L,ui_status);lua_setfield(L,-2,"status");lua_pushcfunction(L,ui_enable);lua_setfield(L,-2,"enable");lua_setfield(L,-2,"ui");
     lua_newtable(L);lua_pushcfunction(L,menu_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"menu");
+    lua_newtable(L);lua_pushcfunction(L,native_ui_register);lua_setfield(L,-2,"register");lua_pushcfunction(L,native_ui_report);lua_setfield(L,-2,"report");lua_pushcfunction(L,native_ui_details_status);lua_setfield(L,-2,"details_status");lua_pushcfunction(L,native_ui_set_session);lua_setfield(L,-2,"set_session");lua_pushcfunction(L,native_ui_toast);lua_setfield(L,-2,"toast");lua_setfield(L,-2,"native_ui");
     lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushstring(L,owner(L)->package->id); lua_setfield(L,-2,"id"); lua_setglobal(L,"host");
     return 0;
 }
@@ -137,6 +140,7 @@ static int invoke(lua_State *L) {
     ModState *m=owner(L); int slot=m->phase==5?0:m->phase==6?1:m->phase==9?3:m->phase==10?4:m->phase==11?5:2;
     lua_rawgeti(L,LUA_REGISTRYINDEX,m->refs[slot]);
     if (slot==1) { lua_newtable(L); lua_newtable(L);lua_pushcfunction(L,menu_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"menu");
+    lua_newtable(L);lua_pushcfunction(L,native_ui_register);lua_setfield(L,-2,"register");lua_setfield(L,-2,"native_ui");
     lua_pushinteger(L,1); lua_setfield(L,-2,"api"); lua_pushliteral(L,"startup"); lua_setfield(L,-2,"phase"); }
     if(slot==3) {
         ModField *f=&m->view.fields[m->action_field];lua_newtable(L);
@@ -144,7 +148,7 @@ static int invoke(lua_State *L) {
         if(f->type==MOD_BOOL)lua_pushboolean(L,f->value);else if(f->type==MOD_ENUM)lua_pushstring(L,f->options[f->value].id);else lua_pushinteger(L,f->value);
         lua_setfield(L,-2,"value");
     }
-    if(slot==4){lua_newtable(L);lua_pushstring(L,m->action_id);lua_setfield(L,-2,"action");}
+    if(slot==4){lua_newtable(L);lua_pushstring(L,m->action_id);lua_setfield(L,-2,"action");if(m->action_text[0]){lua_pushstring(L,m->action_text);lua_setfield(L,-2,"text");}}
     if(slot==5){ModServiceEvent *e=&m->service_event;lua_newtable(L);char handle[64];opaque(handle,sizeof handle,e->terminal?e->result.generation:e->status.generation,e->terminal?e->result.owner:e->status.owner,0);lua_pushstring(L,handle);lua_setfield(L,-2,"handle");lua_pushstring(L,e->terminal?"result":"status");lua_setfield(L,-2,"kind");
         if(e->terminal){char request[64];opaque(request,sizeof request,e->result.generation,e->result.owner,e->result.request);lua_pushstring(L,request);lua_setfield(L,-2,"request");lua_pushstring(L,e->result.result==XMP_OK?"ok":e->result.result==XMP_INVALID?"rejected":"failed");lua_setfield(L,-2,"result");lua_pushstring(L,e->result.message);lua_setfield(L,-2,"message");}
         else{lua_pushstring(L,e->status.text);lua_setfield(L,-2,"message");}
@@ -245,7 +249,7 @@ static int action_intent(ModRuntime *rt,const ModIntent *intent) {
         if(unavailable(rt,m)){m->phase=10;fail(m,"dependency unavailable");return 0;}
         for(int j=0;j<m->view.button_count;++j){ModButton *b=&m->view.buttons[j];if(strcmp(b->id,intent->action)||!b->enabled||m->refs[4]==LUA_NOREF)continue;
             sync_view(m);if(b->provider&&(!m->view.provider_available||m->view.provider_pending))return 0;
-            strcpy(m->action_id,b->id);rt->aggregate-=100;call(m,invoke,0,0,10);sync_view(m);mod_ui_publish(&m->view);return 1;
+            strcpy(m->action_id,b->id);snprintf(m->action_text,sizeof m->action_text,"%s",intent->text);rt->aggregate-=100;call(m,invoke,0,0,10);sync_view(m);mod_ui_publish(&m->view);return 1;
         }
     }return 0;
 }
@@ -269,7 +273,7 @@ int mod_runtime_actions(ModRuntime *rt,ModCancelled cancelled) {
 }
 void mod_runtime_stop(ModRuntime *rt) {
     if (!rt) return;
-    rt->stopping=1;mod_menu_support(0);mod_menu_invalidate();
+    rt->stopping=1;mod_menu_support(0);mod_menu_invalidate();mod_native_ui_support(0);mod_native_ui_invalidate();
     if(!mod_providers_stop(rt->providers)){rt->log("providers: fatal cleanup failure; Lua states not closed");abort();}
     mod_providers_free(rt->providers);rt->providers=NULL;
     for (int n=rt->count-1;n>=0;--n) {
@@ -399,4 +403,131 @@ static int menu_register(lua_State *L){
  for(int i=0;i<3;++i){lua_getfield(L,1,keys[i]);luaL_checktype(L,-1,LUA_TSTRING);const char *v=lua_tolstring(L,-1,&n);if(!n||n>=caps[i]||memchr(v,0,n))return luaL_error(L,"invalid menu string");for(size_t j=0;j<n;++j)if(i==2?!((v[j]>='a'&&v[j]<='z')||(v[j]>='A'&&v[j]<='Z')||(v[j]>='0'&&v[j]<='9')||v[j]==' '||v[j]=='-'||v[j]=='_'||v[j]=='.'||v[j]=='('||v[j]==')'):!((v[j]>='a'&&v[j]<='z')||(j&&((v[j]>='0'&&v[j]<='9')||v[j]=='.'||v[j]=='_'||v[j]=='-'))))return luaL_error(L,"invalid menu label or ID");memcpy(dest[i],v,n);lua_pop(L,1);}
  if(!m->view.page_id[0]||strcmp(e.page,m->view.page_id)){lua_pushnil(L);lua_pushliteral(L,"unavailable");return 2;}
  const char *error=mod_menu_register(&e);if(error){lua_pushnil(L);lua_pushstring(L,error);return 2;}lua_pushboolean(L,1);return 1;
+}
+
+// host.native_ui.report("ok" | "failed" [, text]): the registered owner's answer to the native option it was asked to run (host
+// or join), shown by the game's own windows. A failure may carry the text of the message window (1 to 75 printable ASCII
+// characters, a newline is allowed); without one the game's own failure text is shown. Returns true when accepted. Another
+// mod, or no registration, gets false.
+static int native_ui_report(lua_State *L){
+ ModState *m=owner(L);const char *v=luaL_checkstring(L,1);
+ unsigned status=!strcmp(v,"ok")?MOD_NATIVE_OK:!strcmp(v,"failed")?MOD_NATIVE_FAILED:0;
+ if(!status)return luaL_error(L,"native_ui report must be \"ok\" or \"failed\"");
+ if(status==MOD_NATIVE_OK&&!lua_isnoneornil(L,2)){ // report("ok", {passcode=?, mode=?}): what the squad details screen shows
+  if(lua_type(L,2)!=LUA_TTABLE)return luaL_error(L,"native_ui report details must be a table");
+  const char *code=NULL;int mode=MOD_NATIVE_MODE_NONE;
+  lua_getfield(L,2,"passcode");
+  if(!lua_isnil(L,-1)){
+   if(lua_type(L,-1)!=LUA_TSTRING)return luaL_error(L,"native_ui passcode must be a string");
+   code=lua_tostring(L,-1);
+   if(!mod_native_ui_code_valid(code))return luaL_error(L,"native_ui passcode must be 1 to %d letters, digits or hyphens",MOD_NATIVE_CODE_MAX);
+  }
+  lua_getfield(L,2,"mode");
+  if(!lua_isnil(L,-1)){
+   const char *s=lua_type(L,-1)==LUA_TSTRING?lua_tostring(L,-1):NULL;
+   if(s&&!strcmp(s,"created"))mode=MOD_NATIVE_MODE_CREATED;else if(s&&!strcmp(s,"joined"))mode=MOD_NATIVE_MODE_JOINED;
+   else if(s&&!strcmp(s,"in_squad"))mode=MOD_NATIVE_MODE_IN_SQUAD;else return luaL_error(L,"native_ui mode must be \"created\", \"joined\" or \"in_squad\"");
+  }
+  const char *label=NULL,*status=NULL;
+  lua_getfield(L,2,"label");
+  if(!lua_isnil(L,-1)){
+   if(lua_type(L,-1)!=LUA_TSTRING)return luaL_error(L,"native_ui label must be a string");
+   label=lua_tostring(L,-1);
+   if(!mod_native_ui_label_valid(label))return luaL_error(L,"native_ui label must be 1 to %d printable ASCII characters",MOD_NATIVE_LABEL_MAX);
+  }
+  lua_getfield(L,2,"status");
+  if(!lua_isnil(L,-1)){
+   if(lua_type(L,-1)!=LUA_TSTRING)return luaL_error(L,"native_ui status must be a string");
+   status=lua_tostring(L,-1);
+   if(!mod_native_ui_status_valid(status))return luaL_error(L,"native_ui status must be 1 to %d printable ASCII characters",MOD_NATIVE_STATUS_MAX);
+  }
+  lua_pushboolean(L,mod_native_ui_report_details(m->package->id,code,mode,label,status));return 1;
+ }
+ const char *text=NULL;
+ if(!lua_isnoneornil(L,2)){
+  if(lua_type(L,2)!=LUA_TSTRING)return luaL_error(L,"native_ui report text must be a string");
+  text=lua_tostring(L,2);
+  if(status!=MOD_NATIVE_FAILED)return luaL_error(L,"native_ui report text goes only with \"failed\"");
+  if(!mod_native_ui_text_valid(text))return luaL_error(L,"native_ui report text must be 1 to %d printable ASCII characters (a newline is allowed)",MOD_NATIVE_TEXT_MAX);
+ }
+ lua_pushboolean(L,mod_native_ui_report_message(m->package->id,status,text));return 1;
+}
+
+// host.native_ui.set_session(active): tells the host whether the mod has a session up (true) or not (false). While one is up, Play in
+// Private squad skips the passcode keyboard and runs the mod's action at once, which can show the Details screen of the session
+// ("in_squad"). Returns true when accepted, false for another mod or a mod that did not register `details`.
+static int native_ui_set_session(lua_State *L){
+ ModState *m=owner(L);
+ if(lua_type(L,1)!=LUA_TBOOLEAN)return luaL_error(L,"native_ui set_session takes true or false");
+ lua_pushboolean(L,mod_native_ui_set_session(m->package->id,lua_toboolean(L,1)));return 1;
+}
+
+// host.native_ui.details_status(text): changes the status text of the squad details screen (where the countdown is; 1 to 8
+// printable ASCII characters, for example "2 / 4") while it is open; the owner first reports it with report("ok", {status=...}).
+// Returns true when accepted, false for another mod or a mod that did not register `details`.
+static int native_ui_details_status(lua_State *L){
+ ModState *m=owner(L);
+ if(lua_type(L,1)!=LUA_TSTRING)return luaL_error(L,"native_ui details_status text must be a string");
+ const char *text=lua_tostring(L,1);
+ if(!mod_native_ui_status_valid(text))return luaL_error(L,"native_ui details_status text must be 1 to %d printable ASCII characters",MOD_NATIVE_STATUS_MAX);
+ lua_pushboolean(L,mod_native_ui_details_status(m->package->id,text));return 1;
+}
+
+// host.native_ui.toast(text): the game's own toast (the red offline-refusal one) with the
+// registered owner's words, while the native squad screen is open. 1 to 46 printable ASCII characters on one line; the
+// game's text markup passes through ("[ST:col p1=red ]" makes it red). Returns true when accepted, false for another mod or no
+// registration; a toast already on screen finishes first.
+static int native_ui_toast(lua_State *L){
+ ModState *m=owner(L);
+ if(lua_type(L,1)!=LUA_TSTRING)return luaL_error(L,"native_ui toast text must be a string");
+ const char *text=lua_tostring(L,1);
+ if(!mod_native_ui_toast_valid(text))return luaL_error(L,"native_ui toast text must be 1 to %d printable ASCII characters on one line",MOD_NATIVE_TOAST_MAX);
+ lua_pushboolean(L,mod_native_ui_toast(m->package->id,text));return 1;
+}
+
+// host.native_ui.register{version=1, online_entry=bool, squad_select={quick_assignment=?, play_with_friends=?,
+// create_private=?, play_private=?}}. Startup only. Each squad_select value names a button id of this mod's own page;
+// confirming that option on the native squad screen runs the button's action exactly like a Mods overlay press.
+// Returns true, or nil plus "unsupported", "unavailable" or "full". Only copied strings and flags enter the registry.
+static int native_ui_register(lua_State *L){
+ ModState *m=owner(L);if(m->phase!=5){lua_pushnil(L);lua_pushliteral(L,"unavailable");return 2;}
+ luaL_checktype(L,1,LUA_TTABLE);
+ lua_getfield(L,1,"version");lua_Integer version=lua_isinteger(L,-1)?lua_tointeger(L,-1):0;lua_pop(L,1);
+ if(version!=1){lua_pushnil(L);lua_pushliteral(L,"unsupported");return 2;}
+ ModNativeUi r={0};snprintf(r.owner,sizeof r.owner,"%s",m->package->id);
+ lua_getfield(L,1,"online_entry");if(!lua_isnil(L,-1)){if(!lua_isboolean(L,-1))return luaL_error(L,"online_entry must be a boolean");if(lua_toboolean(L,-1))r.features|=MOD_NATIVE_ONLINE_ENTRY;}lua_pop(L,1);
+ lua_getfield(L,1,"squad_select");
+ if(!lua_isnil(L,-1)){
+  if(!lua_istable(L,-1))return luaL_error(L,"squad_select must be a table");
+  static const char *const keys[MOD_NATIVE_OPTIONS]={"quick_assignment","play_with_friends","create_private","play_private"};
+  for(int i=0;i<MOD_NATIVE_OPTIONS;++i){
+   lua_getfield(L,-1,keys[i]);
+   if(!lua_isnil(L,-1)){
+    size_t n;const char *v=lua_type(L,-1)==LUA_TSTRING?lua_tolstring(L,-1,&n):NULL;
+    if(!v||!n||n>=sizeof r.action[i]||memchr(v,0,n))return luaL_error(L,"invalid squad_select action");
+    memcpy(r.action[i],v,n);r.features|=MOD_NATIVE_SQUAD_SELECT;
+   }
+   lua_pop(L,1);
+  }
+ }
+ lua_pop(L,1);
+ lua_getfield(L,1,"details"); // details={start=?, leave=?}: opt in to the squad details screen and name the actions of its buttons
+ if(!lua_isnil(L,-1)){
+  if(!lua_istable(L,-1))return luaL_error(L,"details must be a table");
+  static const char *const dkeys[2]={"start","leave"};
+  for(int i=0;i<2;++i){
+   lua_getfield(L,-1,dkeys[i]);
+   if(!lua_isnil(L,-1)){
+    size_t n;const char *v=lua_type(L,-1)==LUA_TSTRING?lua_tolstring(L,-1,&n):NULL;
+    if(!v||!n||n>=sizeof r.action[0]||memchr(v,0,n))return luaL_error(L,"invalid details action");
+    memcpy(r.action[MOD_NATIVE_DETAILS_START+i],v,n);
+   }
+   lua_pop(L,1);
+  }
+  r.features|=MOD_NATIVE_DETAILS;
+ }
+ lua_pop(L,1);
+ if(!r.features)return luaL_error(L,"native_ui request names nothing");
+ const char *error=mod_native_ui_register(&r);if(error){lua_pushnil(L);lua_pushstring(L,error);return 2;}
+ lua_pushboolean(L,1);return 1;
 }

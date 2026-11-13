@@ -13,7 +13,7 @@ for mode in range(8):run([a.cc,*flags,'-std=gnu11',*lib,'-DMODE='+str(mode),ROOT
 run([a.cc,*flags,'-std=gnu11',*lib,'-DBUILD="work2"',ROOT/'tests/actions/service_c.c','-o',BUILD/('update'+EXT)])
 run([a.cxx,*flags,'-std=c++17','-fno-exceptions','-fno-rtti',*([] if WIN else ['-fPIC']),'-c',ROOT/'tests/actions/service_cpp.cpp','-o',BUILD/'cpp.o']);run([a.cc,*flags,*lib,BUILD/'cpp.o','-o',BUILD/('cpp'+EXT)])
 run([a.cc,*flags,'-std=gnu11',ROOT/'tests/actions/abi_probe.c',ROOT/'runtime/mod_provider_platform.c',*([] if WIN else ['-ldl']),'-o',BUILD/('abi-probe'+EXE)])
-source=[ROOT/'runtime'/n for n in ['mod_menu.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']]
+source=[ROOT/'runtime'/n for n in ['mod_menu.c','mod_native_ui.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']]
 if WIN:
  (BUILD/'io.c').write_text('#include <stddef.h>\nvoid plat_file_mkdir_p(const char*p){(void)p;} int plat_file_write_atomic(const char*p,const void*d,size_t n){(void)p;(void)d;(void)n;return 0;}\n');io=BUILD/'io.c'
 else:io=ROOT/'tests/mods/settings_io.c'

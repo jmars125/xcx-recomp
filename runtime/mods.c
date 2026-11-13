@@ -2,6 +2,7 @@
 #include "mods.h"
 #include "mod_internal.h"
 #include "mod_menu.h"
+#include "mod_native_ui.h"
 #include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@ static void worker(void *unused) {
     plat_mutex_unlock(&lock);
     mod_runtime_stop(runtime);
 }
+static void wake_worker(void) {plat_mutex_lock(&lock);plat_cond_broadcast(&condition);plat_mutex_unlock(&lock);}
 void rt_mods_start(void) {
     if (started) return;
     started=1;
@@ -61,8 +63,8 @@ void rt_mods_start(void) {
         if (!slash || (size_t)(slash-root)+6>=sizeof root) return;
         strcpy(slash+1,"mods");
     }
-    mod_menu_reset();
-    extern int rt_mod_menu_capable(void);mod_menu_support(rt_mod_menu_capable());
+    mod_menu_reset();mod_native_ui_reset();mod_native_ui_set_wake(wake_worker);
+    extern int rt_mod_menu_capable(void);mod_menu_support(rt_mod_menu_capable());extern int rt_native_ui_capable(void);mod_native_ui_support(rt_native_ui_capable());
     plan=mod_packages_read(root,log_message);
     // The loader compares schema-2 requirements with actual linked game metadata.
     if(plan){extern const char rt_game_name[];snprintf(plan->game_id,sizeof plan->game_id,"%s",rt_game_name);}
@@ -74,7 +76,7 @@ void rt_mods_start(void) {
     plat_mutex_unlock(&lock);
 }
 void rt_mods_shutdown(void) {
-    mod_menu_support(0);mod_menu_invalidate();
+    mod_menu_support(0);mod_menu_invalidate();mod_native_ui_support(0);mod_native_ui_invalidate();mod_native_ui_set_wake(NULL);
     plat_mutex_lock(&lock);
     mod_ui_shutdown();
     atomic_store_explicit(&stopping,1,memory_order_release); plat_cond_broadcast(&condition);

@@ -9,6 +9,7 @@ You need a working executable built with Lua mod support, a plain-text editor an
 | Run a complete first mod | [02 · First mod](02-first-mod.md) |
 | Add settings, actions and status | [02 · First mod](02-first-mod.md#settings-and-actions) and [API reference](../provider-actions.md) |
 | Request a native Online shortcut | [03 · Menu registration](03-menu-registration.md) |
+| Reuse the native Online screens | [05 · Native Online screens](05-native-ui-hooks.md) |
 | Check available capabilities or diagnose a rejected package | [04 · Compatibility](04-compatibility.md) |
 | Add an optional native library | [Native providers](../native-providers.md) |
 

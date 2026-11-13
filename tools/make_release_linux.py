@@ -15,7 +15,7 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
     llvm/      LLVM 23 (clang, lld, llvm-ar, the clang resource headers) and llvm/sysroot: the files of the sniper SDK
                sysroot the game's compile and link read, nothing else (recorded while building the runtime library)
     runtime/   libxcxrt.a and libxcxrt-v2.a (build_game.py --make-runtime-lib --sysroot, --cpu x86-64-v3 and -v2), the
-               runtime headers, romfs.c, patches.c, ov_zstd.c and mod_menu_adapter.c (compiled per install),
+               runtime headers, romfs.c, patches.c, ov_zstd.c, mod_menu_adapter.c and native_ui_adapter.c (compiled per install),
                xcx.png (the window icon), deps/ (Vulkan headers 1.4.363, VMA, zstd
                built static; SDL3, Opus and libvpx come from the sysroot)
     bin/       xcx_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)

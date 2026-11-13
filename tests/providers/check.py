@@ -24,7 +24,7 @@ if not windows:
 if not windows:
  run([a.cc,*flags,*libflags,ROOT/'tests/providers/fixture_c.c','-Wl,-rpath,$ORIGIN','-o',BUILD/('rpath'+libext)])
 run([a.cc,*flags,'-std=gnu11',ROOT/'tests/providers/abi_probe.c',ROOT/'runtime/mod_provider_platform.c',*([] if windows else ['-ldl']),'-o',BUILD/('abi-probe'+ext)])
-source=[ROOT/'runtime'/f for f in ['mod_menu.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']]
+source=[ROOT/'runtime'/f for f in ['mod_menu.c','mod_native_ui.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']]
 if windows:
  # Standalone persistence adapter is unnecessary: linker discards unused save code.
  (BUILD/'io.c').write_text('#include <stddef.h>\nvoid plat_file_mkdir_p(const char *p){(void)p;} int plat_file_write_atomic(const char*p,const void*d,size_t n){(void)p;(void)d;(void)n;return 0;}\n')
