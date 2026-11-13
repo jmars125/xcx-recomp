@@ -1228,6 +1228,7 @@ static const InlineGeom inline_geoms[INLINE_LAYOUTS] = {
     {INLINE_ATLAS_W, INLINE_ATLAS_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, INLINE_RECORDS, "text atlas", INLINE_NVN_FORMAT},
     {SHEET_W, SHEET_H, SHEET_CELL, SHEET_CELL, SHEET_COLUMNS, SHEET_RECORDS, "button sheet", INLINE_NVN_FORMAT},
     {STICKS_W, STICKS_H, STICKS_CELL, STICKS_CELL, STICKS_COLUMNS, STICKS_RECORDS, "stick-direction image", INLINE_NVN_FORMAT},
+    {MASK_W, MASK_H, INLINE_CELL_W, INLINE_CELL_H, INLINE_COLUMNS, MASK_RECORDS, "white-mask button sheet", INLINE_NVN_FORMAT},
     {HINT_W, HINT_H, HINT_CELL_W, HINT_CELL_H, 1, HINT_CELLS, "mini-map hint image", HINT_NVN_FORMAT},   // cell slots; the cells are placed by hint_origins
     {SOUL_W, SOUL_H, SOUL_W, SOUL_H, 1, 1, "soul challenge button image", HINT_NVN_FORMAT},   // one cell: the whole image
     {HOLD_W, HOLD_H, HOLD_W, HOLD_H, 1, 1, "field action hold button image", INLINE_NVN_FORMAT},   // one cell: the whole image
@@ -1288,6 +1289,7 @@ static Tex *inline_upload(unsigned sig, const Tex *native, int layout, const int
         if (layout == INLINE_LAYOUT_HINT) glyph_art_shadowed(dst, (int)cw, (int)ch);
         if (layout == INLINE_LAYOUT_HOLD) glyph_art_hold_button(dst, (int)cw, (int)ch);
         if (layout == INLINE_LAYOUT_SOUL) glyph_art_to_mask(dst, (int)(cw * ch));   // the disc is white and the letter a hole, like the native image
+        if (layout == INLINE_LAYOUT_MASK) glyph_art_to_mask(dst, (int)(cw * ch));   // icon_button03 draws white masks the layout tints
         regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = cw,
                                          .bufferImageHeight = ch,
                                          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
