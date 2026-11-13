@@ -468,7 +468,7 @@ NVN_API(nvnCommandBufferUpdateUniformBuffer) {
 }
 
 static void ui_note_target(const tex_t *t);
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport);
+static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int viewport);
 static void ui_undo_rects(cmd_t *o);
 // ---------- CommandBuffer: render state, payloads of nvn_obj.h
 // void nvnCommandBufferSetRenderTargets(NVNcommandBuffer *cmd, int n, const NVNtexture *const *colors,
@@ -534,7 +534,7 @@ NVN_API(nvnCommandBufferSetViewports) {
     if (first != 0 || n != 1) return set_viewports(cmd_of(c), first, n, v);
     float one[4];   // the game's array stays as it is: it may set the same one again
     memcpy(one, v, sizeof one);
-    ui_rect(c, &one[0], &one[2], 1);
+    ui_rect(c, &one[0], &one[2], one[1], one[3], 1);
     ui_keep_rect(0, v, one[0], one[2]);
     set_viewports(cmd_of(c), 0, 1, one);
 }
@@ -542,7 +542,7 @@ NVN_API(nvnCommandBufferSetViewports) {
 NVN_API(nvnCommandBufferSetViewport) {
     float v[4] = {(float)(int)arg_x(c, 1), (float)(int)arg_x(c, 2), (float)(int)arg_x(c, 3), (float)(int)arg_x(c, 4)};
     float x = v[0], w = v[2];
-    ui_rect(c, &x, &w, 1);
+    ui_rect(c, &x, &w, v[1], v[3], 1);
     ui_keep_rect(0, v, x, w);
     v[0] = x, v[2] = w;
     set_viewports(cmd_of(c), 0, 1, v);
@@ -553,7 +553,7 @@ static void set_scissor(cmd_t *o, int x, int y, int w, int h) { *REC(o, OP_SCISS
 NVN_API(nvnCommandBufferSetScissor) {
     float x = (float)(int)arg_x(c, 1), w = (float)(int)arg_x(c, 3);
     const float raw[4] = {x, (float)(int)arg_x(c, 2), w, (float)(int)arg_x(c, 4)};
-    ui_rect(c, &x, &w, 0);
+    ui_rect(c, &x, &w, raw[1], raw[3], 0);
     ui_keep_rect(1, raw, x, w);
     set_scissor(cmd_of(c), (int)x, (int)arg_x(c, 2), (int)w, (int)arg_x(c, 4));
 }
@@ -571,7 +571,7 @@ NVN_API(nvnCommandBufferSetScissors) {
     if (first == 0 && n > 0) {
         float x = (float)r[0], w = (float)r[2];
         const float raw[4] = {x, (float)r[1], w, (float)r[3]};
-        ui_rect(c, &x, &w, 0);
+        ui_rect(c, &x, &w, raw[1], raw[3], 0);
         ui_keep_rect(1, raw, x, w);
         set_scissor(cmd_of(c), (int)x, r[1], (int)w, r[3]);
     }
@@ -735,6 +735,7 @@ static int ui_caller(const Cpu *c) {
 #define UI_ROOT_LR (MOD_MAIN_BASE + 0xa434b4)
 #define UI_EDGE_SIDE 0.33f
 #define UI_EDGE_EXACT 0.002f   // an element end this close to a canvas edge is placed on the screen edge (ui_fit)
+#define UI_EDGE_WIDE 0.5f      // ... when the element is at least this wide in clip space
 #define UI_LIST_LR (MOD_MAIN_BASE + 0xa3b8cc)   // a node reached through the parent's list: made at run time, world labels
 static uint64_t ui_node(const Cpu *c) {
     uint64_t a = c->x[29], below = 0, lr = 0;
@@ -747,20 +748,60 @@ static uint64_t ui_node(const Cpu *c) {
     return 0;
 }
 
-// What a node's elements add to their clip-space x once narrowed. The average of the node's element centres in the last
-// frame decides, so that one stray wide element in a node on the right does not hold the rest back, every element of a
-// node moves by the same amount within a frame, and a node follows its layout as it is now: an average over all frames
-// so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the pane had opened in a node drawn at
-// the centre before, and kept the Hint box at the 16:9 edge (#104). A node's first frame uses its running average. A
-// node on one side stays there until its average comes back within UI_EDGE_STAY of the centre, so that one near the
-// threshold does not flip from frame to frame.
+// What a node's elements add to their clip-space x once narrowed. The median of the node's element centres in the last
+// frame decides, so that every element of a node moves by the same amount within a frame and a node follows its layout as
+// it is now: an average over all frames so far took 40 s to move the Affinity Chart's info pane to the edge (#91) once the
+// pane had opened in a node drawn at the centre before. A median rather than a mean, so that a few stray pieces do not
+// hold the rest back: the field Hint box's node also draws an unseen piece at the canvas's left edge (0.15 wide, three
+// times a frame), which pulled the mean of its centres to 0.11 and kept the box at the 16:9 edge (#104, #107). A node's
+// first frame uses the median so far. A node on one side stays there until its median comes back within UI_EDGE_STAY of
+// the centre, so that one near the threshold does not flip from frame to frame. A node that has been drawn at the centre
+// for UI_NODE_SETTLED frames moves to a side only once it has asked for that side UI_SIDE_HOLD frames in a row, so that a
+// node near the threshold does not jump for a moment when its pieces change: the battle arts palette flickered (#121). A
+// node that had an element at least UI_EDGE_BAND wide (in clip space) centred past UI_EDGE_SIDE on each side in the last
+// frame frames the screen and stays: the Affinity Chart's dark side bands (0.31 wide, centres at -0.846 and 0.846) and its
+// info pane hang off one node, and when the pane opened on the right it moved the bands right with it (#91). Element
+// centres on both sides are not enough: the field HUD's right-hand node (the minimap, the save notice) also has a small
+// piece at the left edge (0.04 wide), and still goes right. A node goes to a side only if one of its elements reaches
+// within UI_EDGE_REACH of that side's canvas edge: the HUD that belongs on a side (the minimap, the party list, the Hint
+// and info boxes, the button prompts) ends on the canvas edge, while pieces the game places from the centre or the world
+// do not, and they moved to an edge when the median of their centres passed the side line: the right half of the battle
+// arts palette, the weapon change prompt, the Morale gauge and a targeted enemy part's marker (#121).
+#define UI_EDGE_REACH 0.85f
 #define UI_EDGE_STAY 0.25f
-#define UI_NODE_STALE 30   // frames without the node: its last layout is forgotten
+#define UI_EDGE_BAND 0.2f
+static int ui_spans(float lw, float rw) { return lw >= UI_EDGE_BAND && rw >= UI_EDGE_BAND; }
+#define UI_NODE_STALE 30     // frames without the node: its last layout is forgotten
+#define UI_NODE_SETTLED 60   // frames at the centre after which a node needs UI_SIDE_HOLD frames to move to a side
+#define UI_SIDE_HOLD 60
+#define UI_NODE_CENTRES 64   // element centres kept per node and frame for the median
 static volatile uint32_t ui_frames;
 void nvn_ui_frame(void) { __atomic_add_fetch(&ui_frames, 1, __ATOMIC_RELAXED); }
 
+static float ui_median(const float *v, int n) {
+    float s[UI_NODE_CENTRES];
+    for (int i = 0; i < n; i++) {
+        int j = i;
+        for (; j > 0 && s[j - 1] > v[i]; j--) s[j] = s[j - 1];
+        s[j] = v[i];
+    }
+    return n & 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+// lo and hi: the node's leftmost and rightmost element ends in the frame.
+static int ui_side_for(int side, float mid, float lo, float hi) {
+    int want = side && mid * side > UI_EDGE_STAY ? side : mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+    if ((want < 0 && lo > -UI_EDGE_REACH) || (want > 0 && hi < UI_EDGE_REACH)) return 0;
+    return want;
+}
+
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
-    static _Thread_local struct { uint64_t node; uint32_t frame; float sum, n, last; int have, side; } seen[32];
+    static _Thread_local struct {
+        uint64_t node;
+        uint32_t frame, centred;   // the frame drawn last, the first frame of its current run at the centre
+        float c[UI_NODE_CENTRES], lw, rw, lo, hi;   // lo, hi: the leftmost and rightmost element ends
+        int n, have, side, hold;
+    } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
     uint32_t frame = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
@@ -768,25 +809,77 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     while (i < 32 && seen[i].node != node) i++;
     if (i == 32) {
         i = next++ % 32;
-        seen[i].node = node, seen[i].frame = frame, seen[i].sum = seen[i].n = 0, seen[i].have = seen[i].side = 0;
+        memset(&seen[i], 0, sizeof seen[i]);
+        seen[i].node = node, seen[i].frame = seen[i].centred = frame, seen[i].lo = 1, seen[i].hi = -1;
     }
-    if (seen[i].frame != frame) {
+    if (seen[i].frame != frame) {   // the node's last frame decides its side for this one
         int stale = frame - seen[i].frame > UI_NODE_STALE;
         seen[i].have = !stale && seen[i].n > 0;
-        if (seen[i].have) seen[i].last = seen[i].sum / seen[i].n;
-        if (stale) seen[i].side = 0;
-        seen[i].frame = frame, seen[i].sum = seen[i].n = 0;
+        if (stale) seen[i].side = seen[i].hold = 0, seen[i].centred = frame;
+        if (seen[i].have) {
+            int want = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi);
+            if (want == seen[i].side) seen[i].hold = 0;
+            else if (seen[i].side || frame - seen[i].centred < UI_NODE_SETTLED || ++seen[i].hold >= UI_SIDE_HOLD)
+                seen[i].side = want, seen[i].hold = 0;
+            if (seen[i].side) seen[i].centred = frame;
+        }
+        seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0, seen[i].lo = 1, seen[i].hi = -1;
     }
-    seen[i].sum += (lo + hi) / 2, seen[i].n += 1;
-    float mid = seen[i].have ? seen[i].last : seen[i].sum / seen[i].n;
-    if (!(seen[i].side && mid * seen[i].side > UI_EDGE_STAY))
-        seen[i].side = mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+    float centre = (lo + hi) / 2;
+    if (seen[i].n < UI_NODE_CENTRES) seen[i].c[seen[i].n++] = centre;
+    if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
+    if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
+    if (lo < seen[i].lo) seen[i].lo = lo;
+    if (hi > seen[i].hi) seen[i].hi = hi;
+    if (!seen[i].have)   // the node's first frame: what it has drawn so far
+        seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi);
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
+}
+
+// Elements of a menu's own list have no node, so ui_shift leaves them at their narrowed 16:9 place. A pane among them
+// that the game lays against a canvas edge is framed by a wide unturned shade ending exactly on that edge: the light
+// border of the pause menu's character pane (lower right, #166), the gradient behind the map's survey rates. Such a shade
+// (side -1 or 1 from ui_fit) and the list's elements that lie inside it move to that screen edge together, as a node's
+// would; the shade's rect is taken from the frame before, since the pane's boxes are drawn before its border. A shade
+// over a layer that scrolls past the canvas (the map's tiles, the Affinity Chart's portraits: an element of the list lay
+// wholly off the canvas in this frame or the last) instead keeps its inner end and reaches out to the screen edge
+// (UI_PANE_STRETCH), as moving it would also move the tiles under it. Returns the side to move an element to.
+#define UI_PANE_STRETCH 2
+#define UI_PANE_MAX 4
+#define UI_PANE_ABOVE 0.1f   // clip-space height above a shade whose elements still belong to its pane (the name row)
+static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade) {
+    typedef struct { int n, off; float lo[UI_PANE_MAX], hi[UI_PANE_MAX], ylo[UI_PANE_MAX], yhi[UI_PANE_MAX];
+                     int side[UI_PANE_MAX]; } panes_t;
+    static _Thread_local panes_t cur, last;
+    static _Thread_local uint32_t frame;
+    uint32_t now = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
+    if (now != frame) {
+        last = now - frame == 1 ? cur : (panes_t){0};
+        memset(&cur, 0, sizeof cur);
+        frame = now;
+    }
+    if (hi < -1 || lo > 1) cur.off = 1;
+    if (shade) {
+        if (cur.off || last.off) return UI_PANE_STRETCH;
+        if (cur.n < UI_PANE_MAX) {
+            int i = cur.n++;
+            cur.lo[i] = lo, cur.hi[i] = hi, cur.ylo[i] = ylo, cur.yhi[i] = yhi, cur.side[i] = shade;
+        }
+        return shade;
+    }
+    if (last.off) return 0;
+    for (int i = 0; i < last.n; i++) {
+        int in = last.side[i] > 0 ? lo >= last.lo[i] - UI_EDGE_EXACT : hi <= last.hi[i] + UI_EDGE_EXACT;
+        if (in && ylo <= last.yhi[i] + UI_PANE_ABOVE && yhi >= last.ylo[i]) return last.side[i];
+    }
+    return 0;
 }
 
 // A viewport or scissor of the interface narrows like its elements. Elements inside a smaller viewport are placed in that
 // viewport's clip space, which is narrow already, so ui_fit leaves them.
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
+static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int viewport) {
     float k = res_ui_fit();
     if (k >= 1 || !ui_on_output) return;
     unsigned out[2], scene[2];
@@ -797,7 +890,13 @@ static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
     }
     if (!ui_caller(c)) return;
     float mid = out[0] / 2.0f, lo = *x / mid - 1, hi = (*x + *w) / mid - 1;
-    *x = mid + (*x - mid) * k + ui_shift(ui_node(c), lo, hi, k) * mid;
+    uint64_t nd = ui_node(c);
+    float shift = ui_shift(nd, lo, hi, k);
+    if (!nd) {   // a list's rect inside an edge pane (the pause pane's portrait and level rings) moves with the pane
+        int side = ui_edge_pane(lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0);
+        shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
+    }
+    *x = mid + (*x - mid) * k + shift * mid;
     *w *= k;
     if (viewport) ui_in_rect = 1;
 }
@@ -850,14 +949,22 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     uint64_t nd = ui_node(c);
     float shift = ui_shift(nd, lo, hi, k);
     // An unturned element of a menu's own list (no node, so no shift) that ends on a canvas edge without reaching past the
-    // centre, such as the shade behind the map's survey rates, keeps that end on the screen edge; its inner end narrows like
-    // the rest. Otherwise it would stop at the 16:9 edge while the map behind it now reaches the screen edge.
+    // centre is a pane's shade (ui_edge_pane): it and its pane move to that screen edge, or over a scrolling layer such as
+    // the map the shade keeps its inner end and reaches out to the screen edge. Only a wide one counts: the map's tiles
+    // (0.27 of the canvas width in clip space), segment outlines, icons and world markers sit on such lists and end on a
+    // canvas edge whenever they are scrolled there, and stretching one smeared it over its neighbours (#90, #91).
     int right = fabsf(hi - 1) < UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT, left = fabsf(lo + 1) < UI_EDGE_EXACT && hi <= UI_EDGE_EXACT;
-    if (!nd && hi > lo && f[1] == 0 && f[4] == 0 && (right || left)) {
-        float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
-        f[0] *= p, f[3] = f[3] * p + q;
-        done[slot].addr = addr, done[slot].x = f[0];
-        return;
+    if (!nd) {
+        float y0 = f[7], y1 = f[7] + f[5];
+        int side = ui_edge_pane(lo, hi, y0 < y1 ? y0 : y1, y0 < y1 ? y1 : y0,
+                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? right - left : 0);
+        if (side == UI_PANE_STRETCH) {
+            float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
+            f[0] *= p, f[3] = f[3] * p + q;
+            done[slot].addr = addr, done[slot].x = f[0];
+            return;
+        }
+        shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
     }
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
     done[slot].addr = addr, done[slot].x = f[0];
