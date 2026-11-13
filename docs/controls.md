@@ -36,9 +36,12 @@ Esc is unbound in the game; it opens the settings menu and releases the mouse cu
 |---|---|---|
 | F1 or Esc | Minus and Plus together | open or close the settings menu; the game gets no input while it is open |
 | F10 | L3 + R3 (both stick clicks) | performance overlay: off, frame rate, full panel |
-| F11 | | borderless fullscreen on or off, saved to `xcx.ini` |
+| F11 | | between the window and the last full mode (Borderless at first), saved to `xcx.ini` |
+| | L + R + ZL + ZR held for a second | Quit Game prompt: No has the cursor first, B or Esc also answer No; Yes closes the game as the window's close button does, without saving |
 
-The Minus+Plus combo never reaches the game. In the menu the arrow keys, the D-pad or the left stick move, Enter or A selects, Q and E or L and R switch tabs, Esc or B goes back (Switch button names, as in the table above).
+The display mode is the *Display mode* row of the Screen tab (`fullscreen` in `xcx.ini`): Window (`0`), Borderless (`borderless`, a frameless window over the monitor that the desktop keeps composing, so the taskbar, Alt+Tab and notifications come up over it) or Fullscreen (`1`, the same window, and the Vulkan driver may take the monitor for the game at the desktop's resolution). The modes never change the display's resolution. On Windows the difference between the two full modes is the swapchain's `VK_EXT_full_screen_exclusive` request (disallowed or allowed); with SDL, Fullscreen is SDL's exclusive mode at the desktop's display mode.
+
+The Minus+Plus combo never reaches the game. Nor do L, R, ZL and ZR once all four are down, until all four are released. In the menu the arrow keys, the D-pad or the left stick move, Enter or A selects, Q and E or L and R switch tabs, Esc or B goes back (Switch button names, as in the table above).
 
 ## Remapping
 
