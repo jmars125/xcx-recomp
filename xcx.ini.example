@@ -107,8 +107,10 @@
 # device_profile = auto
 # Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate.
 # vk_present = mailbox
-# Window client area in pixels (640x360 to 7680x4320), and borderless fullscreen. F11 switches fullscreen and saves it
-# here. Changes while the game runs take effect at once.
+# Window client area in pixels (640x360 to 7680x4320), and the display mode: 0 a window, borderless a frameless window
+# over the whole monitor that the taskbar and Alt+Tab still come up over, 1 fullscreen (the driver may take the monitor
+# for the game, at the desktop's resolution). F11 switches between the window and the last full mode and saves it here.
+# Changes while the game runs take effect at once.
 # window_size = 1920x1080
 # fullscreen = 0
 # Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F10

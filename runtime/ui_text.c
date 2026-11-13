@@ -90,12 +90,18 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_TAB_SCREEN] = "Screen", [UI_MENU_TAB_GAME] = "Game", [UI_MENU_TAB_SOUND] = "Sound",
     [UI_MENU_TAB_CONTROLS] = "Controls", [UI_MENU_TAB_MENU] = "Menu", [UI_MENU_TAB_ADVANCED] = "Advanced",
     [UI_MENU_CONTINUE] = "Continue", [UI_MENU_QUIT] = "Quit game",
+    [UI_QUIT_CONFIRM] = "Quit the game? Progress since the last save is lost.", [UI_QUIT_YES] = "Yes", [UI_QUIT_NO] = "No",
     [UI_MENU_ON] = "On", [UI_MENU_OFF] = "Off", [UI_MENU_AUTO] = "Automatic", [UI_MENU_DEFAULT_MARK] = "default",
     [UI_MENU_AFTER_RESTART] = "after restart", [UI_MENU_SET_BY_ENV] = "set by environment variable",
     [UI_MENU_SAVE_FAILED] = "could not save settings",
     [UI_MENU_VERSION] = "XCX Recomp %s, game %s",
 
-    [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
+    [UI_MENU_FULLSCREEN] = "Display mode",
+    [UI_MENU_FULLSCREEN_DESC] = "Window: a window of the size below. Borderless: a window without a frame over the "
+                                "whole monitor; the taskbar and Alt+Tab work over it. Fullscreen: the game may take the "
+                                "monitor for itself, at the desktop's resolution. F11 switches between the window and "
+                                "the last full mode.",
+    [UI_MENU_MODE_WINDOW] = "Window", [UI_MENU_MODE_BORDERLESS] = "Borderless", [UI_MENU_MODE_FULLSCREEN] = "Fullscreen",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Custom",
     [UI_MENU_PRESENT] = "Presentation", [UI_MENU_PRESENT_DESC] = "How finished frames reach the screen.",
@@ -418,13 +424,20 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_TAB_SCREEN] = "Экран", [UI_MENU_TAB_GAME] = "Игра", [UI_MENU_TAB_SOUND] = "Звук",
     [UI_MENU_TAB_CONTROLS] = "Управление", [UI_MENU_TAB_MENU] = "Меню", [UI_MENU_TAB_ADVANCED] = "Дополнительно",
     [UI_MENU_CONTINUE] = "Продолжить", [UI_MENU_QUIT] = "Выйти из игры",
+    [UI_QUIT_CONFIRM] = "Выйти из игры? Прогресс после последнего сохранения будет потерян.", [UI_QUIT_YES] = "Да",
+    [UI_QUIT_NO] = "Нет",
     [UI_MENU_ON] = "Вкл.", [UI_MENU_OFF] = "Выкл.", [UI_MENU_AUTO] = "Автоматически",
     [UI_MENU_DEFAULT_MARK] = "по умолчанию",
     [UI_MENU_AFTER_RESTART] = "после перезапуска", [UI_MENU_SET_BY_ENV] = "задано переменной окружения",
     [UI_MENU_SAVE_FAILED] = "не удалось сохранить настройки",
     [UI_MENU_VERSION] = "XCX Recomp %s, игра %s",
 
-    [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
+    [UI_MENU_FULLSCREEN] = "Режим экрана",
+    [UI_MENU_FULLSCREEN_DESC] = "Окно: окно размера ниже. Без рамки: окно без рамки на весь монитор; панель задач и "
+                                "Alt+Tab работают поверх него. Полный экран: игра может занять монитор целиком, в "
+                                "разрешении рабочего стола. F11 переключает между окном и последним полноэкранным "
+                                "режимом.",
+    [UI_MENU_MODE_WINDOW] = "Окно", [UI_MENU_MODE_BORDERLESS] = "Без рамки", [UI_MENU_MODE_FULLSCREEN] = "Полный экран",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Другой",
     [UI_MENU_PRESENT] = "Вывод кадров", [UI_MENU_PRESENT_DESC] = "Как готовые кадры попадают на экран.",
