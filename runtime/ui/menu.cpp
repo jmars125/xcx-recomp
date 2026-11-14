@@ -609,6 +609,8 @@ static void tab_game(float scale) {
     static const UiTextId cut[] = {UI_MENU_CUTSCENE_30, UI_MENU_CUTSCENE_MIXED, UI_MENU_CUTSCENE_LIMIT};
     opt_choice("XCX_CUTSCENE_30", UI_MENU_CUTSCENE_FPS, cut, 3, UI_MENU_CUTSCENE_FPS_DESC);
     row_game_lang();
+    static const UiTextId voice[] = {UI_MENU_GAME_LANG_AUTO, UI_MENU_VOICE_JA, UI_MENU_VOICE_EN};
+    opt_choice("XCX_VOICE_LANG", UI_MENU_VOICE_LANG, voice, 3, UI_MENU_VOICE_LANG_DESC);
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("XCX_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
     opt_toggle("XCX_CHEATS", UI_MENU_CHEATS, UI_MENU_CHEATS_DESC);

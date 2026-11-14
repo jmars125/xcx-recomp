@@ -92,6 +92,13 @@ int input_map_keys_of(const InputMap *m, int action, uint8_t *out, int max) {
     return n;
 }
 
+// F2 is the overlay key (issue #153) while no action has it; a player who bound F2 to a button keeps it for the game.
+int input_overlay_f2(void) {
+    for (int i = 0; i < input_map.nkeys; i++)
+        if (input_map.keys[i].key == KEY_F2) return 0;
+    return 1;
+}
+
 int input_map_pads_of(const InputMap *m, int action, int layout, uint8_t *out, int max) {
     int n = 0;
     for (int i = 0; i < m->npads[layout]; i++)

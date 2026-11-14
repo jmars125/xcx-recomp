@@ -142,6 +142,8 @@ int probe_cfg(void) {
     CHECK(m && EQ(m->def, "130") && EQ(m->values, "0..300"), "meta: rumble strength 130 in 0..300");
     m = cfg_meta("PERF_OVERLAY");
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
+    m = cfg_meta("VOICE_LANG");
+    CHECK(m && EQ(m->def, "") && EQ(m->values, "ja|en") && m->live, "meta: voice_lang is automatic (unset) by default, ja|en, live");
     // the display mode: the menu's Window, Borderless and Fullscreen; 0 and 1 of older files keep their meaning
     m = cfg_meta("FULLSCREEN");
     CHECK(m && EQ(m->def, "0") && EQ(m->values, "0|borderless|1") && m->live, "meta: fullscreen takes 0|borderless|1");

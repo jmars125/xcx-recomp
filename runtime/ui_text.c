@@ -111,7 +111,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_GPU_AUTO] = "Automatic",
     [UI_MENU_PERF_OVERLAY] = "Performance overlay",
     [UI_MENU_PERF_OVERLAY_DESC] = "Frame rate in the top right corner. Full adds frame times with a graph, CPU, GPU and "
-                                  "memory load, temperatures and the render thread's waits. F10 cycles the modes.",
+                                  "memory load, temperatures and the render thread's waits. F2 or F10 cycles the modes.",
     [UI_MENU_PERF_OFF] = "Off", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Full",
     // printf format of the overlay line in FPS mode: the frame rate
     [UI_PERF_LINE_FPS] = "%.0f fps",
@@ -175,8 +175,15 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_CLOTH_REALTIME_DESC] = "Steps cloth and hair by real time as well.",
     [UI_MENU_HIGHFPS_FIX] = "High frame rate physics fix",
     [UI_MENU_HIGHFPS_FIX_DESC] = "Corrects physics that misbehave above 30 frames per second.",
-    [UI_MENU_GAME_LANG] = "Game language", [UI_MENU_GAME_LANG_DESC] = "Language of the game's text and voices.",
+    [UI_MENU_GAME_LANG] = "Game language",
+    [UI_MENU_GAME_LANG_DESC] = "Language of the game's text, and of its voices unless Voice language picks them.",
     [UI_MENU_GAME_LANG_AUTO] = "Automatic",
+    [UI_MENU_VOICE_LANG] = "Voice language",
+    [UI_MENU_VOICE_LANG_DESC] = "Japanese or English voices with matching lip sync, whatever the text language. "
+                                "Automatic leaves it to the game: Japanese voices with Japanese or Chinese text, "
+                                "English otherwise. A change takes effect when the game next applies its options, "
+                                "as on loading a save.",
+    [UI_MENU_VOICE_JA] = "Japanese", [UI_MENU_VOICE_EN] = "English",
     [UI_MENU_OPERATION_MODE] = "Console mode",
     [UI_MENU_OPERATION_MODE_DESC] = "Whether the game thinks it runs docked or handheld.",
     [UI_MENU_MODE_DOCKED] = "Docked", [UI_MENU_MODE_HANDHELD] = "Handheld",
@@ -448,7 +455,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_GPU_AUTO] = "Автоматически",
     [UI_MENU_PERF_OVERLAY] = "Индикатор производительности",
     [UI_MENU_PERF_OVERLAY_DESC] = "Частота кадров в правом верхнем углу. «Полный» добавляет время кадров с графиком, "
-                                  "загрузку ЦП, GPU и памяти, температуры и ожидания потока отрисовки. F10 переключает "
+                                  "загрузку ЦП, GPU и памяти, температуры и ожидания потока отрисовки. F2 или F10 переключают "
                                   "режимы.",
     [UI_MENU_PERF_OFF] = "Выкл.", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Полный",
     [UI_PERF_LINE_FPS] = "%.0f к/с",
@@ -510,8 +517,15 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_CLOTH_REALTIME_DESC] = "Ткань и волосы тоже идут по реальному времени.",
     [UI_MENU_HIGHFPS_FIX] = "Исправление физики на высоком FPS",
     [UI_MENU_HIGHFPS_FIX_DESC] = "Исправляет физику, которая ломается при частоте выше 30 кадров в секунду.",
-    [UI_MENU_GAME_LANG] = "Язык игры", [UI_MENU_GAME_LANG_DESC] = "Язык текста и озвучки игры.",
+    [UI_MENU_GAME_LANG] = "Язык игры",
+    [UI_MENU_GAME_LANG_DESC] = "Язык текста игры, а также озвучки, если её не задаёт «Язык озвучки».",
     [UI_MENU_GAME_LANG_AUTO] = "Автоматически",
+    [UI_MENU_VOICE_LANG] = "Язык озвучки",
+    [UI_MENU_VOICE_LANG_DESC] = "Японская или английская озвучка с подходящей синхронизацией губ, при любом языке "
+                                "текста. «Автоматически» оставляет выбор игре: японская озвучка при японском или "
+                                "китайском тексте, иначе английская. Изменение вступает в силу, когда игра снова "
+                                "применяет настройки, например при загрузке сохранения.",
+    [UI_MENU_VOICE_JA] = "Японский", [UI_MENU_VOICE_EN] = "Английский",
     [UI_MENU_OPERATION_MODE] = "Режим консоли",
     [UI_MENU_OPERATION_MODE_DESC] = "Игра считает, что консоль в док-станции или в портативном режиме.",
     [UI_MENU_MODE_DOCKED] = "В док-станции", [UI_MENU_MODE_HANDHELD] = "Портативный",
