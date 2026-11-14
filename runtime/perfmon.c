@@ -34,7 +34,7 @@ static int g_ring_n, g_ring_pos;
 
 // The per-frame counters, summed since t0 (the overlay's lines are averages over half a second).
 static struct {
-    uint64_t t0, frames, gpu0;
+    uint64_t t0, frames, gpu0, present0;
     double replay, pipe, xlate, tex;
     int64_t up0, up;
 } g_win;
@@ -79,7 +79,7 @@ static void frames_summary(PerfStats *s, uint64_t now) {   // (lock held)
 // Every half second: the window's sums as per-frame averages into g_stats, and a new window. (lock held)
 static void counters_summary(uint64_t now) {
     if (now - g_win.t0 < 500000000ull) return;
-    uint64_t gpu = perf_gpu_busy_total();
+    uint64_t gpu = perf_gpu_busy_total(), present = perf_present_gpu_total();
     if (g_win.t0 && g_win.frames) {
         double n = (double)g_win.frames;
         g_stats.replay_ms = (float)(g_win.replay / n);
@@ -89,10 +89,12 @@ static void counters_summary(uint64_t now) {
         g_stats.tex_uploads = (float)((g_win.up - g_win.up0) / n);
         // no GPU time over a window of frames: no timestamps on this device (or not yet set up)
         g_stats.gpu_ms = gpu > g_win.gpu0 ? (float)((gpu - g_win.gpu0) / 1e6 / n) : -1;
+        g_stats.present_ms = present > g_win.present0 ? (float)((present - g_win.present0) / 1e6 / n) : -1;
     }
     g_win.t0 = now;
     g_win.frames = 0;
     g_win.gpu0 = gpu;
+    g_win.present0 = present;
     g_win.replay = g_win.pipe = g_win.xlate = g_win.tex = 0;
     g_win.up0 = g_win.up;
 }

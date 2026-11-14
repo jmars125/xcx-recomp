@@ -31,6 +31,7 @@ typedef struct {
     // without them), the render thread's waits for pipeline builds, shader translation and texture uploads, and the
     // textures uploaded
     float replay_ms, gpu_ms, pipe_wait_ms, xlate_ms, tex_ms, tex_uploads;
+    float present_ms;   // GPU time of the present's command buffer (scaling, HDR encode, menu; -1 without timestamps)
 } PerfStats;
 
 // Overlay mode 0 off, 1 fps, 2 full (XCX_PERF_OVERLAY), from the present path when the setting changes. Full starts
