@@ -845,11 +845,15 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
 // would; the shade's rect is taken from the frame before, since the pane's boxes are drawn before its border. A shade
 // over a layer that scrolls past the canvas (the map's tiles, the Affinity Chart's portraits: an element of the list lay
 // wholly off the canvas in this frame or the last) instead keeps its inner end and reaches out to the screen edge
-// (UI_PANE_STRETCH), as moving it would also move the tiles under it. Returns the side to move an element to.
+// (UI_PANE_STRETCH), as moving it would also move the tiles under it. There only a shade in a corner of the canvas counts
+// (the survey-rate gradient ends on the top edge too): zoomed in, the map's tiles are over half the clip width wide, and
+// a column of them landing on a side edge while the map scrolls was smeared out to the screen edge for that frame (#90).
+// Returns the side to move an element to.
 #define UI_PANE_STRETCH 2
 #define UI_PANE_MAX 4
+#define UI_PANE_SLACK 0.05f  // how far a sliding pane moves in a frame: its elements stay inside last frame's shade
 #define UI_PANE_ABOVE 0.1f   // clip-space height above a shade whose elements still belong to its pane (the name row)
-static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade) {
+static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade, int exact) {
     typedef struct { int n, off; float lo[UI_PANE_MAX], hi[UI_PANE_MAX], ylo[UI_PANE_MAX], yhi[UI_PANE_MAX];
                      int side[UI_PANE_MAX]; } panes_t;
     static _Thread_local panes_t cur, last;
@@ -862,7 +866,8 @@ static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade) {
     }
     if (hi < -1 || lo > 1) cur.off = 1;
     if (shade) {
-        if (cur.off || last.off) return UI_PANE_STRETCH;
+        int corner = fabsf(yhi - 1) < UI_EDGE_EXACT || fabsf(ylo + 1) < UI_EDGE_EXACT;
+        if (cur.off || last.off) return exact && corner ? UI_PANE_STRETCH : 0;
         if (cur.n < UI_PANE_MAX) {
             int i = cur.n++;
             cur.lo[i] = lo, cur.hi[i] = hi, cur.ylo[i] = ylo, cur.yhi[i] = yhi, cur.side[i] = shade;
@@ -871,7 +876,7 @@ static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade) {
     }
     if (last.off) return 0;
     for (int i = 0; i < last.n; i++) {
-        int in = last.side[i] > 0 ? lo >= last.lo[i] - UI_EDGE_EXACT : hi <= last.hi[i] + UI_EDGE_EXACT;
+        int in = last.side[i] > 0 ? lo >= last.lo[i] - UI_PANE_SLACK : hi <= last.hi[i] + UI_PANE_SLACK;
         if (in && ylo <= last.yhi[i] + UI_PANE_ABOVE && yhi >= last.ylo[i]) return last.side[i];
     }
     return 0;
@@ -893,7 +898,7 @@ static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int view
     uint64_t nd = ui_node(c);
     float shift = ui_shift(nd, lo, hi, k);
     if (!nd) {   // a list's rect inside an edge pane (the pause pane's portrait and level rings) moves with the pane
-        int side = ui_edge_pane(lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0);
+        int side = ui_edge_pane(lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0, 0);
         shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
     }
     *x = mid + (*x - mid) * k + shift * mid;
@@ -956,8 +961,10 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     int right = fabsf(hi - 1) < UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT, left = fabsf(lo + 1) < UI_EDGE_EXACT && hi <= UI_EDGE_EXACT;
     if (!nd) {
         float y0 = f[7], y1 = f[7] + f[5];
+        // A pane slides in from its side, its shade past the canvas edge until it settles on it.
+        int past = (hi >= 1 - UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT && lo < 1) - (lo <= UI_EDGE_EXACT - 1 && hi <= UI_EDGE_EXACT && hi > -1);
         int side = ui_edge_pane(lo, hi, y0 < y1 ? y0 : y1, y0 < y1 ? y1 : y0,
-                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? right - left : 0);
+                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? past : 0, right || left);
         if (side == UI_PANE_STRETCH) {
             float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
             f[0] *= p, f[3] = f[3] * p + q;
