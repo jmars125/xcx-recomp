@@ -840,29 +840,61 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
 
 // Elements of a menu's own list have no node, so ui_shift leaves them at their narrowed 16:9 place. A pane among them
 // that the game lays against a canvas edge is framed by a wide unturned shade ending exactly on that edge: the light
-// border of the pause menu's character pane (lower right, #166), the gradient behind the map's survey rates. Such a shade
-// (side -1 or 1 from ui_fit) and the list's elements that lie inside it move to that screen edge together, as a node's
-// would; the shade's rect is taken from the frame before, since the pane's boxes are drawn before its border. A shade
-// over a layer that scrolls past the canvas (the map's tiles, the Affinity Chart's portraits: an element of the list lay
-// wholly off the canvas in this frame or the last) instead keeps its inner end and reaches out to the screen edge
-// (UI_PANE_STRETCH), as moving it would also move the tiles under it. There only a shade in a corner of the canvas counts
-// (the survey-rate gradient ends on the top edge too): zoomed in, the map's tiles are over half the clip width wide, and
-// a column of them landing on a side edge while the map scrolls was smeared out to the screen edge for that frame (#90).
+// border of the pause menu's character pane (lower right, #166), the gradient behind the map's survey rates. Such a
+// shade (side -1 or 1 from ui_fit) and the list's elements that lie inside it move to that screen edge together, as a
+// node's would; the pane's boxes are drawn before its border, so they go by the shade's rect from the frame before, or
+// are moved once the shade comes later in their recording (ui_edge_pane). A shade over a layer that scrolls past the
+// canvas (the map's tiles, the Affinity Chart's portraits: an element of the list lay wholly off the canvas in this
+// frame or the last) instead keeps its inner end and reaches out to the screen edge (UI_PANE_STRETCH), as moving it
+// would also move the tiles under it. There only a shade in a corner of the canvas counts (the survey-rate gradient
+// ends on the top edge too): zoomed in, the map's tiles are over half the clip width wide, and a column of them landing
+// on a side edge while the map scrolls was smeared out to the screen edge for that frame (#90).
 // Returns the side to move an element to.
 #define UI_PANE_STRETCH 2
 #define UI_PANE_MAX 4
 #define UI_PANE_SLACK 0.05f  // how far a sliding pane moves in a frame: its elements stay inside last frame's shade
 #define UI_PANE_ABOVE 0.1f   // clip-space height above a shade whose elements still belong to its pane (the name row)
-static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade, int exact) {
-    typedef struct { int n, off; float lo[UI_PANE_MAX], hi[UI_PANE_MAX], ylo[UI_PANE_MAX], yhi[UI_PANE_MAX];
-                     int side[UI_PANE_MAX]; } panes_t;
-    static _Thread_local panes_t cur, last;
+#define UI_PANE_PENDING 64   // elements of the recording not in a pane yet, kept for a shade that comes later in it
+typedef struct { int n, off; float lo[UI_PANE_MAX], hi[UI_PANE_MAX], ylo[UI_PANE_MAX], yhi[UI_PANE_MAX];
+                 int side[UI_PANE_MAX]; } ui_panes_t;
+
+// Whether an element lies inside pane i: on the shade's side of its inner end (give or take a frame's slide) and
+// level with it or in the row just above.
+static int ui_in_pane(const ui_panes_t *p, int i, float lo, float hi, float ylo, float yhi) {
+    int in = p->side[i] > 0 ? lo >= p->lo[i] - UI_PANE_SLACK : hi <= p->hi[i] + UI_PANE_SLACK;
+    return in && ylo <= p->yhi[i] + UI_PANE_ABOVE && yhi >= p->ylo[i];
+}
+
+// What an element moved after the fact changes: its uniform block (the GPU reads it when the recording is submitted), or
+// the viewport or scissor record that follows it in the recording, found by offset since the recording may grow and move.
+enum { UI_LATE_NONE, UI_LATE_BLOCK, UI_LATE_VIEWPORT, UI_LATE_SCISSOR };
+typedef struct { int kind; float *f; size_t off; float step; } ui_late_t;
+
+// The pane's boxes, portrait and level rings are drawn before its shade, so the first frame of a pane has no shade to go
+// by, and which frame a box counts in depends on where the present lands in the recording (ui_frames is counted at the
+// present, on another thread). Either left the pane's first frame at its 16:9 place on some openings (#166). So an
+// element of the recording that is in no pane yet is kept, and a shade later in the same recording moves the ones inside
+// it, as it would have moved them had it come first.
+static int ui_edge_pane(const Cpu *c, float lo, float hi, float ylo, float yhi, int shade, int exact, ui_late_t late) {
+    static _Thread_local ui_panes_t cur, last;
     static _Thread_local uint32_t frame;
+    static _Thread_local struct {
+        cmd_t *o;
+        uint64_t start;   // the recording: its command buffer and rec_start
+        ui_panes_t panes;
+        int n;
+        struct { ui_late_t at; float lo, hi, ylo, yhi; } el[UI_PANE_PENDING];
+    } rec;
     uint32_t now = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
     if (now != frame) {
-        last = now - frame == 1 ? cur : (panes_t){0};
+        last = now - frame == 1 ? cur : (ui_panes_t){0};
         memset(&cur, 0, sizeof cur);
         frame = now;
+    }
+    cmd_t *o = cmd_of(c);
+    if (rec.o != o || rec.start != o->rec_start) {
+        rec.o = o, rec.start = o->rec_start, rec.n = 0;
+        memset(&rec.panes, 0, sizeof rec.panes);
     }
     if (hi < -1 || lo > 1) cur.off = 1;
     if (shade) {
@@ -872,12 +904,36 @@ static int ui_edge_pane(float lo, float hi, float ylo, float yhi, int shade, int
             int i = cur.n++;
             cur.lo[i] = lo, cur.hi[i] = hi, cur.ylo[i] = ylo, cur.yhi[i] = yhi, cur.side[i] = shade;
         }
+        if (rec.panes.n < UI_PANE_MAX) {
+            int i = rec.panes.n++;
+            rec.panes.lo[i] = lo, rec.panes.hi[i] = hi, rec.panes.ylo[i] = ylo, rec.panes.yhi[i] = yhi;
+            rec.panes.side[i] = shade;
+            size_t used = (size_t)(o->cur - o->seg);
+            for (int j = 0; j < rec.n; j++) {
+                if (!rec.el[j].at.kind || !ui_in_pane(&rec.panes, i, rec.el[j].lo, rec.el[j].hi, rec.el[j].ylo, rec.el[j].yhi))
+                    continue;
+                ui_late_t *at = &rec.el[j].at;
+                float step = shade * at->step;
+                if (at->kind == UI_LATE_BLOCK) at->f[3] += step;
+                else if (o->recording && at->off + 8 + (at->kind == UI_LATE_VIEWPORT ? sizeof(p_viewports) : sizeof(p_scissor)) <= used) {
+                    op_hdr h;
+                    memcpy(&h, o->seg + at->off, sizeof h);
+                    if (at->kind == UI_LATE_VIEWPORT && h.op == OP_VIEWPORTS) ((p_viewports *)(o->seg + at->off + 8))->v[0][0] += step;
+                    if (at->kind == UI_LATE_SCISSOR && h.op == OP_SCISSOR) ((p_scissor *)(o->seg + at->off + 8))->x += (int32_t)lrintf(step);
+                }
+                at->kind = UI_LATE_NONE;
+            }
+        }
         return shade;
     }
     if (last.off) return 0;
-    for (int i = 0; i < last.n; i++) {
-        int in = last.side[i] > 0 ? lo >= last.lo[i] - UI_PANE_SLACK : hi <= last.hi[i] + UI_PANE_SLACK;
-        if (in && ylo <= last.yhi[i] + UI_PANE_ABOVE && yhi >= last.ylo[i]) return last.side[i];
+    for (int i = 0; i < rec.panes.n; i++)
+        if (ui_in_pane(&rec.panes, i, lo, hi, ylo, yhi)) return rec.panes.side[i];
+    for (int i = 0; i < last.n; i++)
+        if (ui_in_pane(&last, i, lo, hi, ylo, yhi)) return last.side[i];
+    if (late.kind && rec.n < UI_PANE_PENDING) {
+        int j = rec.n++;
+        rec.el[j].at = late, rec.el[j].lo = lo, rec.el[j].hi = hi, rec.el[j].ylo = ylo, rec.el[j].yhi = yhi;
     }
     return 0;
 }
@@ -898,7 +954,9 @@ static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int view
     uint64_t nd = ui_node(c);
     float shift = ui_shift(nd, lo, hi, k);
     if (!nd) {   // a list's rect inside an edge pane (the pause pane's portrait and level rings) moves with the pane
-        int side = ui_edge_pane(lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0, 0);
+        cmd_t *o = cmd_of(c);   // the caller records the rect next, at the end of the recording
+        ui_late_t late = {viewport ? UI_LATE_VIEWPORT : UI_LATE_SCISSOR, NULL, (size_t)(o->cur - o->seg), (1 - k) * mid};
+        int side = ui_edge_pane(c, lo, hi, 1 - 2 * (y + h) / out[1], 1 - 2 * y / out[1], 0, 0, late);
         shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
     }
     *x = mid + (*x - mid) * k + shift * mid;
@@ -963,8 +1021,9 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
         float y0 = f[7], y1 = f[7] + f[5];
         // A pane slides in from its side, its shade past the canvas edge until it settles on it.
         int past = (hi >= 1 - UI_EDGE_EXACT && lo >= -UI_EDGE_EXACT && lo < 1) - (lo <= UI_EDGE_EXACT - 1 && hi <= UI_EDGE_EXACT && hi > -1);
-        int side = ui_edge_pane(lo, hi, y0 < y1 ? y0 : y1, y0 < y1 ? y1 : y0,
-                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? past : 0, right || left);
+        int side = ui_edge_pane(c, lo, hi, y0 < y1 ? y0 : y1, y0 < y1 ? y1 : y0,
+                                hi - lo >= UI_EDGE_WIDE && f[1] == 0 && f[4] == 0 ? past : 0, right || left,
+                                (ui_late_t){UI_LATE_BLOCK, f, 0, 1 - k});
         if (side == UI_PANE_STRETCH) {
             float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
             f[0] *= p, f[3] = f[3] * p + q;
