@@ -38,6 +38,7 @@ static const char *const known[] = {
     "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "BRIGHTNESS", "BUG_REPORT_TEST", "CHEATS", "CLOTH_REALTIME", "CORE_DIAG", "CRASH_TEST", "CRIT", "CRIT_OUT", "CUTSCENE_30", "DESC_TEMPLATE", "DEVICE_PROFILE", "DLSS_JITTER", "DLSS_MASK", "DLSS_MASK_PX", "DLSS_MIPBIAS", "DLSS_MV", "DLSS_MVDEBUG", "DLSS_OBJMV", "DLSS_PRESET", "DUMP", "DUMP_BUF", "DUMP_DIR", "DUMP_LOG", "DUMP_ONLY",
     "EXEFS", "FAST_CORES", "FEEDBACK", "FIX_C0", "FIX_ZERO", "FLIGHT", "FLIGHT_AT", "FLIGHT_DIR", "FLIGHT_FRAMES", "FLIGHT_SPIKE_MS",
     "FLIGHT_THUMBS", "FPS60", "FPS_LIMIT", "FREEZE_IDLE", "FREE_CORES", "FULLSCREEN", "GATHER_BIAS", "GPL", "GPL_DRAW_BUILD", "GPU",
+    "GRASS_DISTANCE", "GRASS_PATCH", "GRASS_POOL",
     "GPU_INDEX", "GPU_NAME", "HDR", "HDR_GAME_NITS", "HDR_HUE", "HDR_PEAK_NITS", "HDR_UI_NITS", "HIGHFPS_FIX", "INPUT", "INPUT_RECORD", "INPUT_SCRIPT", "LANG", "LIB_PREBUILD",
     "LIB_PREBUILD_KEEP", "LIB_PREBUILD_THREADS", "LOCALE", "LOD_GUARD", "MEMORY", "MENU_LANG", "MENU_TEST",
     "MENU_TEST_DIR", "MENU_TEST_SET", "MINIMAL_LAYOUT", "MIRROR_GAP", "MOTION", "MOUSE_SENS", "MOVIE_HOST", "MOVIE_PACE",
@@ -62,6 +63,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"SHARPNESS", "display"}, {"BRIGHTNESS", "display"}, {"PICTURE_FIT", "display"},
     {"HDR", "display"}, {"HDR_PEAK_NITS", "display"}, {"HDR_GAME_NITS", "display"}, {"HDR_UI_NITS", "display"},
     {"HDR_HUE", "display"},
+    {"GRASS_DISTANCE", "display"},
     {"DEVICE_PROFILE", "display"},
     {"MENU_LANG", "language"}, {"LANG", "language"}, {"OPERATION_MODE", "language"},
     {"VOLUME", "audio"}, {"PAUSE_IN_BACKGROUND", "audio"}, {"CHEATS", "cheats"},
@@ -98,6 +100,7 @@ static const CfgMeta metas[] = {
     {"UPSCALER", "fsr", "fsr|bilinear|dlss", LIVE}, {"SHARPNESS", "80", "0..100", LIVE},
     {"BRIGHTNESS", "100", "40..120", LIVE},
     {"PICTURE_FIT", "keep", "keep|stretch", LIVE},
+    {"GRASS_DISTANCE", "1", "1|1.5|2|3", LIVE},
     // HDR output (vk_hdr.c): on at start (the tonemap shader is swapped as shaders load); the nits apply at once
     {"HDR", "0", "0|1", RESTART}, {"HDR_PEAK_NITS", "1000", "400..10000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
     {"HDR_UI_NITS", "203", "80..500", LIVE}, {"HDR_HUE", "50", "0..100", LIVE},
