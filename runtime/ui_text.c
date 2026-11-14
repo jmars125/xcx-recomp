@@ -131,6 +131,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                  "Deck's 16:10 screen), keep the picture's proportions with black bars, or stretch it "
                                  "over the whole window.",
     [UI_MENU_PICTURE_FIT_KEEP] = "Keep (bars)", [UI_MENU_PICTURE_FIT_STRETCH] = "Stretch",
+    [UI_MENU_WORLD_GROUP] = "World detail",
     [UI_MENU_GRASS] = "Grass distance",
     [UI_MENU_GRASS_DESC] = "How far from the camera grass loads and is drawn. Original keeps the game's ranges (10 to 90 m "
                            "per grass layer); higher values multiply them, so grass appears further away and its denser "
@@ -465,6 +466,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PICTURE_FIT_DESC] = "Когда форма окна отличается от формы разрешения игры (игра 16:9 на экране Steam Deck "
                                  "16:10), сохранять пропорции картинки с чёрными полосами или растягивать её на всё окно.",
     [UI_MENU_PICTURE_FIT_KEEP] = "Сохранять (полосы)", [UI_MENU_PICTURE_FIT_STRETCH] = "Растягивать",
+    [UI_MENU_WORLD_GROUP] = "Детализация мира",
     [UI_MENU_GRASS] = "Дальность травы",
     [UI_MENU_GRASS_DESC] = "Как далеко от камеры загружается и рисуется трава. «Как в игре» оставляет дальность игры "
                            "(от 10 до 90 м для каждого слоя травы); большие значения умножают её, и трава появляется "
