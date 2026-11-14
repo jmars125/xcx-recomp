@@ -52,6 +52,7 @@ double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
 extern const char rt_port_version[];
+int rt_grass_available(void);
 }
 
 // Roboto Medium (Apache-2.0, ui/fonts/LICENSE-Roboto.txt) with Latin and Cyrillic glyphs.
@@ -578,6 +579,10 @@ static void tab_screen(float scale) {
     opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 3, UI_MENU_UPSCALER_DESC);
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
     opt_choice("XCX_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
+    if (rt_grass_available()) {   // the 2.0.0 update's grass patch set (grass.c)
+        static const UiTextId grass[] = {UI_MENU_GRASS_ORIGINAL, UI_MENU_GRASS_15, UI_MENU_GRASS_2, UI_MENU_GRASS_3};
+        opt_choice("XCX_GRASS_DISTANCE", UI_MENU_GRASS, grass, 4, UI_MENU_GRASS_DESC);
+    }
     opt_slider("XCX_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     opt_slider("XCX_BRIGHTNESS", UI_MENU_BRIGHTNESS, 40, 120, UI_MENU_BRIGHTNESS_DESC, 5, "%.0f %%");
     opt_group(UI_MENU_HDR_GROUP);
