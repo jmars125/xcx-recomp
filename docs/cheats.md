@@ -1,9 +1,10 @@
 # Cheats
 
 Turn on **Cheats** in the Game tab of the in-game menu (F1) and a **Cheats** tab appears. It lists the recomp's
-built-in cheats, grouped as Adventure, Combat, Items, Item Drops, Weapon Type and Weather, then the cheats of every mod
-folder. A cheat switched on applies at once and stays on after a restart. Turning **Cheats** off stops every cheat and
-hides the tab; the ones chosen come back when it is turned on again (`cheats` in `xcx.ini`).
+built-in cheats, grouped as Adventure, Combat, Items, Item Drops, Weapon Type and Weather, and the cheats of every mod
+folder. When there are both, the **Show** row at the top switches between the two lists (it opens on the cheat files);
+cheats of both can be on at once. A cheat switched on applies at once and stays on after a restart. Turning **Cheats**
+off stops every cheat and hides the tab; the ones chosen come back when it is turned on again (`cheats` in `xcx.ini`).
 
 Cheats change the running game, and the game saves what it finds in memory. Back up your saves first.
 
@@ -15,6 +16,9 @@ The names were cleaned up for the menu; the codes are unchanged, except Max Fund
 Funds to 99,999,999, the game's cap, once a save is loaded. The list is `tools/data/cheats/EC4ED46BBC4A9EBB.txt`.
 The runtime embeds it and every install builds its code cheats into the game, so they need no files and no extra
 setup run. Values a cheat set stay where they are when it is switched off.
+
+Silver Chests Always and Gold Chests Always carry a warning: during a mission they can turn the chest that holds the
+mission's key item into another one, and the mission then cannot be finished on that save. Use them in free play only.
 
 A few of them cannot be built in yet and show as unavailable, with the reason: see "Code cheats" below.
 
@@ -55,10 +59,14 @@ instead: `tools/cheats.py` turns each one into a patch set that the Cheats tab s
 - Put the cheat file in `mods/<name>/cheats/`, then run the setup again (Install or Update). It rebuilds the game with
   the cheats in; that takes a few minutes. A cheat added or edited later shows "needs the setup again" until then.
 - Cheats that branch into a code cave (a "MUST BE ON" section that writes code past `main`) are supported: the cave's
-  code is built in at the cheat's site.
+  code is built in at the cheat's site, with its own branches (if/else, loops, more than one way back) and a call or a
+  jump back out as its last instruction. Its compares keep their flags to themselves, so the instruction the cheat
+  replaces must not set or read flags.
 - Button cheats (`8` opcode around the code writes) act only while their buttons are held.
-- Some cheats can't be built in yet, and the tab greys them out with the reason: caves with their own branches
-  (if/else or loops inside), and cheats that mix code changes with data written by the interpreter.
+- Some cheats can't be built in yet, and the tab greys them out with the reason: cheats that mix code changes with
+  data written by the interpreter or with button conditions around data, caves that replace an instruction whose flags
+  the game reads after it (Robot Appendages), caves that use `adrp` or a call in the middle, and caves that
+  call an address outside this version's code (Max Arts and Skills, whose call is to another build's function).
 - Two cheats that change the same instruction (such as hp inf and tp inf) can't both act: the first one in the file
   wins.
 - The setup lists what it built in `build-cache/cheats.status` next to `xcx.exe`.

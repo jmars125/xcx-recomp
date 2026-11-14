@@ -51,6 +51,15 @@ from lifter import hx  # noqa: E402
 from module import Module  # noqa: E402
 
 TERMINATORS = ('b', 'br', 'ret', 'trap')
+
+
+class Local:
+    """A lifted b / b.cond / cbz / tbz of a patch replacement that goes to word `to` of the same replacement
+    (recomp/patches.py, <word>@<index>); its own target is meaningless there."""
+    __slots__ = ('kind', 'code', 'target', 'cond', 'to')
+
+    def __init__(self, ins, to):
+        self.kind, self.code, self.target, self.cond, self.to = ins.kind, ins.code, None, ins.cond, to
 MUSTTAIL = '__attribute__((musttail)) return'
 
 # Estimated bytes of C per instruction, by class, for chunking (estimate_sizes()).
@@ -79,8 +88,9 @@ def _sext(v, n):
     return np.where(v & (1 << (n - 1)), v - (1 << n), v)
 
 
-def discover(mod):
-    """Function starts of mod as a sorted int64 array of word indices into mod.words, plus discovery statistics."""
+def discover(mod, extra=()):
+    """Function starts of mod as a sorted int64 array of word indices into mod.words, plus discovery statistics.
+    extra: more function starts (absolute addresses), the targets of the calls in patch replacements."""
     w = mod.words
     n = len(w)
 
@@ -146,7 +156,8 @@ def discover(mod):
     mat = (mat - pc0) >> 2
 
     bl_tgt = bl_tgt[(bl_tgt >= 0) & (bl_tgt < n)]
-    starts = np.unique(np.concatenate([seeds, bl_tgt, mat]))
+    more = np.array([(a - pc0) >> 2 for a in extra if mod.lo <= a < mod.hi and a % 4 == 0], dtype=np.int64)
+    starts = np.unique(np.concatenate([seeds, bl_tgt, mat, more]))
     stats = {'seeds': int(len(seeds)), 'bl_targets': int(len(np.unique(bl_tgt))),
              'materialised_targets': int(len(np.unique(mat))), 'initial_starts': int(len(starts))}
 
@@ -259,20 +270,34 @@ class Emitter:
             if entry <= a < end:
                 for words in self.replacements(a):
                     r = words[-1]
-                    if r.kind in ('b', 'bcond') and entry <= r.target < end:
+                    if r.kind in ('b', 'bcond') and not isinstance(r, Local) and entry <= r.target < end:
                         labels.add(r.target)
         return labels, tables
 
     def replacements(self, a):
         """The lifted words of each alternative of the patched site a, in set order. Only the last word of an
-        alternative may branch (bl, b, b.cond / cbz / tbz, ret)."""
+        alternative may branch out of it (bl, b, b.cond / cbz / tbz, ret); a word with @<index> (recomp/patches.py)
+        branches inside it and lifts as a Local."""
         out = []
         for _, words in self.patched[a]:
-            lifted = [self.mod.lifter.lift(w, a) for w in words]
+            lifted = []
+            for w in words:
+                if isinstance(w, tuple):   # ('to', word, index)
+                    r = self.mod.lifter.lift(w[1], a)
+                    if r.kind not in ('b', 'bcond'):
+                        raise patches.PatchError(f'{a:#x}: replacement word {w[1]:08x}@{w[2]} is a {r.kind}')
+                    lifted.append(Local(r, w[2]))
+                else:
+                    lifted.append(self.mod.lifter.lift(w, a))
             for j, r in enumerate(lifted):
                 last = j == len(lifted) - 1
-                if r.kind != 'op' and not (last and r.kind in ('bl', 'b', 'bcond', 'ret')):
-                    raise patches.PatchError(f'{a:#x}: replacement word {words[j]:08x} is a {r.kind}')
+                if r.kind != 'op' and not isinstance(r, Local) and not (last and r.kind in ('bl', 'b', 'bcond', 'ret')):
+                    w = words[j]
+                    raise patches.PatchError(f'{a:#x}: replacement word {w:08x} is a {r.kind}')
+            if any(isinstance(r, Local) for r in lifted):
+                r = lifted[-1]
+                if not isinstance(r, Local) and r.kind == 'bcond' and flags.effect(r.cond)[0]:
+                    raise patches.PatchError(f'{a:#x}: a self-contained replacement ends in a branch on its flags')
             out.append(lifted)
         return out
 
@@ -284,7 +309,7 @@ class Emitter:
 
         def of(ins, i):
             k = ins.kind
-            if k in ('op', 'bl', 'blr'):
+            if k in ('op', 'bl', 'blr') or isinstance(ins, Local):   # a Local leaves its site only to the next word
                 return [i + 1]
             if k == 'b':
                 return idx(ins.target)
@@ -324,7 +349,7 @@ class Emitter:
                     r = words[-1]
                     if r.kind == 'bl':
                         calls.add(i)
-                    elif r.kind in ('b', 'bcond') and not entry <= r.target < end:
+                    elif r.kind in ('b', 'bcond') and not isinstance(r, Local) and not entry <= r.target < end:
                         exits.add(i)
             else:
                 effects.append(flags.effect(ins.cond if k == 'bcond' else ins.code or ''))
@@ -335,7 +360,14 @@ class Emitter:
         """Flag effect of a patched site: every alternative (the original and each replacement) must write the same
         flags, in at most one word each; the site reads flags when any alternative does (a b.cond reads them)."""
         alts = []
-        for words in [[ins]] + self.replacements(a):
+        mine = [w for w in self.replacements(a) if not any(isinstance(r, Local) for r in w)]
+        if len(mine) < len(self.patched[a]):
+            # a self-contained alternative keeps its flags in c->nzcv (patch() lifts it so): the function's flags pass
+            # it untouched, which is right only where the original instruction leaves them alone too
+            own = flags.effect(ins.cond) if ins.kind == 'bcond' else flags.effect(ins.code or '')
+            if own[0] or own[1]:
+                raise patches.PatchError(f'{a:#x}: a self-contained replacement of an instruction that uses flags')
+        for words in [[ins]] + mine:
             fx = [flags.effect(w.code or '') if w.kind == 'op' else flags.effect(w.cond) for w in words
                   if w.kind in ('op', 'bcond')]
             fx = [e for e in fx if e[0] or e[1]]
@@ -345,7 +377,7 @@ class Emitter:
         if any(e[1] != alts[0][1] for e in alts):
             raise patches.PatchError(f'{a:#x}: the alternatives write different flags ({[e[1] for e in alts]})')
         reads = any(e[0] for e in alts)
-        if (alts[0][1] or reads) and (ins.kind == 'bl' or any(w[-1].kind == 'bl' for w in self.replacements(a))):
+        if (alts[0][1] or reads) and (ins.kind == 'bl' or any(w[-1].kind == 'bl' for w in mine)):
             raise patches.PatchError(f'{a:#x}: a patched call that uses flags')
         return reads, alts[0][1]
 
@@ -431,8 +463,18 @@ class Emitter:
             code = fx(i, code)
             return f'{spill}{code}{reload}' if regs.ESCAPE.search(code) else code
 
-        def one(i, r, a):
-            """C of one lifted word of a patched site."""
+        def raw(code):
+            """An op of a self-contained alternative: its flags in c->nzcv, as the guest keeps them."""
+            return f'{spill}{code}{reload}' if regs.ESCAPE.search(code) else code
+
+        def one(i, r, a, local=None):
+            """C of one lifted word of a patched site. local: the label prefix of a self-contained alternative."""
+            if local is not None:
+                if isinstance(r, Local):
+                    to = f'goto {local}{r.to};'
+                    return to if r.kind == 'b' else f'if ({r.cond}) {{ {to} }}'
+                if r.kind == 'op':
+                    return raw(r.code)
             if r.kind == 'op':
                 return op(i, r.code)
             if r.kind == 'bl':
@@ -451,7 +493,16 @@ class Emitter:
                 raise patches.PatchError(f'{a:#x}: patched instruction is a {ins.kind}')
             line = '   '
             for (k, _), words in zip(self.patched[a], self.replacements(a)):
-                line += f' if (rt_patch_on[{k}]) {{ {" ".join(one(i, r, a) for r in words)} }} else'
+                if any(isinstance(r, Local) for r in words):   # labels P_<site>_<set>_<word>
+                    local = f'P_{a:x}_{k}_'
+                    to = {r.to for r in words if isinstance(r, Local)}
+                    text = ' '.join((f'{local}{j}:; ' if j in to else '') + one(i, r, a, local)
+                                    for j, r in enumerate(words))
+                    if len(words) in to:
+                        text += f' {local}{len(words)}:;'
+                else:
+                    text = ' '.join(one(i, r, a) for r in words)
+                line += f' if (rt_patch_on[{k}]) {{ {text} }} else'
             self.uses_patches = True
             self.stats['patched_sites'] += 1
             return f'{line} {{ {one(i, ins, a)} }}'
@@ -703,7 +754,7 @@ def main():
         path = args.exefs / name
         mod = Module(name, path, base, 'c')
         patches.check(table, mod, name)
-        starts, dstats = discover(mod)
+        starts, dstats = discover(mod, patches.call_targets(table, name, base))
         est = estimate_sizes(mod, starts)
         abs_starts = mod.lo + starts * 4
         n = len(starts) if not args.limit else min(args.limit, len(starts))
