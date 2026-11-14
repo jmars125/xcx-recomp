@@ -212,7 +212,7 @@ mechanism; it also added the D-pad, stick and plus/minus symbols to the text pat
 - `icon_button03`'s consumer, found later (issue #102): the field HUD's `R + X  Follow Ball` guide at the bottom right, two panes (cells 14
   and 5) through the same type-1 bind. Its 24-record table is the closed form `{1, 1, 45/368, 149/450, (col*46+0.5)/368, (row*50+0.5)/150}`
   of 46x50 cells, so it is the third verified sheet kind (`INLINE_LAYOUT_MASK`, `runtime/inline_glyph.h`); its cells use the text atlas's
-  standard glyph boxes and the fitted tile goes through `glyph_art_to_mask`, like the Soul Challenge `B`.
+  standard glyph boxes and hold the fitted tiles unchanged: the layout's tint is near white, so Colored faces keep their colors.
 
 ### What was added
 

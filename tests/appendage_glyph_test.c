@@ -623,7 +623,7 @@ int main(int argc, char **argv) {
           #undef BIND2
         }
 
-        // ---- the white-mask sheet (icon_button03, the field HUD's `R + X` guide, issue #102): the sheet's symbols, its own layout
+        // ---- the white-mask sheet (icon_button03, the field HUD's `R + X` guide, issue #102): the sheet's symbols and tiles, its own layout
         { static _Alignas(16) uint8_t res3[0x1000], tbl3[8], obj3[0x38], pane3[0x400];
           uint32_t b0=0x80, rel=0x100; memcpy(res3+0x2c,&b0,4); memcpy(res3+0x80+0x18,&rel,4); inline_mask_records(res3+0x80+0x100);
           put64(pane3,MOD_MAIN_BASE+0x1c94318); pane3[0x18]=1; put16(pane3+0x34e,MASK_RECORDS); put16(pane3+0x34c,SYM_R);
@@ -640,11 +640,14 @@ int main(int argc, char **argv) {
             assert(!strcmp(glyph_art_name((unsigned)got[SYM_R]),"audune_playstation_r.png")&&!strcmp(glyph_art_name((unsigned)got[SYM_X]),"audune_playstation_west.png"));   // R1 + Square
             for (int i=SYM_SLV;i<=SYM_SRH;i++) assert(got[i]==-1); }                      // not the stick image's symbols
           put16(pane3+0x34c,SYM_X); BIND3(); assert(appendage_inline_id(inline_handle_result)==1);   // the X pane shares the composite
-          // Colored appearance: the mask still takes the Standard faces (a colored tile masks to a plain disc), so no new signature.
-          appearance_preference="colored"; BIND3(); assert(appendage_inline_id(inline_handle_result)==1&&inline_sig_count==1); appearance_preference="standard";
-          preference="xbox"; BIND3(); assert(appendage_inline_id(inline_handle_result)==2);
-          preference="keyboard"; source=GLYPH_SOURCE_KEYBOARD; BIND3(); assert(appendage_inline_id(inline_handle_result)==3);
-          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(3,got,&lay)&&lay==INLINE_LAYOUT_MASK);
+          // Colored appearance: the cells take the colored faces like every other PlayStation prompt, in their own signature.
+          appearance_preference="colored"; BIND3(); assert(appendage_inline_id(inline_handle_result)==2);
+          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(2,got,&lay)&&lay==INLINE_LAYOUT_MASK);
+            assert(!strcmp(glyph_art_name((unsigned)got[SYM_X]),"audune_playstation_west_colored.png")); }
+          appearance_preference="standard";
+          preference="xbox"; BIND3(); assert(appendage_inline_id(inline_handle_result)==3);
+          preference="keyboard"; source=GLYPH_SOURCE_KEYBOARD; BIND3(); assert(appendage_inline_id(inline_handle_result)==4);
+          { int16_t got[GLYPH_SYMBOLS]; int lay=-1; assert(appendage_inline_signature(4,got,&lay)&&lay==INLINE_LAYOUT_MASK);
             assert(!strcmp(glyph_art_name((unsigned)got[SYM_R]),"keyboard_r.png")&&!strcmp(glyph_art_name((unsigned)got[SYM_X]),"keyboard_space.png")); }
           preference="original"; BIND3(); assert(inline_handle_result==0x10400338u);
           preference="playstation"; source=GLYPH_SOURCE_PAD;

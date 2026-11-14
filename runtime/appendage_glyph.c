@@ -262,13 +262,7 @@ static unsigned inline_signature_id(int layout, const int16_t art[GLYPH_SYMBOLS]
 // The replaceable symbols the current style would draw for one layout, as a set (symbols of other layouts are masked out so an
 // unrelated binding change does not mint a new signature); returns whether any symbol of this layout is replaced.
 static int layout_symbols(int layout, int16_t art[GLYPH_SYMBOLS]) {
-    if (layout == INLINE_LAYOUT_MASK) {
-        // White masks the layout tints: a Colored face tile (a colored symbol on a dark disc) would become a plain disc, so the
-        // mask always takes the Standard tiles, whose light shape and dark label make the native kind of mask.
-        int source, family, pad_layout; InputMap map;
-        input_glyph_snapshot(&source, &family, &pad_layout, &map);
-        glyph_decide_symbol_set(glyph_style_setting(), source, family, pad_layout, &map, GLYPH_STANDARD, art);
-    } else glyph_current_symbol_set(art);
+    glyph_current_symbol_set(art);
     int any = 0;
     for (int i = 0; i < GLYPH_SYMBOLS; i++) {
         int mine = layout == INLINE_LAYOUT_STICKS ? i >= SYM_PER_SHEET : layout == INLINE_LAYOUT_HINT ? i == SYM_R || i == SYM_CRS || i == SYM_CRSD : layout == INLINE_LAYOUT_SOUL ? i == SYM_B : layout == INLINE_LAYOUT_HOLD ? i == SYM_A : i < SYM_PER_SHEET;

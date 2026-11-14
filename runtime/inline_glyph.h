@@ -76,7 +76,9 @@ static const InlineBox inline_stick_boxes[4] = {{16, 4, 55, 81}, {4, 16, 80, 56}
 // the bottom right (`R + X  Follow Ball`, issue #102): two panes drawing cells 14 (R) and 5 (X) through the type-1 bind. The 24-record table
 // is a closed form, read from the live resource:
 //   {1, 1, 45/368, 149/450, (col*46+0.5)/368, (row*50+0.5)/150, u16 46, u16 50}.
-// The glyph boxes are those of the text atlas's standard cells (inline_font_boxes[0]), the same drawings on the same grid.
+// The glyph boxes are those of the text atlas's standard cells (inline_font_boxes[0]), the same drawings on the same grid. Replaced cells
+// hold the style's tiles as they are, not masks: the layout's tint is near white, so the Colored faces keep their colors like every
+// other PlayStation, Xbox or Steam prompt (a masked tile lost them, issue #102).
 enum { MASK_W = 368, MASK_H = 150, MASK_RECORDS = 24 };
 #define MASK_RECORDS_SHA256 {0x35,0x06,0xa7,0x4e,0x37,0xff,0xf6,0x2c,0x49,0x38,0x15,0x39,0xdc,0x23,0xc5,0x7d,                              0xbd,0x4e,0xc8,0xa2,0x67,0x85,0x17,0x0d,0xde,0x5e,0x0e,0xf2,0x71,0xd8,0xff,0xc4}
 // SHA-256 of the first 128 bytes of the image's resource object (the same guard the resource probe in appendage_glyph.c uses).

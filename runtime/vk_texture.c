@@ -1289,7 +1289,6 @@ static Tex *inline_upload(unsigned sig, const Tex *native, int layout, const int
         if (layout == INLINE_LAYOUT_HINT) glyph_art_shadowed(dst, (int)cw, (int)ch);
         if (layout == INLINE_LAYOUT_HOLD) glyph_art_hold_button(dst, (int)cw, (int)ch);
         if (layout == INLINE_LAYOUT_SOUL) glyph_art_to_mask(dst, (int)(cw * ch));   // the disc is white and the letter a hole, like the native image
-        if (layout == INLINE_LAYOUT_MASK) glyph_art_to_mask(dst, (int)(cw * ch));   // icon_button03 draws white masks the layout tints
         regions[n] = (VkBufferImageCopy){.bufferOffset = (VkDeviceSize)n * cell_bytes, .bufferRowLength = cw,
                                          .bufferImageHeight = ch,
                                          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
