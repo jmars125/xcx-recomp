@@ -224,6 +224,13 @@ site xcx60 main 2ea58 1e204100 @page:x9 bd404d20 1e201900
 # rounded, instead; the last instruction still sets the flags the branch after it reads. x9, s0 and s1 are free: a
 # call or a return follows.
 site xcx60 main 3f4a8c 71400508 @page:x9 bd404d20 52a8b009 1e270121 1e210800 1e240009 6b090108
+# The event curves' sampler (#106: the camera and actors judder above 30 fps): main+0x3f4d90 reads a track at time t
+# (event frames) between its keys at floor(t) and ceil(t). The plain path blends by t - floor(t); the packed path
+# (main+0x3f4fc8) takes trunc(t) - floor(t) instead, which is 0 for any t >= 0 (t is clamped there), so it returns the
+# floor key. At 30 fps the event clock only holds whole frames and nothing shows; above it the event camera, and what
+# follows it, held each 30 fps key for several frames and then jumped (Doug's Skell flight). The blend takes
+# t - floor(t) (s9 - s8), as the plain path does; s1 is written there and only read by the fmadd after it.
+site xcx60 main 3f4fd4 1e283821 1e283921
 
 # The HUD's text windows (#116: the yellow tips at the lower left, among others): opening one (main+0x5d870c,
 # main+0x5d8ebc, main+0x5d966c) stores its data row's DispTime column, a count of 30 fps frames, at +0x2a of the window,
