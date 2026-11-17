@@ -147,6 +147,8 @@ int probe_cfg(void) {
     CHECK(m && EQ(m->def, "axis") && EQ(m->values, "axis|round") && m->live, "meta: deadzone shape is per axis by default, live");
     m = cfg_meta("STICK_CENTER_R");
     CHECK(m && EQ(m->def, "") && m->live, "meta: stick center has no default and is live");
+    m = cfg_meta("GRASS_DISTANCE");
+    CHECK(m && EQ(m->def, "1") && EQ(m->values, "1|1.5|2|3") && m->live, "meta: grass distance is 1 by default, up to 3, live");
     m = cfg_meta("xcx_vk_present");
     CHECK(m && EQ(m->key, "VK_PRESENT") && EQ(m->values, "mailbox|fifo|immediate") && m->live,
           "meta: prefix and case are accepted");
