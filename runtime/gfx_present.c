@@ -11,7 +11,7 @@
 // dirty (gfx_window_mark_dirty), the next present (or gfx_window_resize) rebuilds it.
 //
 // The in-game menu (ui/menu.h) draws over the game image in the present's command buffer, after the blit. The window's
-// size and fullscreen state are the settings XCX_WINDOW_SIZE and XCX_FULLSCREEN, which the back end applies at start
+// size and window mode are the settings XCX_WINDOW_SIZE and XCX_FULLSCREEN, which the back end applies at start
 // and whenever a cfg_set changes them (window_settings_live -> gfx_window_apply_settings).
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,9 +77,18 @@ void gfx_window_closed(void) {
     plat_exit(0);
 }
 
-// XCX_FULLSCREEN=1: borderless window over the monitor. XCX_WINDOW_SIZE=<w>x<h>: client area of the window (the
-// swapchain follows the window; the game image is scaled to it).
-int gfx_cfg_fullscreen(void) { return cfg_bool("XCX_FULLSCREEN"); }
+// XCX_FULLSCREEN: 0 a window, borderless a window without a frame over the monitor that the desktop still composes (the
+// taskbar and Alt+Tab come up over it), 1 the same window with the driver allowed to take the monitor for the swapchain
+// (exclusive fullscreen at the desktop's mode). Any other value counts as 1, as when the key was a switch.
+// XCX_WINDOW_SIZE=<w>x<h>: client area of the window (the swapchain follows the window; the game image is scaled to it).
+int gfx_cfg_window_mode(void) {
+    const char *v = cfg_value("XCX_FULLSCREEN");
+    return !strcmp(v, "0") ? GFX_WINDOWED : !strcmp(v, "borderless") ? GFX_BORDERLESS : GFX_FULLSCREEN;
+}
+
+const char *gfx_window_mode_value(int mode) {
+    return mode == GFX_BORDERLESS ? "borderless" : mode == GFX_FULLSCREEN ? "1" : "0";
+}
 
 void gfx_cfg_window_size(int *w, int *h) {
     int x = 0, y = 0;
@@ -106,6 +115,7 @@ static VkSwapchainKHR g_sc;
 static VkFormat g_sc_fmt;
 static int g_sc_hdr;                        // HDR10 (XCX_HDR, vk_hdr.c): PQ code values in Rec. 2020
 static VkExtent2D g_sc_ext;
+static int g_sc_client[2];                  // the window client size the swapchain was made for
 static int g_scaler;                        // the last present: 0 the game image 1:1, 1 scaled by the blit, 2 by FSR
 static uint32_t g_sc_n;
 static VkImage g_sc_img[MAX_IMAGES];
@@ -298,7 +308,20 @@ static void free_capture(void) {
 }
 
 // Returns 1 with a usable swapchain, 0 when the window has no area (minimised). Called with g_pl held.
+// The dirty mark is taken before the window's size is read, not cleared at the end: the window thread may resize the
+// window while the swapchain is made (the fullscreen switch at the first activation lands in the device wait and
+// vkCreateSwapchainKHR), and clearing the mark afterwards lost that resize. NVIDIA's native Vulkan present on Windows
+// does not report the old size as out of date, so the swapchain stayed at the windowed client size (2560x1421 on a
+// 1440p monitor) in fullscreen (issue #148). A failed build puts the mark back.
+static int create_swapchain_once(void);
 static int create_swapchain(void) {
+    plat_xchg32(&g_dirty, 0);
+    int ok = create_swapchain_once();
+    if (!ok) plat_xchg32(&g_dirty, 1);
+    return ok;
+}
+
+static int create_swapchain_once(void) {
     flip_locked();   // the acquired image goes out before its swapchain is replaced
     VkCtx *c = vk_ctx();
     VkSurfaceCapabilitiesKHR caps;
@@ -340,7 +363,7 @@ static int create_swapchain(void) {
                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,   // every surface supports it (the menu overlay draws into it)
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = pick_present_mode(c->phys), .clipped = VK_TRUE,
-        .oldSwapchain = old};
+        .oldSwapchain = old, .pNext = wsys_swapchain_next()};
     VkResult r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
     if (r != VK_SUCCESS) {
         rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
@@ -358,6 +381,8 @@ static int create_swapchain(void) {
     g_sc_hdr = hdr;
     vk_hdr_set_active(hdr);
     if (hdr) vk_hdr_metadata(g_sc, 1);
+    if (g_sc_ext.width && (ext.width != g_sc_ext.width || ext.height != g_sc_ext.height))
+        rt_log("gfx: swapchain %ux%u (window %dx%d)", ext.width, ext.height, cw, ch);   // the first one: gfx_window_start
     rt_log("gfx: swapchain of %u images (minimum %u)", count, caps.minImageCount);
     g_sc_ext = ext;
     g_sc_n = MAX_IMAGES;
@@ -372,7 +397,7 @@ static int create_swapchain(void) {
     }
     free_capture();
     vk_queue_unlock();
-    plat_xchg32(&g_dirty, 0);
+    g_sc_client[0] = cw, g_sc_client[1] = ch;
     return 1;
 }
 
@@ -582,6 +607,13 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     VkCtx *c = vk_ctx();
     plat_rmutex_lock(&g_pl);
     flip_locked();
+    // A client size other than the one the swapchain was made for rebuilds it too, should a resize ever reach the
+    // window without its WM_SIZE mark (GetClientRect reads the window's own record, no message to the window thread).
+    if (g_sc && !plat_cas32(&g_dirty, 0, 0) && !wsys_minimized()) {
+        int cw = 0, ch = 0;
+        wsys_client_size(&cw, &ch);
+        if (cw > 0 && ch > 0 && (cw != g_sc_client[0] || ch != g_sc_client[1])) plat_xchg32(&g_dirty, 1);
+    }
     if (!g_sc || plat_cas32(&g_dirty, 0, 0)) {
         if (!wsys_minimized() && !create_swapchain() && !g_sc) goto out;
     }
