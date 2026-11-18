@@ -11,7 +11,8 @@ this file only draws. The window text is in installer/text/<en|ru>.json under "u
                                the window there and start the game once the setup has finished
     any other argument         goes to the game when Setup starts it (also after --): --fullscreen, --set KEY=VALUE
 
-On start, a folder with a finished build of this release (installer/play.py find) opens the Play screen: Play starts
+On start, a finished build of this release in --dest, the remembered install folder (installer/recent.py) or
+beside Setup (installer/play.py find) opens the Play screen: Play starts
 the game, hides the window and waits for the game; Update / reinstall opens the form for that folder.
 """
 import argparse
@@ -34,6 +35,7 @@ from . import theme
 from .events import GAME_EXE
 from .gui_mods import ModsWindow
 from . import layout as layouts
+from . import recent
 from .guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, UI_LANGUAGES, Catalog, Form, Model, Process,
                        amount, default_game_language, describe_event, parse_line, windows_ui_language)
 
@@ -53,8 +55,9 @@ def fix_tcl_paths():
 
 
 class App:
-    def __init__(self, root, ui_lang, layout, run_args=None, game_args=(), dest=None, auto_play=False):
+    def __init__(self, root, ui_lang, layout, run_args=None, remember=True, game_args=(), dest=None, auto_play=False):
         self.root, self.layout = root, layout
+        self.remember = remember         # read and write the per-user file of the last install (installer/recent.py)
         self.cat = Catalog(ui_lang)
         self.model = Model()
         self.process = None
@@ -107,16 +110,23 @@ class App:
         self.frames = {'form': self.build_form(), 'run': self.build_run(), 'finish': self.build_finish(),
                        'play': self.build_play()}
         self.vars['lang'].set(self.lang_label(self.lang_code))
+        self.vars['dest'].trace_add('write', lambda *_: self.fill_from_folder())
         self.vars['dest'].trace_add('write', lambda *_: self.refresh_form())
         self.vars['base'].trace_add('write', lambda *_: self.refresh_form())
-        ready, known = plays.find(layout, dest)
+        # The remembered install (installer/recent.py) fills the form, and a finished build of this release in it, in
+        # --dest or beside Setup (installer/play.py find) opens the Play screen instead
+        last = recent.load_bounded() if remember else {}
+        for name in recent.SOURCES:
+            if name in last:
+                self.vars[name].set(last[name])
+        ready, known = plays.find(layout, dest, last.get('dest'))
+        chosen = dest or ready or known or last.get('dest')
+        if chosen:   # dest goes last: its traces fill the empty fields from the folder's record and refresh the form
+            self.vars['dest'].set(os.path.normpath(str(chosen)))
         if ready is not None and not auto_play:
-            self.vars['dest'].set(os.path.normpath(str(ready)))
             self.refresh_play()
             self.show('play')
         else:
-            if dest or known is not None:
-                self.vars['dest'].set(os.path.normpath(str(dest or known)))
             self.show('form')
 
     # ---- text -----------------------------------------------------------------------------------------------------
@@ -341,6 +351,16 @@ class App:
         self.extracted_hint.configure(text=self.cat('ui.extracted_game') if form.extracted_game() else '')
         self.fit()
 
+    def fill_from_folder(self):
+        """An install folder typed or picked fills the empty file fields with the paths it recorded (xcx-install.json
+        "paths") that still name files; a field the player filled stays as it is."""
+        dest = self.vars['dest'].get().strip()
+        if not self.remember or not dest:
+            return
+        for name, value in recent.from_folder(dest).items():
+            if not self.vars[name].get().strip():
+                self.vars[name].set(value)
+
     def pick_file(self, name, pick_id):
         types = [(self.cat('ui.type_game'), '*.nsp *.xci *.nsz *.xcz'), (self.cat('ui.type_all'), '*.*')]
         if name in ('update', 'dlc'):
@@ -371,6 +391,8 @@ class App:
             self.fit()
             return
         self.form_error.configure(text='')
+        if self.remember:
+            recent.save(form.dest, {name: getattr(form, name) for name in recent.SOURCES})
         command = form.command(self.layout.python, root=self.layout.root if self.layout.dev else None,
                                temp=self.run_args.get('temp'), verify=self.run_args.get('verify', False))
         self.begin(command, self.layout.root)
@@ -418,8 +440,6 @@ class App:
             return
         self.model.finish(code)
         self.process = None
-        if self.model.result == 'ok' and self.model.dest:
-            plays.remember(self.layout, self.model.dest)
         self.refresh_run()
         self.refresh_finish()
         self.show('finish')
@@ -650,7 +670,7 @@ def selftest(layout, shots=None):
     fix_tcl_paths()
     root = tk.Tk()
     root.geometry('+60+40')
-    app = App(root, 'en', layout)
+    app = App(root, 'en', layout, remember=False)   # the screenshots show no path of the player's
     steps, mixed = [], []
 
     def shot(name):
@@ -751,7 +771,7 @@ def main(argv=None):
     if args.selftest:
         return selftest(layout, args.shots)
     if args.play:
-        ready, _ = plays.find(layout, args.dest)
+        ready, _ = plays.find(layout, args.dest, recent.load_bounded().get('dest'))
         if ready is not None:
             return plays.run(ready, game_args)
     fix_tcl_paths()

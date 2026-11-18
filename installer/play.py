@@ -4,15 +4,13 @@ A folder is playable when its xcx-install.json says a run of this very release f
 runner.run_steps records at the end of a successful run and drops before a step that changes the folder) and the
 game exe is there. An install by another release is not: Setup offers to update it instead.
 
-Where Setup looks, in order: the folder given (--dest), else the install folder it last finished (remembered in
-xcx-setup.json in Setup's own folder), Setup's folder itself and the folders right inside it. The AppImage keeps no
-memory (its folder is a read-only mount, and nothing is written outside the install folder on Linux); it looks in the
-folder that holds the .AppImage file and the folders right inside that.
+Where Setup looks, in order: the folder given (--dest), else the install folder the window last set up (installer/
+recent.py, which the caller reads, bounded), Setup's folder itself and the folders right inside it. For the AppImage,
+which remembers no folder by default, Setup's folder is the one that holds the .AppImage file.
 
 The game gets the arguments Setup did not know (gui.py, cli.py --play), so `XCX-Setup --play --fullscreen` starts
 `xcx --fullscreen`, and Setup waits for it: a launcher that tracks Setup's process sees the game's lifetime and exit code.
 """
-import json
 import os
 import subprocess
 import sys
@@ -21,7 +19,6 @@ from pathlib import Path
 from . import state as statefile
 from .events import GAME_EXE
 
-MEMORY = 'xcx-setup.json'
 # Set by Setup's own start (AppRun, the AppImage runtime, Python): not the game's business
 SETUP_ENV = ('TCL_LIBRARY', 'TK_LIBRARY', 'PYTHONDONTWRITEBYTECODE', 'PYTHONIOENCODING', 'PYTHONUTF8',
              'PYTHONUNBUFFERED', 'PYTHONHOME', 'PYTHONPATH', 'APPDIR', 'APPIMAGE', 'ARGV0', 'OWD')
@@ -57,43 +54,11 @@ def setup_folder(layout):
     return image.parent if image else layout.root
 
 
-def memory_path(layout):
-    """Where Setup remembers the last install folder; None where it keeps nothing (the AppImage, a repository)."""
-    if appimage() or layout.dev:
-        return None
-    return layout.root / MEMORY
-
-
-def remembered(layout):
-    path = memory_path(layout)
-    try:
-        dest = json.loads(path.read_text(encoding='utf-8')).get('dest') if path and path.is_file() else None
-    except (OSError, ValueError, AttributeError):
-        return None
-    return Path(dest) if isinstance(dest, str) and dest else None
-
-
-def remember(layout, dest):
-    """Record dest as the last finished install folder. Best effort: a read-only Setup folder keeps nothing."""
-    path = memory_path(layout)
-    if not path:
-        return
-    try:
-        tmp = path.with_name(MEMORY + '.tmp')
-        tmp.write_text(json.dumps({'dest': str(Path(dest).resolve())}) + '\n', encoding='utf-8')
-        os.replace(tmp, path)
-    except OSError:
-        pass
-
-
-def candidates(layout, dest=None):
-    """The folders to look in, in order, without repeats."""
+def candidates(layout, dest=None, last=None):
+    """The folders to look in, in order, without repeats; last: the remembered install folder."""
     if dest:
         return [Path(dest)]
-    found = []
-    last = remembered(layout)
-    if last:
-        found.append(last)
+    found = [Path(last)] if last else []
     home = setup_folder(layout)
     found.append(home)
     try:
@@ -109,11 +74,11 @@ def candidates(layout, dest=None):
     return out
 
 
-def find(layout, dest=None):
+def find(layout, dest=None, last=None):
     """(playable, known): the first folder holding a finished build of this release, and the first holding any
     install (for the form to update). Either is None."""
     play = known = None
-    for p in candidates(layout, dest):
+    for p in candidates(layout, dest, last):
         if play is None and playable(p, layout.release):
             play = p
         if known is None and installed(p):

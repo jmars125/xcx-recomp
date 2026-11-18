@@ -65,8 +65,9 @@ Setup's process sees the game's lifetime. On Windows `XCX-Setup.exe` waits for t
 **Play screen.** Setup opens on a Play screen instead of the form when it finds a finished build of its own release:
 **Play** starts the game and hides the window, **Update / reinstall** opens the form for that folder. A folder built by
 another release opens the form on that folder, ready to update. Setup looks in the `--dest` folder, else in the
-install folder it last finished (Windows and the tarball remember it in `xcx-setup.json` in Setup's folder; the
-AppImage keeps nothing), in Setup's own folder (for the AppImage, the folder that holds the `.AppImage` file) and in
+install folder the window last set up (`setup.json`, [installer.md](installer.md), "Updating the port": per user on
+Windows, in the tarball's own folder on Linux, none for the AppImage unless `XCX_SETUP_RECENT` names a file), in
+Setup's own folder (for the AppImage, the folder that holds the `.AppImage` file) and in
 the folders right inside it. A build counts as finished when `xcx-install.json` records that a run of this release
 ended without error (`complete`, `installer/runner.py`) and the game exe is there (`installer/play.py`).
 
