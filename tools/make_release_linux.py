@@ -198,6 +198,10 @@ def build_bin(out, llvm, sysroot):
     run([sys.executable, ROOT / 'tools' / 'build_xlate.py', '--out', xl, '--llvm', llvm, '--sysroot', sysroot])
     shutil.copy2(xl / 'xcx_xlate', b / 'xcx_xlate')
     shutil.copy2(xl / 'xcx_xlate.id', b / 'xcx_xlate.id')
+    import build_unpack   # bin/xcx-unpack, the mod manager's RAR reader, against the release's glibc
+    exe = build_unpack.build(llvm / 'bin' / 'clang', b / 'xcx-unpack',
+                             ['--target=x86_64-linux-gnu', f'--sysroot={sysroot}', '-fuse-ld=lld'])
+    build_unpack.smoke(exe)
     sdl = (sysroot / 'usr' / 'lib' / 'x86_64-linux-gnu' / 'libSDL3.so.0').resolve()
     shutil.copy2(sdl, b / 'libSDL3.so.0')
 
@@ -383,6 +387,8 @@ def build_python(out, llvm, sysroot):
 
 def collect_licenses(out, sysroot):
     lic = out / 'licenses'
+    import build_unpack
+    build_unpack.copy_license(lic)
     lic.mkdir(parents=True, exist_ok=True)
     doc = sysroot / 'usr' / 'share' / 'doc'
     pairs = [

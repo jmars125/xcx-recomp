@@ -643,13 +643,16 @@ def main(argv=None):
     ap.add_argument('--shots', type=Path)
     ap.add_argument('--lang', choices=UI_LANGUAGES)
     ap.add_argument('--root', type=Path)
+    ap.add_argument('--mods-index', help='mod library index.json, a URL or a file (default: the library on GitHub); '
+                                         'for trying library entries before they are published')
     args = ap.parse_args(argv)
     layout = layouts.find(args.root)
     if args.selftest:
         return selftest(layout, args.shots)
     fix_tcl_paths()
     root = tk.Tk()
-    App(root, args.lang or windows_ui_language(), layout)
+    App(root, args.lang or windows_ui_language(), layout,
+        run_args={'mods_index': args.mods_index} if args.mods_index else None)
     root.mainloop()
     return 0
 

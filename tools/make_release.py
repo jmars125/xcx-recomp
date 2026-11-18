@@ -493,6 +493,17 @@ def build_launcher(out, llvm):
          ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'XCX-Setup.exe'], env=env)
 
 
+def build_unpack_tool(out, llvm):
+    """bin/xcx-unpack.exe, the mod manager's RAR reader (tools/build_unpack.py), and libarchive's licence. Built even
+    with --from: an earlier release may have none."""
+    import build_unpack
+    exe = build_unpack.build(llvm / 'bin' / 'clang.exe', out / 'bin' / 'xcx-unpack.exe',
+                             env=clean_env(llvm / 'bin'))
+    build_unpack.smoke(exe)
+    build_unpack.copy_license(out / 'licenses')
+    print(f'xcx-unpack: {exe.stat().st_size} bytes, reads the RAR5 test archives and refuses a symlink')
+
+
 # ---- checks ----------------------------------------------------------------------------------------------------------
 
 def check_folder(out):
@@ -613,6 +624,7 @@ def main():
     runtime_lib(out, llvm)
     build_sources(out)
     build_launcher(out, llvm)
+    build_unpack_tool(out, llvm)
     if not args.src:
         collect_licenses(out)
     check_folder(out)

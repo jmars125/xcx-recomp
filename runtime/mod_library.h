@@ -5,6 +5,13 @@
 #include <stdint.h>
 
 #define MODLIB_ROWS 64
+#define MODLIB_NOTES 16
+
+// A line on a folder of the mods folder put there by hand: moved to the layout the game reads, or not read and why.
+typedef struct {
+    char text[300];           // English
+    int error;                // not read
+} ModLibNote;
 
 typedef struct {
     char id[65];
@@ -17,6 +24,11 @@ typedef struct {
     char version[32];         // the library's version; empty when the mod is not in the library
     uint64_t size;            // bytes of the download (a romfs mod's zip)
     int in_library, installed, enabled, update;
+    // A part of a library entry that comes in parts (installer/mods.py, install_part): the entry's id, its name and
+    // the part's id, from library.ini. The Mods tab lists an entry's parts together under one row that opens.
+    char group[65];
+    char group_name[96];
+    char part[65];
 } ModLibRow;
 
 enum { MODLIB_IDLE, MODLIB_LOADING, MODLIB_WORKING };
@@ -30,6 +42,8 @@ typedef struct {
     char message[400];        // the last job's outcome; English reasons
     int message_error;
     int index_ok;             // the library was read
+    int nnotes;               // lines on the folders put in mods/ by hand, from the last reading of the library
+    ModLibNote notes[MODLIB_NOTES];
     uint64_t generation;      // changes whenever the view does
 } ModLibView;
 

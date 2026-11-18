@@ -2,18 +2,32 @@
 
     python -m installer.mods --dest DIR list                 installed mods and the library, as JSON
     python -m installer.mods --dest DIR install ID           from the library (github.com/jmars125/xcx-recomp-mods)
-    python -m installer.mods --dest DIR add-zip FILE [--id ID]   a game-file mod zip downloaded by hand
+    python -m installer.mods --dest DIR install ID --file FILE   a library mod the player downloaded from its page
+    python -m installer.mods --dest DIR add FILE [--id ID] [--top FOLDER] [--yes]   a mod archive downloaded by hand
     python -m installer.mods --dest DIR remove|enable|disable ID
 
-Two kinds of mod, as the library's index.json lists them:
+Two kinds of mod, as the library's index-3.json lists them (INDEX_FILE):
   lua    mods/<id>/ with mod.ini and main.lua, run by runtime/mods.c. On when listed in mods/enabled.txt; installed
          ones are also listed in mods/catalog.txt so the game's Mods page shows them while off. Read at start-up.
   romfs  mods/<id>/romfs/<game path>, files in place of the game's own (runtime/romfs_mods.c). On when listed in
          mods/romfs-enabled.txt, which the game reads again twice a second, so they switch while it runs. Earlier
-         lines win when two mods have the same file; a mod turned on goes first.
-A game-file mod comes from its author's page as a zip in the Switch layout: romfs/<path>, or romfs/mod/<path> for mods
-made for the XCXDE mod loader, possibly inside one top folder. exefs/ (Switch code) is not used. The zip must match the
-library's size and SHA-256 before anything is unpacked.
+         lines win when two mods have the same file; a mod turned on goes last, at the lowest priority (as in the
+         game's Mods tab), and is moved up there if it should win.
+A game-file mod comes from its author's page as a zip or RAR (installer/archive.py), ideally in the Switch layout:
+romfs/<path>, or romfs/mod/<path> for mods made for the XCXDE mod loader, possibly inside top folders
+(atmosphere/contents/<title id>/romfs). exefs/ (Switch code) is not used. An archive without a romfs folder is read
+by installer/mod_layout.py, which finds the game's folders in it by the install's own game files and says what it
+will install; the window shows that before anything is written. A library download must match the library's size and
+SHA-256 before anything is unpacked. Some sites allow downloads only from their own page ("download": "manual" in
+the index): the player downloads the file there and picks it, and the same size and SHA-256 check applies. A mod
+unpacked into mods/ by hand in any of those layouts is moved to mods/<id>/romfs the next time the mods are listed
+(normalise).
+
+A library entry may come in parts ("parts" in the index): a full version and optional pieces, each its own file, as
+mods on Nexus Mods often do. Each part the player installs is a mod of its own, <entry id>.<part id>, so it switches
+on and off by itself and the game's mods combine like any others; its library.ini names the entry (group) and the
+part, and a part that already contains others lists them (includes), so the window can warn when both are on. Files
+the player picks are matched to parts by SHA-256, whatever their names or order.
 
 mods/library.json records what this manager installed (kind, version, name) so updates and removals know the kind.
 """
@@ -26,11 +40,21 @@ import sys
 import tempfile
 import time
 import urllib.request
-import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+
+from . import archive, mod_layout
+from .game_paths import GamePaths
 
 LIBRARY = 'https://raw.githubusercontent.com/jmars125/xcx-recomp-mods/main/'
-INDEX_FORMAT = 2
+# The library publishes two lists. index.json (format 2) holds only what every released manager installs: Lua mods and
+# game-file mods downloaded as one zip; releases up to 0.1.21 and the game's own library list (runtime/mod_library.c)
+# read it. index-3.json (format 3) holds every entry, also those downloaded from their own page ("download":
+# "manual"), in parts, or as RAR ("archive": "rar"); this manager reads it. An index given by --mods-index may be
+# either format.
+INDEX_FILE = 'index-3.json'
+INDEX_FORMAT = 3
+INDEX_FORMATS = (2, 3)
+INDEX_MAX_ENTRIES = 5000
 AGENT = 'XCX-Setup-mods'
 UNPACK_LIMIT = 16 << 30          # bytes a game-file mod may unpack to
 LUA_FILES = {'mod.ini', 'main.lua', 'info.ini', 'README.md', 'LICENSE', 'LICENSE.txt'}
@@ -46,8 +70,21 @@ class ModError(Exception):
 
 
 def valid_id(mid):
-    return (isinstance(mid, str) and 0 < len(mid) <= 64 and 'a' <= mid[0] <= 'z'
+    """A mod id: a lowercase letter, then letters, digits and . _ -, at most 64, and no dot at the end (Windows drops
+    it, so 'a.' would be the folder of mod 'a'). runtime/mod_library.c, valid_id, is the same."""
+    return (isinstance(mid, str) and 0 < len(mid) <= 64 and 'a' <= mid[0] <= 'z' and not mid.endswith('.')
             and all('a' <= ch <= 'z' or '0' <= ch <= '9' or ch in '._-' for ch in mid))
+
+
+def slug(text):
+    """A mod id made from a folder or file name: ASCII letters and digits lowercased, anything else a '-', 'mod-' in
+    front when it does not start with a letter, at most 64 characters. runtime/mod_library.c, slug, is the same."""
+    s = ''.join(ch if ch.isascii() and (ch.isalnum() or ch in '._') else '-' for ch in text.lower())
+    while '--' in s:
+        s = s.replace('--', '-')
+    s = s.strip('-._')
+    s = s if s and 'a' <= s[0] <= 'z' else f'mod-{s}'.rstrip('-')
+    return s[:64].rstrip('-._')
 
 
 # ---- files ---------------------------------------------------------------------------------------------------------
@@ -111,11 +148,149 @@ def kind_of(root, mid, record=None):
 LISTS = {'romfs': 'romfs-enabled.txt', 'lua': 'enabled.txt'}
 
 
-def installed(dest):
-    """[{id, kind, version, name, enabled}] for every mod folder, the manager's or one put there by hand."""
+# ---- mods put in mods/ by hand ---------------------------------------------------------------------------------------
+# A player unpacks a mod's download into mods/ as it comes: a folder named after the mod ("Unburger Patch"), the
+# Switch SD card layout (atmosphere/contents/<title id>/romfs, <title id>/romfs, contents/<title id>/romfs) or a bare
+# romfs/. normalise moves each such folder to mods/<id>/romfs, the one layout the game reads, and names every folder
+# it leaves alone with the reason. runtime/mod_library.c, normalise, does the same when the F1 Mods tab reads the
+# folder; the two follow the same rules, so either one's result looks the same to the other.
+
+TITLE_ID = '0100453019aa8000'     # Xenoblade Chronicles X: Definitive Edition
+SEARCH_DEPTH = 4                  # folders below the top one in which a romfs folder is looked for
+WRAPPERS = {'romfs', 'atmosphere', 'contents'}   # top folder names that say nothing about the mod
+
+
+def is_title_id(name):
+    return len(name) == 16 and all(ch in '0123456789abcdefABCDEF' for ch in name)
+
+
+def find_romfs(folder, depth=SEARCH_DEPTH):
+    """The romfs folders below folder (not inside one another), nearest first; at most two are looked for."""
+    found, level = [], [folder]
+    for _ in range(depth):
+        nxt = []
+        for d in level:
+            try:
+                subs = sorted((p for p in d.iterdir() if p.is_dir() and not p.is_symlink()), key=lambda p: p.name)
+            except OSError:
+                continue
+            for p in subs:
+                (found if p.name.lower() == 'romfs' else nxt).append(p)
+        if found or not nxt:
+            break
+        level = nxt
+    return found
+
+
+def other_game(rel_parts):
+    """The title id of another game in a path below mods/, else None."""
+    return next((p for p in rel_parts if is_title_id(p) and p.lower() != TITLE_ID), None)
+
+
+def free_id(root, base, folder=None):
+    """base, or base-2, base-3 ...: the first name not taken in root. folder itself does not count, so on a file
+    system that ignores case "Uncensor" becomes "uncensor"."""
+    def taken(mid):
+        p = root / mid
+        if folder is not None and p.exists() and os.path.samefile(p, folder):
+            return False
+        return p.exists() or p.is_symlink()
+    mid, n = base, 2
+    while taken(mid):
+        suffix = f'-{n}'
+        mid, n = base[:64 - len(suffix)] + suffix, n + 1
+    return mid
+
+
+def is_loader(romfs):
+    """Whether romfs holds just a folder named mod: the XCXDE mod loader's layout, romfs/mod/<game path>."""
+    try:
+        entries = list(romfs.iterdir())
+    except OSError:
+        return False
+    return len(entries) == 1 and entries[0].is_dir() and entries[0].name.lower() == 'mod'
+
+
+def normalise(root):
+    """Moves the mods put in root by hand to root/<id>/romfs. Returns [(catalog id, params)]: a 'mods.moved' line for
+    each folder moved, a 'mods.skip_*' line for each one left alone."""
+    notes = []
+    try:
+        names = sorted(p.name for p in root.iterdir())
+    except OSError:
+        return notes
+    for name in names:
+        top = root / name
+        if name.startswith('.') or top.is_symlink():
+            continue
+        if top.is_file():
+            if name.lower().endswith('.zip'):
+                notes.append(('mods.skip_zip', {'folder': name}))
+            continue
+        if not top.is_dir():
+            continue
+        if valid_id(name) and (top / 'mod.ini').is_file():
+            continue
+        if (top / 'mod.ini').is_file():
+            notes.append(('mods.skip_lua_name', {'folder': name}))
+            continue
+        if name.lower() == 'romfs':
+            romfs = top
+        else:
+            found = find_romfs(top)
+            if not found:
+                notes.append(('mods.skip_no_romfs', {'folder': name}))
+                continue
+            if len(found) > 1:
+                notes.append(('mods.skip_two_romfs', {'folder': name}))
+                continue
+            romfs = found[0]
+        rel = romfs.relative_to(root).parts
+        title = other_game(rel)
+        if title:
+            notes.append(('mods.skip_other_game', {'folder': name, 'title': title}))
+            continue
+        if valid_id(name) and rel == (name, 'romfs') and not is_loader(romfs):
+            continue   # already mods/<id>/romfs
+        generic = name.lower() in WRAPPERS or is_title_id(name)
+        mid = free_id(root, 'romfs-mod') if generic else name if valid_id(name) else free_id(root, slug(name), top)
+        final = root / mid
+        try:
+            if name.lower() == 'romfs':          # the folder is the mod's romfs
+                final.mkdir()
+                os.replace(top, final / 'romfs')
+            elif generic:                         # atmosphere/..., contents/..., <title id>/...: kept whole inside
+                final.mkdir()
+                os.replace(top, final / name)
+                os.replace(final.joinpath(*rel), final / 'romfs')
+            else:                                 # a folder named after the mod
+                if mid != name:
+                    os.replace(top, final)
+                if rel[1:] != ('romfs',):
+                    os.replace(final.joinpath(*rel[1:]), final / 'romfs')
+            if is_loader(final / 'romfs'):
+                tmp = final / '.romfs-loader'
+                os.replace(final / 'romfs', tmp)
+                os.replace(next(tmp.iterdir()), final / 'romfs')
+                tmp.rmdir()
+            if not (final / 'library.ini').exists():
+                write_info(final, 'romfs', mid if generic or name.lower() == 'romfs' else name, source='folder')
+        except OSError as e:
+            notes.append(('mods.skip_move_failed', {'folder': name, 'detail': str(e)}))
+            continue
+        notes.append(('mods.moved', {'folder': name, 'id': mid}))
+    return notes
+
+
+def installed(dest, notes=None):
+    """[{id, kind, version, name, enabled}] for every mod folder, the manager's or one put there by hand. Folders put
+    there in another layout are moved first (normalise); notes, a list, gets its lines."""
     root = mods_dir(dest)
     if not root.is_dir():
         return []
+    found = normalise(root)
+    if notes is not None:
+        notes.extend(found)
     record = load_record(root)
     on = {k: set(read_list(root / f)) for k, f in LISTS.items()}
     out = []
@@ -138,18 +313,97 @@ def opener(url):
 
 
 def fetch_index(source=None):
-    """The library's entries. source: a URL or a local index.json (tests); default the library on GitHub."""
+    """The library's entries. source: an https URL or a local index file (--mods-index, tests); default the library
+    on GitHub. An http:// or other link is refused (a plain link could be changed on the way)."""
+    if source and '://' in source and not source.startswith('https://'):
+        raise ModError('mods.index_https', url=source)
     try:
         if source and not source.startswith('https://'):
             data = json.loads(Path(source).read_text(encoding='utf-8'))
         else:
-            with opener(source or LIBRARY + 'index.json') as r:
+            with opener(source or LIBRARY + INDEX_FILE) as r:
                 data = json.loads(r.read(8 << 20).decode('utf-8'))
     except (OSError, ValueError) as e:
         raise ModError('mods.index_failed', detail=str(e)) from e
-    if not isinstance(data, dict) or data.get('format') != INDEX_FORMAT or not isinstance(data.get('mods'), list):
+    if (not isinstance(data, dict) or data.get('format') not in INDEX_FORMATS or not isinstance(data.get('mods'), list)
+            or len(data['mods']) > INDEX_MAX_ENTRIES):
         raise ModError('mods.index_format')
-    return [m for m in data['mods'] if isinstance(m, dict) and valid_id(m.get('id')) and m.get('kind') in LISTS]
+    return [m for m in data['mods'] if isinstance(m, dict) and valid_id(m.get('id')) and m.get('kind') in LISTS
+            and usable_parts(m)]
+
+
+def usable_parts(entry):
+    """Whether every part of an entry names a file the manager can get: a manual part its page, a downloaded one its
+    url, each with SHA-256 and size; part ids make valid mod ids. Lua entries and plain ones pass as before."""
+    if entry.get('kind') != 'romfs':
+        return True
+    if not entry.get('parts') and not is_manual(entry):
+        return True
+    parts = parts_of(entry)
+    ok = lambda p: (str(p.get('page' if is_manual(entry) else 'url') or '').startswith('https://')
+                    and p.get('sha256') and p.get('size') and valid_id(p['mid']))
+    return bool(parts) and all(ok(p) for p in parts) and len({p['mid'] for p in parts}) == len(parts)
+
+
+def parts_of(entry):
+    """The parts of a library entry as dicts with 'mid', the mod id each installs as. An entry without "parts" is one
+    part whose mod id is the entry's own."""
+    if entry.get('parts'):
+        return [dict(p, mid=f"{entry['id']}.{p.get('id', '')}", includes=list(p.get('includes') or []))
+                for p in entry['parts'] if isinstance(p, dict)]
+    return [{'id': '', 'mid': entry['id'], 'name': entry.get('name', entry['id']), 'description': '',
+             'file': entry.get('file'), 'page': entry.get('page'), 'url': entry.get('url'),
+             'sha256': entry.get('sha256'), 'size': entry.get('size'), 'includes': []}]
+
+
+def is_manual(entry):
+    """Whether a library entry is downloaded by the player from its page ("download": "manual"), not by the manager:
+    a site that allows downloads only from its own page, such as Nexus Mods."""
+    return entry.get('download') == 'manual'
+
+
+def file_hash(path, sizes=None):
+    """(size, SHA-256) of the file at path; the hash is only read when the size is one of sizes (None: always)."""
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+        if sizes is not None and size not in sizes:
+            return size, None
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for block in iter(lambda: f.read(CHUNK), b''):
+                h.update(block)
+    except OSError as e:
+        raise ModError('mods.failed', detail=str(e)) from e
+    return size, h.hexdigest()
+
+
+def match_files(entry, paths):
+    """Which part of a manual entry each picked file is, by size and SHA-256: ({mod id: (part, path)}, [paths that
+    are no part of it]). Two picks of one part keep the first."""
+    parts = parts_of(entry)
+    sizes = {int(p['size']) for p in parts}
+    matched, unknown = {}, []
+    for path in paths:
+        size, digest = file_hash(path, sizes)
+        part = next((p for p in parts if int(p['size']) == size and p['sha256'] == digest), None)
+        if part is None:
+            unknown.append(Path(path))
+        else:
+            matched.setdefault(part['mid'], (part, Path(path)))
+    return matched, unknown
+
+
+def check_file(path, entry):
+    """Raises ModError('mods.file_mismatch') unless the file at path is one of the files a manual entry lists;
+    returns the part it is."""
+    matched, _ = match_files(entry, [path])
+    if not matched:
+        first = parts_of(entry)[0]
+        raise ModError('mods.file_mismatch', picked=Path(path).name,
+                       file=' / '.join(p.get('file') or p['name'] for p in parts_of(entry)),
+                       size=max(1, int(first['size']) >> 20))
+    return next(iter(matched.values()))[0]
 
 
 def download(url, size, sha256, out, progress=None):
@@ -173,62 +427,51 @@ def download(url, size, sha256, out, progress=None):
 
 # ---- unpacking -----------------------------------------------------------------------------------------------------
 
-def romfs_members(z):
-    """[(member, game path)] for the game files in a mod zip. The game path follows the last 'romfs' folder, without
-    a leading 'mod/' (the XCXDE mod loader's layout)."""
-    out = []
-    for info in z.infolist():
-        name = info.filename.replace('\\', '/')
-        parts = PurePosixPath(name).parts
-        if info.is_dir() or not parts:
-            continue
-        mode = (info.external_attr >> 16) & 0o170000
-        if mode == 0o120000 or name.startswith('/') or ':' in parts[0] or '..' in parts:
-            raise ModError('mods.zip_unsafe', name=name)
-        low = [p.lower() for p in parts]
-        if 'romfs' not in low:
-            continue
-        rest = parts[len(low) - low[::-1].index('romfs'):]
-        if rest and rest[0].lower() == 'mod' and len(rest) > 1:
-            rest = rest[1:]
-        if rest:
-            out.append((info, '/'.join(rest)))
-    return out
+def setup_layout():
+    """The layout of the setup this runs in, for xcx-unpack (installer/archive.py)."""
+    from . import layout
+    return layout.find()
 
 
-def unpack_romfs(zip_path, folder):
-    """Unpacks the zip's game files into folder/romfs/; folder must not exist yet."""
+def preview(dest, path, top=None, layout=None):
+    """The mod_layout.Plan for the archive at path: which of its files go where, read against the install's game
+    files. Raises ModError; 'layout.several' carries the choices for top."""
     try:
-        z = zipfile.ZipFile(zip_path)
-    except (OSError, zipfile.BadZipFile) as e:
-        raise ModError('mods.zip_bad', detail=str(e)) from e
-    with z:
-        members = romfs_members(z)
-        if not members:
-            raise ModError('mods.zip_no_romfs')
-        if sum(i.file_size for i, _ in members) > UNPACK_LIMIT:
-            raise ModError('mods.zip_too_big')
-        seen = set()
-        for info, game_path in members:
-            key = game_path.lower()
-            if key in seen:
-                raise ModError('mods.zip_duplicate', name=game_path)
-            seen.add(key)
-            target = folder / 'romfs' / game_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(info) as src, open(target, 'wb') as dst:
-                shutil.copyfileobj(src, dst, CHUNK)
-    return len(members)
+        if archive.kind_of(path) == 'rar' and layout is None:
+            layout = setup_layout()
+        members = archive.members(path, layout)
+        p = mod_layout.plan(members, GamePaths.of_install(dest), top)
+    except (archive.ArchiveError, mod_layout.LayoutError) as e:
+        raise ModError(e.id, **e.params) from e
+    if sum(m.size for m in members if m.name in p.files) > UNPACK_LIMIT:
+        raise ModError('mods.zip_too_big')
+    return p
+
+
+def unpack_romfs(path, folder, dest=None, plan=None, layout=None):
+    """Unpacks an archive's game files into folder/romfs/ by plan (default: preview's against dest); folder exists
+    and holds no romfs/ yet. Returns the number of files."""
+    p = plan or preview(dest or folder, path, layout=layout)
+    try:
+        if archive.kind_of(path) == 'rar' and layout is None:
+            layout = setup_layout()
+        return archive.extract(path, layout, p.files, Path(folder) / 'romfs', UNPACK_LIMIT)
+    except archive.ArchiveError as e:
+        raise ModError(e.id, **e.params) from e
 
 
 # ---- operations ----------------------------------------------------------------------------------------------------
 
-def write_info(staged, kind, name, author='', version='', source=''):
+def write_info(staged, kind, name, author='', version='', source='', group='', part='', includes=(), group_name=''):
     """<id>/library.ini: name, author, version and kind of an installed mod. The game's F1 menu writes the same file
-    when it installs a mod (runtime/mod_library.c, write_library_ini), so each manager sees the other's installs."""
+    when it installs a mod (runtime/mod_library.c, write_library_ini), so each manager sees the other's installs.
+    A part of a library entry also names the entry (group, and group_name for the game's Mods tab, which lists the
+    parts together under it), the part and the parts it contains (includes)."""
     clean = lambda v: ' '.join(str(v).split())[:90]
-    text = ''.join(f'{k} = {clean(v)}\n' for k, v in (('name', name), ('author', author), ('version', version),
-                                                       ('kind', kind), ('source', source)))
+    rows = [('name', name), ('author', author), ('version', version), ('kind', kind), ('source', source)]
+    if group:
+        rows += [('group', group), ('group_name', group_name or group), ('part', part), ('includes', ','.join(includes))]
+    text = ''.join(f'{k} = {clean(v)}\n' for k, v in rows)
     (staged / 'library.ini').write_text(text, encoding='utf-8', newline='\n')
 
 
@@ -259,26 +502,91 @@ def place(root, mid, staged):
         shutil.rmtree(old, ignore_errors=True)
 
 
-def install(dest, entry, progress=None):
-    """Installs or updates a library entry. A mod that was on stays on; a new one starts off."""
+def part_name(entry, part):
+    """What the player sees for an installed part: 'Tweaks mod: Probe tweak'; the entry's name for a whole entry."""
+    name = entry.get('name', entry['id'])
+    return f"{name}: {part['name']}" if part.get('id') else name
+
+
+def install(dest, entry, progress=None, file=None, layout=None, files=None, parts=None, plans=None):
+    """Installs or updates a library entry. A mod that was on stays on; a new one starts off.
+    A manual entry (is_manual) installs from the player's downloads: file, or files, each matched to a part by
+    SHA-256 (ModError 'mods.file_mismatch' when none is a part). Other entries download: every part, or the part
+    ids in parts. plans: {mod id: mod_layout.Plan} read before (the window shows them first).
+    Returns {'installed': [mod ids], 'unknown': [picked paths that are no part of the entry]}."""
     mid, kind = entry['id'], entry['kind']
     root = mods_dir(dest)
     root.mkdir(parents=True, exist_ok=True)
+    if kind != 'romfs':
+        install_lua(dest, entry, progress)
+        return {'installed': [mid], 'unknown': []}
+    unknown = []
+    if is_manual(entry):
+        picked = list(files or ([file] if file else []))
+        if not picked:
+            raise ModError('mods.manual_needs_file', name=entry.get('name', mid))
+        matched, unknown = match_files(entry, picked)
+        if not matched:
+            check_file(picked[0], entry)   # raises with the names of the files the entry lists
+        todo = [(part, path) for part, path in matched.values()]
+    else:
+        todo = [(p, None) for p in parts_of(entry) if parts is None or p['id'] in parts]
+    done = []
+    for part, path in todo:
+        install_part(dest, entry, part, path, progress, layout, (plans or {}).get(part['mid']))
+        done.append(part['mid'])
+    return {'installed': done, 'unknown': unknown}
+
+
+def install_part(dest, entry, part, path=None, progress=None, layout=None, plan=None):
+    """Installs one part of a romfs entry as mods/<part mod id>: from path (the player's download), else downloaded
+    from the part's url."""
+    root = mods_dir(dest)
+    mid = part['mid']
     with tempfile.TemporaryDirectory(dir=root, prefix='.install-') as tmp:
         staged = Path(tmp) / mid
         staged.mkdir()
-        if kind == 'romfs':
-            zpath = Path(tmp) / 'mod.zip'
-            download(entry['url'], int(entry['size']), entry['sha256'], zpath, progress)
-            unpack_romfs(zpath, staged)
+        copy = Path(tmp) / 'mod.download'
+        if path is None:
+            download(part['url'], int(part['size']), part['sha256'], copy, progress)
         else:
-            files = entry.get('files') or []
-            if not files or any(f.get('name') not in LUA_FILES for f in files):
-                raise ModError('mods.index_format')
-            for i, f in enumerate(files):
-                download(LIBRARY + entry['path'] + '/' + f['name'], int(f['size']), f['sha256'], staged / f['name'])
-                if progress:
-                    progress(i + 1, len(files))
+            # the player's file, copied first and checked again: what is unpacked is what was checked, even if the
+            # file in Downloads changes meanwhile
+            try:
+                shutil.copyfile(path, copy)
+            except OSError as e:
+                raise ModError('mods.failed', detail=str(e)) from e
+            if file_hash(copy) != (int(part['size']), part['sha256']):
+                raise ModError('mods.file_changed', picked=Path(path).name)
+        path = copy
+        unpack_romfs(path, staged, dest, plan, layout)
+        name = part_name(entry, part)
+        source = entry.get('homepage') or 'library'
+        write_info(staged, 'romfs', name, entry.get('author', ''), entry.get('version', ''), source,
+                   entry['id'] if part.get('id') else '', part.get('id', ''), part.get('includes', ()),
+                   entry.get('name') or entry['id'])
+        place(root, mid, staged)
+    record = load_record(root)
+    record[mid] = {'kind': 'romfs', 'version': entry.get('version', ''), 'name': name, 'source': source}
+    if part.get('id'):
+        record[mid].update(group=entry['id'], part=part['id'])
+    save_record(root, record)
+
+
+def install_lua(dest, entry, progress=None):
+    """Installs or updates a Lua library entry: its files, each checked against the index."""
+    mid, kind = entry['id'], entry['kind']
+    root = mods_dir(dest)
+    with tempfile.TemporaryDirectory(dir=root, prefix='.install-') as tmp:
+        staged = Path(tmp) / mid
+        staged.mkdir()
+        files = entry.get('files') or []
+        if not files or any(f.get('name') not in LUA_FILES for f in files):
+            raise ModError('mods.index_format')
+        for i, f in enumerate(files):
+            download(LIBRARY + entry['path'] + '/' + f['name'], int(f['size']), f['sha256'], staged / f['name'])
+            if progress:
+                progress(i + 1, len(files))
         write_info(staged, kind, entry.get('name', mid), entry.get('author', ''), entry.get('version', ''),
                    entry.get('homepage') or 'library')
         place(root, mid, staged)
@@ -286,19 +594,31 @@ def install(dest, entry, progress=None):
     record[mid] = {'kind': kind, 'version': entry.get('version', ''), 'name': entry.get('name', mid),
                    'source': entry.get('homepage') or 'library'}
     save_record(root, record)
-    if kind == 'lua':
-        catalog = read_list(root / 'catalog.txt')
-        if mid not in catalog:
-            write_list(root / 'catalog.txt', catalog + [mid])
+    catalog = read_list(root / 'catalog.txt')
+    if mid not in catalog:
+        write_list(root / 'catalog.txt', catalog + [mid])
 
 
-def add_zip(dest, zip_path, mid=None, name=None):
-    """Installs a game-file mod zip the player downloaded; the id comes from the file name when not given."""
-    zip_path = Path(zip_path)
+def archive_name(path):
+    """The mod's name from an archive's file name. A Nexus Mods download is named <file>-<mod id>-<version parts>-
+    <upload time>; that tail is dropped ('all tweaks mod-10-1-0-1745514276.rar' -> 'all tweaks mod')."""
+    stem = Path(path).stem
+    parts = stem.split('-')
+    if len(parts) >= 4 and len(parts[-1]) >= 9 and all(p.isdigit() for p in parts[-3:]):
+        head = parts[:-1]
+        while len(head) > 1 and head[-1].isdigit():
+            head = head[:-1]
+        stem = '-'.join(head)
+    return stem
+
+
+def add_archive(dest, path, mid=None, name=None, plan=None, layout=None):
+    """Installs a game-file mod archive (zip or RAR) the player downloaded, by plan (default: preview's); the id
+    and name come from the file name when not given."""
+    path = Path(path)
+    shown = name or archive_name(path)
     if not mid:
-        stem = ''.join(ch if ch.isalnum() or ch in '._-' else '-' for ch in zip_path.stem.lower()).strip('-._')
-        mid = stem if stem and 'a' <= stem[0] <= 'z' else f'mod-{stem}'
-        mid = mid[:64]
+        mid = slug(shown)
     if not valid_id(mid):
         raise ModError('mods.bad_id', id=mid)
     root = mods_dir(dest)
@@ -306,13 +626,17 @@ def add_zip(dest, zip_path, mid=None, name=None):
     with tempfile.TemporaryDirectory(dir=root, prefix='.install-') as tmp:
         staged = Path(tmp) / mid
         staged.mkdir()
-        unpack_romfs(zip_path, staged)
-        write_info(staged, 'romfs', name or zip_path.stem, source='zip')
+        unpack_romfs(path, staged, dest, plan, layout)
+        source = archive.kind_of(path) or 'archive'   # 'zip' or 'rar'
+        write_info(staged, 'romfs', shown, source=source)
         place(root, mid, staged)
     record = load_record(root)
-    record[mid] = {'kind': 'romfs', 'version': '', 'name': name or zip_path.stem, 'source': 'zip'}
+    record[mid] = {'kind': 'romfs', 'version': '', 'name': shown, 'source': source}
     save_record(root, record)
     return mid
+
+
+add_zip = add_archive   # its name before RAR support
 
 
 def set_enabled(dest, mid, on):
@@ -322,7 +646,10 @@ def set_enabled(dest, mid, on):
         raise ModError('mods.not_installed', id=mid)
     path = root / LISTS[kind]
     ids = [i for i in read_list(path) if i != mid]
-    write_list(path, ([mid] + ids) if on else ids)
+    if not on:
+        write_list(path, ids)
+    elif mid not in read_list(path):   # a game-file mod goes last; one already on keeps its place
+        write_list(path, ids + [mid] if kind == 'romfs' else [mid] + ids)
 
 
 def remove(dest, mid):
@@ -341,18 +668,44 @@ def remove(dest, mid):
     shutil.rmtree(root / mid)
 
 
-def status(dest, index):
+def status(dest, index, notes=None):
     """The library entries joined with what is installed: [{...entry, installed, enabled, update}] plus mods that are
-    installed but not in the library."""
-    have = {m['id']: m for m in installed(dest)}
+    installed but not in the library. notes, a list, gets the lines of normalise."""
+    have = {m['id']: m for m in installed(dest, notes)}
     out = []
     for e in index:
-        m = have.pop(e['id'], None)
-        out.append(dict(e, installed=bool(m), enabled=bool(m and m['enabled']),
-                        update=bool(m and m['version'] != e.get('version', ''))))
+        rows = []
+        for p in parts_of(e):
+            m = have.pop(p['mid'], None)
+            rows.append(dict(p, installed=bool(m), enabled=bool(m and m['enabled']),
+                             update=bool(m and m['version'] != e.get('version', ''))))
+        row = dict(e, installed=any(r['installed'] for r in rows), enabled=any(r['enabled'] for r in rows),
+                   update=any(r['update'] for r in rows))
+        if e.get('parts'):
+            row['parts'] = rows
+        out.append(row)
     for m in have.values():
         out.append(dict(m, installed=True, update=False, description='', author='', homepage='', notes=''))
     return out
+
+
+def overlaps(entry, mid):
+    """The names of the entry's parts that are on and overlap the part mid: one contains the other (includes). Both
+    on change the same game data twice; the window asks first."""
+    parts = {p['mid']: p for p in entry.get('parts') or []}
+    me = parts.get(mid)
+    if not me:
+        return []
+    out = []
+    for p in parts.values():
+        if p['mid'] != mid and p.get('enabled') and (p['id'] in me.get('includes', ())
+                                                     or me['id'] in p.get('includes', ())):
+            out.append(p['name'])
+    return out
+
+
+def english_catalog():
+    return json.loads((Path(__file__).resolve().parent / 'text' / 'en.json').read_text(encoding='utf-8'))
 
 
 def main(argv=None):
@@ -363,21 +716,39 @@ def main(argv=None):
     sub.add_parser('list')
     for c in ('install', 'remove', 'enable', 'disable'):
         sub.add_parser(c).add_argument('id')
-    z = sub.add_parser('add-zip')
-    z.add_argument('zip', type=Path)
-    z.add_argument('--id')
+    sub.choices['install'].add_argument('--file', type=Path, action='append',
+                                        help='a download of a manual library entry (once per file)')
+    sub.choices['install'].add_argument('--part', action='append', help='a part to download (default: all)')
+    for c in ('add', 'add-zip'):
+        z = sub.add_parser(c)
+        z.add_argument('zip', type=Path)
+        z.add_argument('--id')
+        z.add_argument('--top', help='the folder of the archive that holds the game folders (after layout.several)')
+        z.add_argument('--yes', action='store_true', help='install even when the layout needs a look')
     args = ap.parse_args(argv)
     try:
         if args.cmd == 'list':
-            print(json.dumps(status(args.dest, fetch_index(args.index)), indent=1))
+            notes = []
+            print(json.dumps(status(args.dest, fetch_index(args.index), notes), indent=1))
+            for note, params in notes:
+                print(f'{note} {json.dumps(params)}', file=sys.stderr)
         elif args.cmd == 'install':
             entry = next((e for e in fetch_index(args.index) if e['id'] == args.id), None)
             if not entry:
                 raise ModError('mods.not_in_library', id=args.id)
-            install(args.dest, entry)
-            print(f'installed {args.id}')
-        elif args.cmd == 'add-zip':
-            print(f'installed {add_zip(args.dest, args.zip, args.id)}')
+            result = install(args.dest, entry, files=args.file, parts=args.part)
+            print('installed ' + ', '.join(result['installed']))
+            for path in result['unknown']:
+                print(f'not a file of {args.id}: {path}', file=sys.stderr)
+        elif args.cmd in ('add', 'add-zip'):
+            p = preview(args.dest, args.zip, args.top)
+            english = english_catalog()
+            for line in mod_layout.describe(p, lambda i, **k: english.get(i, i).format(**k)):
+                print(line)
+            if mod_layout.needs_confirm(p) and not args.yes:
+                print('not installed: check the lines above, then run again with --yes', file=sys.stderr)
+                return 1
+            print(f'installed {add_archive(args.dest, args.zip, args.id, plan=p)}')
         elif args.cmd == 'remove':
             remove(args.dest, args.id)
             print(f'removed {args.id}')

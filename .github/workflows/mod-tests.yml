@@ -1,0 +1,60 @@
+# The mod manager's tests on Linux and Windows: zip layouts, the layout planner, manual library entries, RAR
+# through xcx-unpack (built from deps/libarchive by tools/build_unpack.py) and the F1 Mods tab's library list (headless
+# ImGui). Windows builds with MSYS2 UCRT64 clang, the mingw target the release's llvm-mingw has; Linux with the
+# runner's clang. No game files.
+name: Mod manager tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # A push runs it, and so does a pull request from a fork, which runs in this repository rather than the fork's;
+    # a pull request from a branch of this repository was already run by its push.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            clang: clang
+          - runner: windows-2025
+            clang: C:\msys64\ucrt64\bin\clang.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A core update (pacman, bash, msys2-runtime) makes the first -Syu close MSYS2 before it installs anything, so
+      # update twice, then install. -Sy alone would be a partial upgrade.
+      - if: runner.os == 'Windows'
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-clang"
+      - name: Build xcx-unpack and run it on libarchive's test archives
+        shell: bash
+        run: |
+          out=build/unpack/xcx-unpack${{ runner.os == 'Windows' && '.exe' || '' }}
+          PATH="/c/msys64/ucrt64/bin:$PATH" python tools/build_unpack.py --cc '${{ matrix.clang }}' --out "$out"
+          PATH="/c/msys64/ucrt64/bin:$PATH" python -c "import sys; sys.path.insert(0, 'tools'); import build_unpack; build_unpack.smoke('$out')"
+      - name: Tests
+        shell: bash
+        env:
+          XCX_CLANG: ${{ matrix.clang }}
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:$PATH"
+          # The clang tests skip themselves without clang; here that would be a pass that tested nothing.
+          "$XCX_CLANG" --version
+          python tests/mods_archive_test.py -v
+          python tests/mods_library_test.py -v
+          python tests/mods_manager_test.py -v
+      # deps/libarchive against libarchive's own release archive, file by file
+      - name: libarchive pins
+        if: runner.os == 'Linux'
+        run: python tools/check_libarchive_pins.py

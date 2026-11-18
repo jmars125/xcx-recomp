@@ -49,10 +49,47 @@ what is in `mods/`:
 
 - Lua mods are hosted in the library; each file is checked against the size and SHA-256 in its `index.json`. They
   are on when listed in `mods/enabled.txt` and apply when the game starts.
-- Game-file mods are listed by link: the manager downloads the zip from the author's page (GameBanana), checks its
-  size and SHA-256, and unpacks its `romfs/` (or `romfs/mod/`) folder into `mods/<id>/romfs/`; `exefs/` is left out.
-  **Add zip...** does the same for a zip the player downloaded. They are on when listed in `mods/romfs-enabled.txt`,
-  which the game reads again twice a second (`runtime/romfs_mods.c`), so they switch while it runs.
+- Game-file mods are listed by link: the manager downloads the archive from the author's page (GameBanana), checks
+  its size and SHA-256, and unpacks its `romfs/` (or `romfs/mod/`) folder into `mods/<id>/romfs/`; `exefs/` is left
+  out. **Add archive...** does the same for a zip or RAR the player downloaded. They are on when listed in
+  `mods/romfs-enabled.txt`, which the game reads again twice a second (`runtime/romfs_mods.c`), so they switch while
+  it runs.
+- Some sites let people download only from the mod's own page (Nexus Mods). The library lists such a mod with
+  `"download": "manual"`, the file's page, its name, size and SHA-256. **Install** then explains that, opens the page
+  in the browser on request and asks for the downloaded file; the manager checks it against the library like a
+  download of its own and installs it. It never looks through the Downloads folder by itself.
+- A mod that comes as several files (a full version and optional pieces, common on Nexus Mods) is one entry with
+  `"parts"`: each part has its own file, SHA-256 and size, and `includes` names the parts it already contains. The
+  window shows the entry with a row per part. **Install** lists the files, and the player picks all their downloads at
+  once; each is matched to its part by SHA-256 (names and order do not matter) and installed as a mod of its own,
+  `mods/<entry>.<part>/`, whose `library.ini` adds `group`, `part` and `includes`. Parts switch on and off one by one.
+  A part that contains, or is contained in, one that is on gets an informational line only: the bdat merge takes a
+  value that two mods set alike once. Picked files that are no part of the entry are offered to **Add archive**.
+- A bdat table as bdat-toolset JSON, `bdat/<file>/<Table>.json` (how the Tweaks mod's options come), is installed
+  under the archive's own name and merged into `bdat/<file>.bdat` by the game at start-up. The layout check counts
+  such a table as the game's when `bdat/<file>.bdat` is a game file, so a mod of only tables is placed as surely. `python -m installer.mods --dest DIR install ID --file A --file B` does
+  the same from a console.
+- Archives: zip through Python's `zipfile`, RAR 4 and 5 through `bin/xcx-unpack` (`installer/unpack.c` over the RAR
+  readers of libarchive, pinned in `deps/libarchive/`, built by `tools/build_unpack.py` in both release scripts; a
+  checkout builds it into `build/unpack/` on first use). 7z is recognised and named, not read. Every entry is checked
+  before anything is written: links, devices, password-protected files and paths that leave the folder stop the
+  install.
+- An archive without a `romfs/` folder is read by `installer/mod_layout.py`: with the install's game files at hand
+  (`installer/game_paths.py`: the loose files of `romfs/index.json` and the path hashes of `sts.arh`, XXH64 of
+  `/<path>` as the runtime looks them up), it tries each folder of the archive as the top of the game's folders and
+  keeps the one under which most files are the game's ("tweaks mod/bdat/common.bdat" becomes `bdat/common.bdat`).
+  Without them it takes the first folder that holds `bdat`, `chr`, `sound` or `movie` and says it guessed. Two folders
+  that match equally well are two versions of the mod: the window asks which one. The window shows what goes where,
+  what is left out (exefs, read-me files, pictures, other folders) and which files the game does not have, and asks
+  before installing whenever the archive is not a plain `romfs/` one. `python -m installer.mods --dest DIR add FILE`
+  prints the same lines and needs `--yes` (and `--top FOLDER` for a pick) in those cases.
+- A game-file mod unpacked into `mods/` by hand, as its download comes, is moved to `mods/<id>/romfs/` the next time
+  either manager lists the mods: a folder named after the mod (`Unburger Patch` becomes `unburger-patch`), the Switch
+  SD card layout (`atmosphere/contents/0100453019AA8000/romfs`, `contents/<title id>/romfs`, `<title id>/romfs`), a
+  bare `romfs/` (those three become `romfs-mod`, `romfs-mod-2` ...) and `romfs/mod/`. It starts off. A folder neither
+  manager can use (no `romfs` folder, two of them, another game's title ID, a Lua mod with a folder name that is not an
+  id, a zip) gets a line saying why, in the F1 Mods tab and in Setup's Mods window. `installer/mods.py` and
+  `runtime/mod_library.c` both carry these rules (`normalise`); `tests/mods_manager_test.py` checks they agree.
 
 Saves are never touched. The game uses a game-file mod's copy the next time it loads the file, so data read at
 start-up (the bdat tables) needs a restart.
@@ -142,7 +179,7 @@ python/               Python 3.14.9 embeddable + numpy, lz4, cryptography, cffi,
 recomp/, tools/       the lifter and the build, extraction and shader scripts the steps run (copied from the repo)
 llvm/                 llvm-mingw, x86_64-only subset (Apache-2.0 with LLVM exception; mingw-w64 parts permissive)
 runtime/              libxcxrt.a and the headers the generated code and modules.c/romfs.c/patches.c include
-bin/                  xcx_xlate.exe, hactool.exe, SDL3.dll, libopus-0.dll, ninja.exe
+bin/                  xcx_xlate.exe, hactool.exe, SDL3.dll, libopus-0.dll, ninja.exe, xcx-unpack.exe (RAR mods)
 data/                 shader_list.tsv (MacNativeGames, MIT)
 THIRD_PARTY_NOTICES.md
 xcx.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
@@ -176,7 +213,7 @@ llvm/                 LLVM 23 (clang, lld, llvm-ar) and llvm/sysroot: the files 
                       game's compile and link read (about 130 files)
 runtime/              libxcxrt.a, headers, the install-side sources, xcx.png; deps/ with the Vulkan headers, VMA and a
                       static zstd
-bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0
+bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0, xcx-unpack (RAR mods)
 ```
 
 - What we compile is built against the sniper sysroot (glibc 2.31): the game, hostcheck, hactool and the translator
