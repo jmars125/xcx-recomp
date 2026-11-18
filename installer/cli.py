@@ -1,14 +1,20 @@
 """Command line: python -m installer --base FILE --update FILE --keys FILE [--dlc FILE ...] --lang CODE --dest DIR
-                                     [--root DIR] [--temp DIR] [--verify]
+                                     [--root DIR] [--temp DIR] [--verify] [--play [GAME ARGUMENTS...]]
 
 --game PATH replaces --base, --update and --dlc: a game file or a folder holding them, sorted by content.
 A first install needs every option. On a folder with xcx-install.json (resume after a cancel or failure, or update
 with a newer release) only --dest is needed: --lang defaults to the recorded language, and the game files are needed
 only when the extraction has to run again. Prints JSON events on stdout (events.py). Exit code: 0 done, 1 failed,
 2 bad command line, 3 cancelled (Ctrl+C or Ctrl+Break).
+
+--play starts the game once the folder holds a finished build of this release (installer/play.py) and waits for it;
+the exit code is then the game's. A folder that already holds one, given no game files, starts at once without running
+the steps (no events printed). Arguments the installer does not know, and all after a lone --, go to the game
+(runtime/main.c usage: --fullscreen, --windowed, --set KEY=VALUE, --profile DIR, ...).
 """
 import argparse
 import hashlib
+import os
 import signal
 import sys
 import time
@@ -18,6 +24,7 @@ from . import game_files
 from . import guilogic
 from . import ini
 from . import layout as layouts
+from . import play as plays
 from . import state as statefile
 from .events import Reporter
 from .runner import Context, InstallError, run_steps
@@ -57,7 +64,7 @@ def cancel(signum, frame):
 
 
 def main(argv=None):
-    ap = Parser(prog='python -m installer', description=__doc__.splitlines()[0])
+    ap = Parser(prog='python -m installer', description=__doc__.splitlines()[0], allow_abbrev=False)
     ap.add_argument('--game', type=Path, help='a game file or a folder holding the base game, the update and any '
                                               'add-on content (XCI or NSP), found by content; --base, --update and '
                                               '--dlc win over it')
@@ -77,7 +84,18 @@ def main(argv=None):
                                                     "NVIDIA's (a launcher passes the one it fetched)")
     ap.add_argument('--progress-lines', action='store_true',
                     help='print "progress <0 to 1> <text>" lines instead of JSON events')
-    args = ap.parse_args(argv)
+    ap.add_argument('--play', action='store_true', help='start the game when the folder holds a finished build of '
+                                                      'this release (after running the steps when it does not); '
+                                                      'other arguments go to the game')
+    argv = list(sys.argv[1:] if argv is None else argv)
+    after = []
+    if '--' in argv:
+        i = argv.index('--')
+        argv, after = argv[:i], argv[i + 1:]
+    args, unknown = ap.parse_known_args(argv)
+    if unknown and not args.play:
+        ap.error(f'unrecognized arguments: {" ".join(unknown)}')
+    game_args = unknown + after
     # A launcher fills optional inputs the player left empty with nothing (--dlc=, --update=, --dlss-file=), which Path
     # reads as the current folder: treat those as not given
     if args.dlc is not None:
@@ -96,6 +114,9 @@ def main(argv=None):
             signal.signal(getattr(signal, name), cancel)
     layout = layouts.find(args.root)
     dest = args.dest.resolve()
+    given = any(getattr(args, n) for n in ('game', 'base', 'update', 'dlc', 'keys')) or args.verify
+    if args.play and not given and plays.playable(dest, layout.release):
+        return plays.run(dest, game_args)
     base = args.temp or layout.temp
     temp = temp_folder(base.resolve(), dest) if base else dest / TEMP_IN_DEST
     log = temp / 'logs' / time.strftime('install-%Y%m%d-%H%M%S.log')
@@ -120,7 +141,23 @@ def main(argv=None):
     steps = all_steps()
     rep.emit('start', release=layout.release, mode=ctx.mode, dev=layout.dev, dest=str(dest), log=str(log),
              steps=[s.id for s in steps])
-    result = run_steps(steps, ctx)
+    # Off Windows the tools' own temp files (TMPDIR: compilers, Python's tempfile) go into the setup's temp folder too,
+    # so a run writes nothing outside the install folder and the temp folder; the game Play starts gets the old value
+    tmpdir = os.environ.get('TMPDIR')
+    if os.name != 'nt':
+        (temp / 'tmp').mkdir(parents=True, exist_ok=True)
+        os.environ['TMPDIR'] = str(temp / 'tmp')
+    try:
+        result = run_steps(steps, ctx)
+    finally:
+        if os.name != 'nt':
+            os.environ.pop('TMPDIR', None)
+            if tmpdir is not None:
+                os.environ['TMPDIR'] = tmpdir
     rep.emit('end', result=result, seconds=round(time.monotonic() - t0, 1))
     rep.close()
+    if result == 'ok':
+        plays.remember(layout, dest)
+        if args.play:
+            return plays.run(dest, game_args)
     return EXIT[result]

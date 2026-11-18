@@ -6,6 +6,15 @@
 // is kept). A name without the XCX_ prefix goes to getenv unchanged. Safe from any thread once cfg_init has returned.
 const char *cfg_get(const char *name);
 
+// 1 when name (with or without XCX_, any case) is a setting the runtime knows: a key xcx.ini may set.
+int cfg_known(const char *name);
+
+// The command line's settings, before mem_init: --set KEY=VALUE (or --set=KEY=VALUE; KEY as in xcx.ini, any case,
+// XCX_ optional), --fullscreen (FULLSCREEN=1) and --windowed (FULLSCREEN=0). Each sets the environment variable
+// XCX_<KEY>, so it wins over xcx.ini like the environment, and is removed from argv (argc updated). 0 after printing
+// the problem to stderr: an unknown key, no '=' or an empty value.
+int cfg_args(int *argc, char **argv);
+
 // Reads xcx.ini once, from mem_init after the address space is claimed and before any setting is read. Logs the file, its key count, unknown keys and environment overrides.
 void cfg_init(void);
 

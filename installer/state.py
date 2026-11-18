@@ -1,11 +1,12 @@
 """xcx-install.json in the install folder: what built it and which steps finished.
 
-    {"format": 1, "release": "...", "lang": "en-US",
+    {"format": 1, "release": "...", "complete": "<release>", "lang": "en-US",
      "inputs": {"base": {"name", "size", "sha256"}, "update": {...}},
      "steps": {"<step>": {"key": "<input fingerprint>", "release": "...", "finished": "<UTC time>", "seconds": 12.3,
                           ...the step's own fields}}}
 
-A step's key fingerprints everything its output depends on (runner.py), so a step whose recorded key equals the
+"complete" names the release whose run last finished without error; a run drops it before its first step that changes
+the folder (installer/play.py: only such a folder offers Play). A step's key fingerprints everything its output depends on (runner.py), so a step whose recorded key equals the
 current one and whose output still checks out is not run again. The file is replaced atomically after each step.
 No key value or keys file content is ever stored.
 """
