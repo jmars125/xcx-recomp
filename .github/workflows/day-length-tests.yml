@@ -1,0 +1,59 @@
+# The Day length setting's tests on Linux and Windows: its clock arithmetic on a simulated game clock
+# (tests/day_length_test.py, through tests/day_length_check.c built from runtime/day_length.h), and every settings
+# description in every menu language fitting the menu's description pane with its notes (tests/menu_text_test.py).
+# Then a compile of the game side (runtime/day_length.c and runtime/dawn_dusk.c, Dawn and dusk and Night darkness),
+# which only the whole game build links. No game files.
+# Windows builds with MSYS2 UCRT64 clang, the mingw target the release's llvm-mingw has; Linux with the runner's clang.
+name: Day length tests
+
+# Pull requests, and pushes of ci/ tags only (the fork's check before a PR is updated): no double runs on a PR.
+on:
+  push:
+    tags: ['ci/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            clang: clang
+          - runner: windows-2025
+            clang: C:\msys64\ucrt64\bin\clang.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A core update (pacman, bash, msys2-runtime) makes the first -Syu close MSYS2 before it installs anything, so
+      # update twice, then install.
+      - if: runner.os == 'Windows'
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-clang"
+      - name: Tests
+        shell: bash
+        env:
+          XCX_CLANG: ${{ matrix.clang }}
+          XCX_REQUIRE_CLANG: "1"   # a skip for want of clang fails here: it would be a pass that tested nothing
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:$PATH"
+          "$XCX_CLANG" --version
+          python tests/day_length_test.py -v
+          python tests/menu_text_test.py -v
+      - name: Compile the game side
+        shell: bash
+        env:
+          CLANG: ${{ matrix.clang }}
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:$PATH"
+          # -Wno-bitwise-instead-of-logical: Ubuntu's clang 18 warns on master's runtime/simd_fp.h (macro FOK, through
+          # host.h); not code of this workflow's files
+          "$CLANG" -std=gnu11 -fsyntax-only -Wall -Wextra -Werror -Wno-bitwise-instead-of-logical -Iruntime runtime/day_length.c runtime/dawn_dusk.c

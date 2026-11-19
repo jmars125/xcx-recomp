@@ -197,6 +197,22 @@
 # the game's own menu (+ / Start).
 # pause_in_background = 0
 
+[game]
+# Real minutes a game day lasts on the in-game clock (the F1 menu's Game tab, Day length). 24 (default) is the game's
+# own, a game minute each second; 12 runs the clock twice as fast, 48 half as fast, 0 stops it until the game's Change
+# Time moves it. 1 to 1440 (shorter counts as 1), or 0; a value between the menu's steps works too and shows in the
+# row in its place. Very short days need a steady frame rate: the clock gains at most a minute a frame on the game's
+# own. Takes effect at once. Game version 2.0.0 only.
+# day_length = 24
+# How the light changes at dawn and dusk (the Game tab's Dawn and dusk). original (default) is the game's own, with
+# quick steps at 05:00 and 18:45; smoothed keeps the game's times without the steps; extended also stretches them:
+# dawn 04:00 to 08:00, dusk 17:00 to 21:00. Takes effect at once. Game version 2.0.0 only.
+# dawn_dusk = original
+# How dark the night is (Night darkness): original (default), darker or darkest dim the night light on the ground,
+# people and things and keep the night sky as it is; it fades in at dusk and out at dawn with the light, with any
+# dawn_dusk. Takes effect at once. Game version 2.0.0 only.
+# dark_nights = original
+
 [cheats]
 # 1 turns cheats on: the F1 menu gets its Cheats tab, and the cheats switched on there run. 0 (default) keeps every
 # cheat off and hides the tab; the cheats chosen in it are kept for the next time. Takes effect at once.

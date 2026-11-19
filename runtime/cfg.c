@@ -35,7 +35,7 @@ static const char *const known[] = {
     "BIND_LSTICK_RIGHT", "BIND_LSTICK_UP", "BIND_MINUS",
     "BIND_PLUS", "BIND_R", "BIND_RCLICK", "BIND_RIGHT", "BIND_RSTICK_DOWN", "BIND_RSTICK_LEFT", "BIND_RSTICK_RIGHT", "BIND_RSTICK_UP",
     "BIND_SKIP", "BIND_STATS", "BIND_UP", "BIND_X", "BIND_Y",
-    "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "BRIGHTNESS", "BUG_REPORT_TEST", "CHEATS", "CLOTH_REALTIME", "CORE_DIAG", "CRASH_TEST", "CRIT", "CRIT_OUT", "CROWD_DISTANCE", "CROWD_PATCH", "CUTSCENE_30", "DESC_TEMPLATE", "DEVICE_PROFILE", "DLSS_JITTER", "DLSS_MASK", "DLSS_MASK_PX", "DLSS_MIPBIAS", "DLSS_MV", "DLSS_MVDEBUG", "DLSS_OBJMV", "DLSS_PRESET", "DUMP", "DUMP_BUF", "DUMP_DIR", "DUMP_LOG", "DUMP_ONLY",
+    "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "BRIGHTNESS", "BUG_REPORT_TEST", "CHEATS", "CLOTH_REALTIME", "CORE_DIAG", "CRASH_TEST", "CRIT", "CRIT_OUT", "CROWD_DISTANCE", "CROWD_PATCH", "CUTSCENE_30", "DARK_NIGHTS", "DAWN_DUSK", "DAY_LENGTH", "DD_CURVE_PATCH", "DD_KEYS_PATCH", "DD_LIGHT_PATCH", "DD_TABLES_PATCH", "DESC_TEMPLATE", "DEVICE_PROFILE", "DLSS_JITTER", "DLSS_MASK", "DLSS_MASK_PX", "DLSS_MIPBIAS", "DLSS_MV", "DLSS_MVDEBUG", "DLSS_OBJMV", "DLSS_PRESET", "DUMP", "DUMP_BUF", "DUMP_DIR", "DUMP_LOG", "DUMP_ONLY",
     "EXEFS", "FAST_CORES", "FEEDBACK", "FIX_C0", "FIX_ZERO", "FLIGHT", "FLIGHT_AT", "FLIGHT_DIR", "FLIGHT_FRAMES", "FLIGHT_SPIKE_MS",
     "FLIGHT_THUMBS", "FPS60", "FPS_LIMIT", "FREEZE_IDLE", "FREE_CORES", "FULLSCREEN", "GATHER_BIAS", "GPL", "GPL_DRAW_BUILD", "GPU",
     "GPU_INDEX", "GPU_NAME", "GRASS_DISTANCE", "GRASS_PATCH", "GRASS_POOL", "HDR", "HDR_GAME_NITS", "HDR_HUE", "HDR_PEAK_NITS", "HDR_UI_NITS", "HIGHFPS_FIX", "INPUT", "INPUT_RECORD", "INPUT_SCRIPT", "LANG", "LIB_PREBUILD",
@@ -65,7 +65,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"GRASS_DISTANCE", "display"}, {"CROWD_DISTANCE", "display"}, {"OBJECT_LOD_RANGE", "display"}, {"OBJECT_LOD_MODE", "display"},
     {"DEVICE_PROFILE", "display"},
     {"MENU_LANG", "language"}, {"LANG", "language"}, {"VOICE_LANG", "language"}, {"OPERATION_MODE", "language"},
-    {"VOLUME", "audio"}, {"PAUSE_IN_BACKGROUND", "audio"}, {"CHEATS", "cheats"},
+    {"VOLUME", "audio"}, {"PAUSE_IN_BACKGROUND", "audio"}, {"DAY_LENGTH", "game"}, {"DAWN_DUSK", "game"}, {"DARK_NIGHTS", "game"}, {"CHEATS", "cheats"},
     {"MOTION", "input"}, {"RUMBLE_STRENGTH", "input"}, {"RUMBLE_CURVE", "input"}, {"RUMBLE_TRIGGERS", "input"},
     {"GLYPH_STYLE", "input"}, {"GLYPH_APPEARANCE", "input"}, {"PAD_LAYOUT", "input"}, {"MOUSE_SENS", "input"}, {"INPUT_RECORD", "input"},
     {"STICK_DEADZONE_L", "input"}, {"STICK_DEADZONE_R", "input"}, {"STICK_DEADZONE_SHAPE", "input"}, {"STICK_CENTER_L", "input"}, {"STICK_CENTER_R", "input"},
@@ -116,6 +116,9 @@ static const CfgMeta metas[] = {
     {"LANG", "", "ja|en-US|fr|de|it|es|zh-CN|ko|nl|pt|ru|zh-TW|en-GB|fr-CA|es-419|zh-Hans|zh-Hant|pt-BR", RESTART},
     {"VOICE_LANG", "", "ja|en", LIVE},
     {"OPERATION_MODE", "docked", "docked|handheld", RESTART},
+    {"DAY_LENGTH", "24", "0..1440", LIVE},   // real minutes a game day lasts (day_length.c)
+    {"DAWN_DUSK", "original", "original|smoothed|extended", LIVE},   // dawn_dusk.c
+    {"DARK_NIGHTS", "original", "original|darker|darkest", LIVE},    // dawn_dusk.c: Night darkness
     // Sound, Controls, Menu
     {"VOLUME", "100", "0..100", LIVE}, {"PAUSE_IN_BACKGROUND", "0", "0|1", RESTART},
     {"MOTION", "1", "0|1", LIVE}, {"RUMBLE_STRENGTH", "130", "0..300", LIVE}, {"RUMBLE_CURVE", "0.6", "0.2..1.5", LIVE},
