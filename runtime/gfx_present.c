@@ -34,7 +34,19 @@
 
 // ---- queue lock
 static PlatRMutex g_ql;
-void vk_queue_lock(void) { plat_rmutex_lock(&g_ql); }
+// XCX_TRACE=present: time spent waiting for the queue lock, the present fence, the acquire and vkQueuePresentKHR,
+// summed since the last present line (vk_present_times).
+static volatile uint64_t g_t_ql, g_t_fence, g_t_acq, g_t_qp, g_t_qp_max;
+void vk_queue_lock(void) {
+    if (!(rt_trace & RT_TRACE_PRESENT)) { plat_rmutex_lock(&g_ql); return; }
+    uint64_t t0 = kern_now_ns();
+    plat_rmutex_lock(&g_ql);
+    __atomic_fetch_add(&g_t_ql, kern_now_ns() - t0, __ATOMIC_RELAXED);
+}
+void vk_present_times(double out[5]) {
+    uint64_t *v[5] = {(uint64_t *)&g_t_ql, (uint64_t *)&g_t_fence, (uint64_t *)&g_t_acq, (uint64_t *)&g_t_qp, (uint64_t *)&g_t_qp_max};
+    for (int i = 0; i < 5; i++) out[i] = __atomic_exchange_n(v[i], 0, __ATOMIC_RELAXED) / 1e6;
+}
 void vk_queue_unlock(void) { plat_rmutex_unlock(&g_ql); }
 
 // ---- window state shared with the back end
@@ -119,6 +131,7 @@ static VkFence g_fence[FRAMES];
 static VkQueryPool g_ts_pool;
 static int g_ts_tried, g_ts_written[FRAMES];
 static VkSemaphore g_acquire[FRAMES];
+static VkFence g_acquire_fence[FRAMES];   // signalled with g_acquire: the CPU waits for the image (present_image)
 static unsigned g_frame;
 static int g_capture;
 static VkBuffer g_cap_buf;
@@ -275,8 +288,12 @@ static void flip_locked(void) {
                            .pWaitSemaphores = &g_render_done[g_flip_idx], .swapchainCount = 1, .pSwapchains = &g_sc,
                            .pImageIndices = &g_flip_idx};
     vk_queue_lock();
+    uint64_t t0 = kern_now_ns();
     VkResult r = vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
+    uint64_t dt = kern_now_ns() - t0;
     vk_queue_unlock();
+    g_t_qp += dt;
+    if (dt > g_t_qp_max) g_t_qp_max = dt;
     vk_device_fault_report(r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
 }
@@ -327,7 +344,12 @@ static int create_swapchain_once(void) {
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; found = 1; }
     for (uint32_t i = 0; i < nf && !found; i++)
         if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; found = 1; }
-    uint32_t count = caps.minImageCount + 1;
+    // Two more than the minimum, so the image an acquire returns is usually free already (present_image waits for it):
+    // with one more, FIFO at the frame limit of the refresh rate gave 7.8 ms of present waits per frame and paired
+    // frames (issue 106); with two, none. XCX_SWAPCHAIN_IMAGES sets the count.
+    uint32_t count = caps.minImageCount + 2;
+    int want_n = cfg_int("XCX_SWAPCHAIN_IMAGES");
+    if (want_n > 0) count = (uint32_t)want_n < caps.minImageCount ? caps.minImageCount : (uint32_t)want_n;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
 
@@ -361,6 +383,7 @@ static int create_swapchain_once(void) {
     if (hdr) vk_hdr_metadata(g_sc, 1);
     if (g_sc_ext.width && (ext.width != g_sc_ext.width || ext.height != g_sc_ext.height))
         rt_log("gfx: swapchain %ux%u (window %dx%d)", ext.width, ext.height, cw, ch);   // the first one: gfx_window_start
+    rt_log("gfx: swapchain of %u images (minimum %u)", count, caps.minImageCount);
     g_sc_ext = ext;
     g_sc_n = MAX_IMAGES;
     vkGetSwapchainImagesKHR(c->device, g_sc, &g_sc_n, g_sc_img);
@@ -563,6 +586,21 @@ void gfx_fit_rect(int cw, int ch, int dw, int dh, int out[4]) {
     out[0] = (dw - out[2]) / 2, out[1] = (dh - out[3]) / 2;
 }
 
+// XCX_PRESENT_WAIT: cpu (default) the CPU waits for the acquired swapchain image, then the submission waits for it
+// before its first command; gpu the submission alone waits; copy the submission waits at the copy (before issue 148).
+enum { PW_CPU, PW_GPU, PW_COPY };
+static int present_wait_mode(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = cfg_get("XCX_PRESENT_WAIT");
+        mode = e && !strcmp(e, "copy") ? PW_COPY : e && !strcmp(e, "gpu") ? PW_GPU : PW_CPU;
+        rt_log("gfx: the present waits for the swapchain image %s (XCX_PRESENT_WAIT)",
+               mode == PW_COPY ? "at the copy" : mode == PW_GPU ? "on the GPU before its first command"
+                                                                : "on the CPU, then before its first command");
+    }
+    return mode;
+}
+
 static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4], int defer) {
     int general = layout == VK_IMAGE_LAYOUT_GENERAL;
     gfx_window_start();
@@ -582,17 +620,37 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     if (wsys_minimized() || !g_sc) goto out;
 
     unsigned slot = g_frame % FRAMES;
-    if (vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull) != VK_SUCCESS) {
+    uint64_t tf = kern_now_ns();
+    VkResult fr = vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull);
+    uint64_t ta = kern_now_ns();
+    g_t_fence += ta - tf;
+    if (fr != VK_SUCCESS) {
         rt_log("gfx: present fence wait timed out");
         goto out;
     }
     uint32_t idx = 0;
-    VkResult r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
+    VkFence af = present_wait_mode() == PW_CPU ? g_acquire_fence[slot] : VK_NULL_HANDLE;
+    VkResult r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], af, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         plat_xchg32(&g_dirty, 1);
         if (!create_swapchain()) goto out;
-        r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], VK_NULL_HANDLE, &idx);
+        r = vkAcquireNextImageKHR(c->device, g_sc, 1000000000ull, g_acquire[slot], af, &idx);
     }
+    // The CPU waits until the display gave the image back before anything is submitted. A FIFO or mailbox swapchain
+    // may hand out an image the presentation engine still holds; a submission that waits for it on the GPU holds up the
+    // one graphics queue, and with it the next frame's rendering and its copies of guest memory (vk_sync.c). With the
+    // frame limit at the refresh rate and the replay on the game's thread, FIFO showed frames in pairs (2.6 ms, then
+    // 25-40 ms) at about half the frame rate of an immediate swapchain (issue 106). Waiting here holds the present
+    // thread instead, and through vk_present_drain the game's next submission: the back-pressure lands between frames,
+    // as with a blocking vsync present.
+    if (af && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
+        if (vkWaitForFences(c->device, 1, &af, VK_TRUE, 5000000000ull) != VK_SUCCESS) {
+            rt_log("gfx: swapchain image wait timed out");   // the fence is still pending: the device is gone
+            goto out;
+        }
+        vkResetFences(c->device, 1, &af);
+    }
+    g_t_acq += kern_now_ns() - ta;
     vk_device_fault_report(r);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;     // lost, not ready: skip the frame
     if (r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
@@ -743,14 +801,8 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     // Nothing in the command buffer starts before the swapchain image is free. With the wait at the copy only, the HDR
     // encode (a compute pass, the first command) could start and the GPU then sit inside this submission until the image
     // came back, which Windows counts as the game's GPU use (issue 148: 34 % to 81 % at the same work and power).
-    // XCX_PRESENT_WAIT=copy keeps the old wait at the copy, for comparison.
-    static int wait_at_copy = -1;
-    if (wait_at_copy < 0) {
-        const char *e = cfg_get("XCX_PRESENT_WAIT");
-        wait_at_copy = e && !strcmp(e, "copy");
-        rt_log("gfx: the present waits for the swapchain image %s (XCX_PRESENT_WAIT)",
-               wait_at_copy ? "at the copy" : "before its first command");
-    }
+    // XCX_PRESENT_WAIT=copy keeps the old wait at the copy, =gpu the wait on the GPU alone, for comparison.
+    int wait_at_copy = present_wait_mode() == PW_COPY;
     VkSemaphoreSubmitInfo wait = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = g_acquire[slot],
                                   .stageMask = wait_at_copy ? VK_PIPELINE_STAGE_2_TRANSFER_BIT
                                                             : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
@@ -838,6 +890,7 @@ void gfx_window_release_vk(void) {
         free_thumbs();
         for (int i = 0; i < FRAMES; i++) {
             vkDestroySemaphore(c->device, g_acquire[i], NULL);
+            vkDestroyFence(c->device, g_acquire_fence[i], NULL);
             vkDestroyFence(c->device, g_fence[i], NULL);
             g_ts_written[i] = 0;
         }
@@ -879,6 +932,8 @@ void gfx_window_start(void) {
         for (int i = 0; i < FRAMES; i++) {
             vkCreateFence(c->device, &fi, NULL, &g_fence[i]);
             vkCreateSemaphore(c->device, &semi, NULL, &g_acquire[i]);
+            VkFenceCreateInfo afi = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            vkCreateFence(c->device, &afi, NULL, &g_acquire_fence[i]);
         }
         g_frame = 0;
         g_started = 1;

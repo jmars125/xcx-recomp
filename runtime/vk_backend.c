@@ -81,11 +81,16 @@ static void present_main(void *arg) {
         vk_present_flip();
         // XCX_TRACE=present: one line per present: the host present's interval, the interval of the game's present
         // calls (when the host present went out before back-edge pacing), the wait and how far past its target it went
-        if (rt_trace & RT_TRACE_PRESENT)
-            rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target",
+        if (rt_trace & RT_TRACE_PRESENT) {
+            double pt[5];
+            vk_present_times(pt);
+            uint64_t t2 = kern_now_ns();
+            rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target, "
+                   "flip %.3f ms; since last: qlock %.3f fence %.3f acquire %.3f qpresent %.3f (max %.3f) ms",
                    (unsigned long long)j.frame, last ? (t1 - last) / 1e6 : 0.0,
                    last_queued ? (j.queued - last_queued) / 1e6 : 0.0, (t1 - t0) / 1e6,
-                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0);
+                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0, (t2 - t1) / 1e6, pt[0], pt[1], pt[2], pt[3], pt[4]);
+        }
         last = t1;
         last_queued = j.queued;
         vk_pipeline_autosave();   // starts the autosave thread once
