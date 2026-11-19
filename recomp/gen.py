@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / 'recomp'))
 
 import flags  # noqa: E402
 import appendage  # noqa: E402
+import save_pages  # noqa: E402
 import romfs_mods  # noqa: E402
 import jumptables  # noqa: E402
 import patches  # noqa: E402
@@ -236,6 +237,7 @@ class Emitter:
         self.mod_menu_hook = mod_menu_hook and mod.name == "main"
         self.mod = mod
         self.appendage = appendage.verified(mod)
+        self.save_pages = save_pages.verified(mod)
         self.romfs_mods = romfs_mods.verified(mod)
         self.starts = starts
         self.patched = patched or {}   # {address: (set index, [replacement words])} (recomp/patches.py)
@@ -465,6 +467,8 @@ class Emitter:
             out = [f'void {fname(entry)}(Cpu *c) {{', f'    FN_ENTER({hx(entry)});']
             if self.appendage and (hook := appendage.entry(mod, entry)):
                 out.append('    ' + hook)
+            if self.save_pages and (hook := save_pages.entry(mod, entry)):
+                out.append('    ' + hook)
             if fp.used:
                 out.append('    ' + fp.decl())
 
@@ -572,6 +576,8 @@ class Emitter:
                 emit(i, '    rt_mod_menu_install(c->x[19]);')
             if self.mod_menu_hook and a == mod_menu.LABEL_TAIL:
                 emit(i, f'    if (menu_label) {{ c->x[1] = menu_label; {jump(mod_menu.RAW_SETTER,i)} }}')
+            if self.save_pages and (hook := save_pages.site(self.mod, a)):
+                emit(i, '    ' + hook)
             if a in self.patched:
                 emit(i, patch(i, ins, a))
             elif k == 'op':
@@ -644,6 +650,8 @@ def chunk_text(name, number, emitter, fns):
     if emitter.uses_patches:
         protos += 'extern uint8_t rt_patch_on[];\n'
     hook_header = '#include "appendage_glyph.h"\n' if any('appendage_glyph_' in s for s in body) else ''
+    if any('rt_save_pages_' in s for s in body):
+        hook_header += '#include "save_pages.h"\n'
     if any('romfs_mod_declines' in s for s in body):
         hook_header += '#include "romfs_mods.h"\n'
     return (header(f'{name} chunk {number:04d}') + '#include "cpu.h"\n#include "simd.h"\n' + hook_header + '\n' + protos + '\n'

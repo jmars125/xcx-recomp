@@ -27,6 +27,7 @@
 #include "platform/platform.h"
 #include "romfs_mods.h"
 #include "romfs_path.h"
+#include "save_pages.h"
 
 #define XCX_APPLICATION_ID 0x0100453019aa8000ull   // XCX DE (the name stays to keep the diff against XCX Recomp small)
 #define FILE_BASE 0x200000000ull
@@ -680,6 +681,11 @@ void fs_host_set_profile(const char *dir) {
     need(dir && snprintf(profile, sizeof profile, "%s", dir) < (int)sizeof profile, "profile path");
 }
 
+int fs_host_profile_file(const char *name, char *out, size_t cap) {
+    if (!plat_cas32(&storage_ready, 0, 0) || !*profile) return 0;
+    return snprintf(out, cap, "%s/%s", profile, name) < (int)cap;
+}
+
 // ---- mounts and paths
 static uint32_t mount_add(const char *name, int kind, const char *root) {
     if (!name || !*name || strlen(name) >= 32 || strchr(name, ':') || strchr(name, '/')) return FS_R_INVALID_ARGUMENT;
@@ -732,6 +738,8 @@ static uint32_t host_path_kind(const char *path, char *out, size_t cap, int *kin
     if (k == M_FREE) return FS_R_PATH_NOT_FOUND;
     if (kind) *kind = k;
     const char *rest = colon + 1;
+    char slot_rest[96];
+    if (k == M_SAVE && save_pages_remap_path(rest, slot_rest, sizeof slot_rest)) rest = slot_rest;   // save_pages.h
     for (const char *q = rest + 1; *q;) {
         const char *e = strchr(q, '/');
         size_t len = e ? (size_t)(e - q) : strlen(q);

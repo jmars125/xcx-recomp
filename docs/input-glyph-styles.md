@@ -42,6 +42,8 @@ The weapon guide translates virtual X (Change Weapon, Func7); the field guide tr
 
 The preference `glyph_style = original|auto|playstation|xbox|steam|keyboard` is persisted independently from `pad_layout` and `bind_*`. No Lua loader/provider or external API is required.
 
+A screen that writes its own text can use the same inline icon tags, for example the L/R page icons of the Save and Load screens. [ui-widgets.md](ui-widgets.md) shows how to set that text from a hook.
+
 ## Draw selection, refresh and ownership
 
 `appendage_glyph.c` scopes only an eligible live node's original draw/bind call, the same Cpu and the verified imported BindTexture return. It tags only the copied immediate texture handle. The original texture/sampler low 32 bits remain intact; the upper tag carries immutable generation and artwork IDs. No guest resource, command memory, active-bank field or global atlas is modified.

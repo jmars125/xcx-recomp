@@ -28,6 +28,7 @@ This repository is public. Game data lives outside it and every derived file sta
 - Every lifter change passes the differential tests against Unicorn ([docs/building.md](docs/building.md), "Checks"). After changing `recomp/jumptables.py`, `tests\jumptables_check.py` reports 0 disagreements on 1.2.1 and 1.4.3.
 - `recomp/layout.py` alone decides module bases.
 - Graphics bugs: [docs/maxwell.md](docs/maxwell.md) lists the Maxwell behaviour the Vulkan path must match and the XCX bugs other ports fixed.
+- Changing a game screen (text, labels, menu sounds, buttons a screen reports, text entry): [docs/ui-widgets.md](docs/ui-widgets.md) lists the game functions and what did not work. [docs/ui-testing.md](docs/ui-testing.md) shows how to check the result with scripted input and screenshots.
 - Comments say what the code does and why, in words that stand on their own. Cite our code by file plus function (a line number may follow as a hint) and upstream code by project, file and function: `refs/` moves, so its line numbers rot. Commit hashes belong to the attribution of copied code.
 
 ## Writing
