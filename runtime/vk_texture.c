@@ -101,6 +101,7 @@ static nvn_hmap samplers = {.klen = sizeof(samp_par)};
 static int nreleased;
 static Tex *rel_head, *rel_tail;   // released entries in release order (sweep_released drops from the head)
 static uint64_t n_uploads, n_reuploads;
+static uint64_t trim_released(int all);
 // Re-uploads since the last perf line (tex_lock): all, and those of textures a WriteTexels wrote since their last upload.
 static uint64_t ru_n, ru_bytes, ru_ns, ru_wt_n, ru_wt_bytes, ru_wt_ns;
 // XCX_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
@@ -429,6 +430,13 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init, int opti
     if (!img) {
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         VkResult r = vmaCreateImage(c->vma, &ci, &ai, &img, &e->alloc, NULL);
+        // Out of memory: drop every released texture that has its own memory (trim_released), free the dropped
+        // images no submission uses any more (vk_mem_collect) and try once more. Memory a submission in flight still
+        // uses comes back when it retires, so a later lookup of this texture can succeed where this one fails.
+        if ((r == VK_ERROR_OUT_OF_DEVICE_MEMORY || r == VK_ERROR_OUT_OF_HOST_MEMORY) && trim_released(1)) {
+            vk_mem_collect();
+            r = vmaCreateImage(c->vma, &ci, &ai, &img, &e->alloc, NULL);
+        }
         if (r != VK_SUCCESS) {
             log_limited(&n_failed, "image creation failed (%d): nvn fmt %#x %ux%ux%u target %d levels %u layers %u", (int)r,
                         d->format, w, h, depth, d->target, levels, layers);
@@ -550,8 +558,62 @@ static void destroy_tex(Tex *e) {
 // Dropping all of them at once when the count passed 4096 destroyed thousands of images in one frame: 333-422 ms
 // frames every 40-50 s on a GTX 1050 Ti, then the textures still in use were created and uploaded again.
 #define RELEASED_MAX 2048
+
+// VRAM pressure (issue #211, a 2 GB GeForce 920MX): the released entries above keep their own device memory, and
+// nothing weighed them against the VRAM budget. Once device-local memory was spent, new images failed with
+// VK_ERROR_OUT_OF_DEVICE_MEMORY, the driver paged the rest, and a submit ended in VK_ERROR_DEVICE_LOST. So while use
+// passes TRIM_HIGH percent of the budget (vk_mem_vram), released entries with their own memory go, oldest first,
+// until the bytes dropped bring use down to TRIM_LOW percent. Their memory returns once their last submission
+// retires (destroy_tex defers it). The check runs at a release at most every TRIM_PERIOD_MS, and at once when an
+// image cannot be created (trim_released with all set drops every released entry with its own memory).
+#define TRIM_HIGH 90
+#define TRIM_LOW 80
+#define TRIM_PERIOD_MS 250
+static uint64_t trim_n, trim_bytes, trim_last_ns;   // tex_lock (trim_last_ns: racy, a throttle only)
+
+static uint64_t own_bytes(const Tex *e) {
+    VkCtx *c = vk_ctx();
+    if (!e->alloc || !c) return 0;
+    VmaAllocationInfo ai;
+    vmaGetAllocationInfo(c->vma, e->alloc, &ai);
+    return ai.size;
+}
+
+static uint64_t trim_released(int all) {
+    uint64_t used, budget, goal = 0;
+    int exact;
+    if (!all) {
+        uint64_t now = plat_now_ns();
+        if (now - trim_last_ns < (uint64_t)TRIM_PERIOD_MS * 1000000u) return 0;
+        trim_last_ns = now;
+        if (!vk_mem_vram(&used, &budget, &exact) || used <= budget / 100 * TRIM_HIGH) return 0;
+        goal = used - budget / 100 * TRIM_LOW;
+    }
+    uint64_t dropped = 0, n = 0;
+    lock();   // recursive: the callers mostly hold it already
+    for (Tex *e = rel_head, *nx; e && (all || dropped < goal); e = nx) {
+        nx = e->rel_next;
+        uint64_t b = own_bytes(e);
+        if (!b) continue;   // bound to pool memory: dropping it frees nothing
+        destroy_tex(e);
+        dropped += b, n++;
+    }
+    trim_n += n, trim_bytes += dropped;
+    uint64_t tn = trim_n, tb = trim_bytes;
+    unlock();
+    if (n) {
+        static volatile int32_t logged;
+        if (plat_inc32(&logged) <= 16)
+            rt_log("vk: VRAM %s: dropped %llu released textures (%.1f MiB of their own memory; %llu, %.0f MiB so far)",
+                   all ? "exhausted" : "nearly full", (unsigned long long)n, dropped / 1048576.0,
+                   (unsigned long long)tn, tb / 1048576.0);
+    }
+    return dropped;
+}
+
 static void sweep_released(void) {
     while (nreleased > RELEASED_MAX && rel_head) destroy_tex(rel_head);
+    trim_released(0);
 }
 
 // ---------------------------------------------------------------- uploads
