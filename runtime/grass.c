@@ -18,7 +18,14 @@
 // is raised later); XCX_GRASS_POOL=0 is only for comparing with the game's size. 4x stops loading grass and then
 // crashes in the cell list code (main+0x993ad0) even with a much larger heap, so the setting is clamped to 3. It is
 // not allowed below 1 either: the minimum range would then make the short fill-in layer longer than the game's while
-// every other layer got shorter. The builders read the scale every frame, so a change applies at once.
+// every other layer got shorter. A change applies at once (see the rescan below).
+//
+// The loader does not notice a new range by itself: the per-layer loader (main+0x9953a0) keeps the camera position of
+// its last pass in the layer's entry ([loader+0xc0] + layer x 16: +0 X, +8 Z) and returns at once while the camera is
+// still in the same grid cell, so a standing camera kept the old amount of grass until it moved into the next cell. After
+// a change grass_rescan writes a far-off position there, and each layer's next pass is a full one at the new range, as
+// after a teleport. The loader is [grass object+0xc8], the object the live grass update stores at page +0x110 (set
+// "grassrescan"); its layer count is the first word of [loader].
 //
 // The cell allocator (main+0x9bb130) stores a 16-bit capacity in entries at cell +0x1a, which wraps for any free block
 // over 1 MiB, the game's own 0x1c0000-byte heap included. It looks unused: the heap code keeps the real size at the
@@ -26,17 +33,42 @@
 // (main+0x940000..0xa20000) is of another structure. So the larger heap's wrap is harmless and not the 4x crash.
 #include "cfg.h"
 #include "host.h"
+#include "platform/platform.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { GRASS_SCALE_PAGE = 0x100, GRASS_WINDOW_PAGE = 0x104, GRASS_MIN_RANGE_PAGE = 0x108 };
-_Static_assert(GRASS_MIN_RANGE_PAGE + sizeof(float) <= 0x1000, "the grass floats must fit on the patch page");
+enum { GRASS_SCALE_PAGE = 0x100, GRASS_WINDOW_PAGE = 0x104, GRASS_MIN_RANGE_PAGE = 0x108, GRASS_OBJECT_PAGE = 0x110 };
+_Static_assert(GRASS_OBJECT_PAGE + sizeof(uint64_t) <= 0x1000, "the grass values must fit on the patch page");
 
 static int grass_set = -2;
 static unsigned grass_cfg_seen;
 static int grass_cfg_seen_valid;
 static float grass_logged = -1;
+static float grass_applied = -1;   // the scale of the last update; -1 before the first (nothing is loaded yet then)
+
+static void grass_rescan(const uint8_t *page) {
+    static int set = -2;
+    if (set == -2) set = rt_patch_set("grassrescan");
+    if (!rt_patch_enabled(set)) return;
+    uint64_t g = __atomic_load_n((const uint64_t *)(page + GRASS_OBJECT_PAGE), __ATOMIC_ACQUIRE);
+    if (!g || !plat_mem_readable(g + 0xc8, 8)) return;   // no grass on this map yet
+    uint64_t loader = *(const uint64_t *)(uintptr_t)(g + 0xc8);
+    if (!loader || !plat_mem_readable(loader, 0xc8)) return;
+    uint64_t layers = *(const uint64_t *)(uintptr_t)loader, entries = *(const uint64_t *)(uintptr_t)(loader + 0xc0);
+    if (!layers || !entries || !plat_mem_readable(layers, 4)) return;
+    uint32_t n = *(const uint32_t *)(uintptr_t)layers;
+    if (n > 64 || !plat_mem_readable(entries, (size_t)n * 16)) return;
+    const float far = -1.0e7f;
+    uint32_t word;
+    memcpy(&word, &far, sizeof word);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t *e = (uint32_t *)(uintptr_t)(entries + (uint64_t)i * 16);
+        __atomic_store_n(&e[0], word, __ATOMIC_RELAXED);
+        __atomic_store_n(&e[2], word, __ATOMIC_RELAXED);
+    }
+    rt_log("grass: %u layers rescan at the new distance", n);
+}
 
 // 1 when this build has the grass patch set (the 2.0.0 update): the menu shows its row only then.
 int rt_grass_available(void) {
@@ -67,6 +99,8 @@ void rt_grass_update(void) {
     __atomic_store_n((uint32_t *)(page + GRASS_MIN_RANGE_PAGE), mword, __ATOMIC_RELEASE);
     __atomic_store_n((uint32_t *)(page + GRASS_SCALE_PAGE), word, __ATOMIC_RELEASE);
     rt_patch_switch(grass_set, scale != 1.0f);
+    if (grass_applied >= 0 && scale != grass_applied) grass_rescan(page);
+    grass_applied = scale;
     if (scale != grass_logged) {
         grass_logged = scale;
         rt_log("grass: distance x%.2f (patch page +0x%x holds %#010x), fine window and minimum range %.0f m", scale,
