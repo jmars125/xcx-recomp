@@ -187,8 +187,21 @@ static int alloc_physical(VkCtx *c, PoolRec *r) {
     VkMemoryRequirements req = {.size = (rb.size + align - 1) & ~(align - 1), .alignment = align, .memoryTypeBits = bits};
     VmaAllocationCreateInfo aci = {.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
                                    .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
-    if ((res = vmaAllocateMemory(c->vma, &req, &aci, &r->alloc, NULL)) != VK_SUCCESS ||
-        (res = vmaBindBufferMemory(c->vma, r->alloc, r->buf)) != VK_SUCCESS) {
+    res = vmaAllocateMemory(c->vma, &req, &aci, &r->alloc, NULL);
+    if (res == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        // VRAM spent (a 2 GB card, issue #211): the pool goes to any memory type the buffer takes, host memory on a
+        // discrete card, rather than failing MemoryPoolInitialize for the game. An image placed in the pool whose
+        // memory type it cannot use gets its own memory instead (vk_texture.c bind_pool_memory, create_tex).
+        aci.requiredFlags = 0;
+        req.memoryTypeBits = rb.memoryTypeBits;
+        r->alloc = NULL;
+        res = vmaAllocateMemory(c->vma, &req, &aci, &r->alloc, NULL);
+        static volatile int32_t logged;
+        if (plat_inc32(&logged) <= 8)
+            rt_log("vk: physical pool of %.1f MiB: no device-local memory left, %s", r->size / 1048576.0,
+                   res == VK_SUCCESS ? "placed in other memory" : "no other memory either");
+    }
+    if (res != VK_SUCCESS || (res = vmaBindBufferMemory(c->vma, r->alloc, r->buf)) != VK_SUCCESS) {
         rt_log("vk: physical pool of %#llx bytes: device-local allocation failed (%d)", (unsigned long long)r->size, (int)res);
         if (r->alloc) vmaFreeMemory(c->vma, r->alloc);
         vkDestroyBuffer(c->device, r->buf, NULL);
@@ -563,8 +576,10 @@ int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
         for (uint32_t h = 0; h < p2.memoryProperties.memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
             if (p2.memoryProperties.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
                 *used += b.heapUsage[h], *budget += b.heapBudget[h];
-        if (c->vram_held && *budget > c->vram_held && *used >= c->vram_held)   // XCX_VRAM_LIMIT
-            *used -= c->vram_held, *budget -= c->vram_held;
+        if (c->vram_limit) {   // XCX_VRAM_LIMIT: the limited heap alone, with the small card's budget
+            *used = b.heapUsage[c->vram_limit_heap];
+            *budget = c->vram_limit - c->vram_limit / 16;
+        }
         *exact = 1;
         return *budget != 0;
     }
@@ -573,6 +588,7 @@ int vk_mem_vram(uint64_t *used, uint64_t *budget, int *exact) {
     for (uint32_t h = 0; h < mp->memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
         if (mp->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
             *used += vb[h].statistics.blockBytes, *budget += mp->memoryHeaps[h].size;
+    if (c->vram_limit) *used = vb[c->vram_limit_heap].statistics.blockBytes, *budget = c->vram_limit - c->vram_limit / 16;
     return *budget != 0;
 }
 
