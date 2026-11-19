@@ -21,6 +21,7 @@
 // rt_ticks, the function profiler hook), logging, SHA-256, and the crash reporter (a vectored exception handler that
 // names the lifted function, the guest registers and the guest frame-pointer chain).
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -766,7 +767,49 @@ static void profile_fallback(RtConfig *c) {
     c->profile = pp_profile;
 }
 
+// rt_restart_game: the copy started for a restart waits up to this long for the game it replaces to close.
+#define RESTART_WAIT_MS 120000
+
+void gfx_window_request_close(void);   // ui/menu.h (C++)
+
+// Set once a restart has started a copy: a second press while the window closes (which takes a while: the save
+// flush, the pipeline cache) would start a second copy waiting on the same process, and two games on one save.
+static atomic_int restart_started;
+
+int rt_restart_started(void) { return atomic_load(&restart_started); }
+
+int rt_restart_game(void) {
+    int expect = 0;
+    if (!atomic_compare_exchange_strong(&restart_started, &expect, 1)) return 1;   // under way already
+    char set[48];
+    snprintf(set, sizeof set, "XCX_RESTART_AFTER=%u", plat_process_id());
+    // XCX_REEXEC counts this process's own address-space retries (memory.c): the copy starts its count afresh
+    static const char *const drop[] = {"XCX_REEXEC", NULL};
+    int ok = plat_start_copy(set, drop);
+    rt_log("restart: %s", ok ? "a new copy waits for this one to close" : "the new copy could not be started");
+    if (ok) gfx_window_request_close();
+    else atomic_store(&restart_started, 0);   // nothing started: the button may be tried again
+    return ok;
+}
+
 int main(int argc, char **argv) {
+    // A restart from the menu (rt_restart_game): wait for the game this replaces to close, before anything here
+    // claims memory, files or the window.
+    const char *after = getenv("XCX_RESTART_AFTER");
+    if (after && *after) {
+        uint32_t old = (uint32_t)strtoul(after, NULL, 10);
+        plat_setenv("XCX_RESTART_AFTER", NULL);
+        if (old && !plat_wait_process_exit(old, RESTART_WAIT_MS)) {
+            fprintf(stderr, "restart: the game being restarted (process %u) did not close; not starting\n", old);
+#ifdef _WIN32
+            // said where the player sees it: this copy has no window yet, and nothing else would say why it didn't start
+            MessageBoxW(NULL, L"The game being restarted did not close within two minutes, so the new copy did not "
+                        L"start. Close the old window if it is still open, then start the game again.",
+                        L"XCX Recomp: restart", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+#endif
+            return 1;
+        }
+    }
     mem_init();   // first: claim the guest address space before anything else can land there; reads xcx.ini
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);

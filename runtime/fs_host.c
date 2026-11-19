@@ -35,6 +35,7 @@
 #define NDIRS 256
 #define NMOUNTS 16
 #define PATH_CAP 1100
+_Static_assert(PATH_CAP == ROMFS_MOD_PATH_CAP, "a data table romfs_mods.c claims must fit the path open_file takes");
 
 enum { M_FREE, M_SAVE, M_TEMP, M_CACHE, M_SAVE_RO, M_AOC };   // M_SAVE: the working copy; M_SAVE_RO: the committed
                                                               // save; M_AOC: add-on content (read-only)
