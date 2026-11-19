@@ -551,7 +551,7 @@ void input_glyph_snapshot(int *source, int *family, int *layout, InputMap *map) 
     *source = glyph_intent.source;
     int connected = pad && SDL_GamepadConnected(pad);
     *family = connected ? glyph_family : GLYPH_PAD_UNKNOWN;
-    // A forced controller style still needs the bindings of a layout when no controller is connected.
+    // A forced controller style still needs the bindings of a layout when no controller is connected. Take it from the pad_layout setting; auto gives the Xbox layout.
     *layout = connected ? pad_layout_get() : input_pad_layout_pick(cfg_value("XCX_PAD_LAYOUT"), pad_east_a);
     *map = input_map;
     // Translate only this display copy; emitted inputs and the rebinding editor retain their canonical key IDs.
