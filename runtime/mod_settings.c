@@ -162,15 +162,27 @@ int mod_settings_save(ModView *view) {
     snprintf(view->save_note,sizeof view->save_note,"%s",ok?"Saved":"Save failed; previous file preserved. Session value retained.");return ok;
 }
 
-int mod_ui_intent_submit(const ModIntent *a) {
+// Shared by the overlay and native paths. The overlay path needs the Mods overlay active and its session; a native
+// request (a registered native screen confirming an option) needs neither, but names the same enabled button.
+static int intent_submit(const ModIntent *a,int native) {
     int ok=0;take();
-    if(!memchr(a->mod,0,sizeof a->mod)||!memchr(a->action,0,sizeof a->action)||!active||stopped||a->generation!=snapshot.generation||a->session!=snapshot.session)goto done;
+    if(!memchr(a->mod,0,sizeof a->mod)||!memchr(a->action,0,sizeof a->action)||stopped||a->generation!=snapshot.generation)goto done;
+    if(!native&&(!active||a->session!=snapshot.session))goto done;
     for(int i=0;i<snapshot.count;++i){ModView *m=&snapshot.mods[i];if(strcmp(m->id,a->mod)||m->status!=MOD_LOADED)continue;
         for(int j=0;j<m->button_count;++j){ModButton *b=&m->buttons[j];if(strcmp(b->id,a->action)||!b->enabled||(b->provider&&(!m->provider_available||m->provider_pending)))continue;
-            if(intent_count<MOD_ACTION_MAX){intents[intent_count++]=*a;ok=1;snapshot.notice[0]=0;}else snprintf(snapshot.notice,sizeof snapshot.notice,"Action queue is full; try again.");
+            if(intent_count<MOD_ACTION_MAX){intents[intent_count]=*a;intents[intent_count++].native=native;ok=1;if(!native)snapshot.notice[0]=0;}
+            else if(!native)snprintf(snapshot.notice,sizeof snapshot.notice,"Action queue is full; try again.");
         }
     }
  done:release();return ok;
 }
+int mod_ui_intent_submit(const ModIntent *a) {return intent_submit(a,0);}
+int mod_ui_native_intent_submit_text(const char *mod,const char *action,const char *text) {
+    ModIntent a={0};
+    if(!mod||!action||strlen(mod)>=sizeof a.mod||strlen(action)>=sizeof a.action||(text&&strlen(text)>=sizeof a.text))return 0;
+    take();a.generation=snapshot.generation;release();
+    strcpy(a.mod,mod);strcpy(a.action,action);if(text)strcpy(a.text,text);return intent_submit(&a,1);
+}
+int mod_ui_native_intent_submit(const char *mod,const char *action) {return mod_ui_native_intent_submit_text(mod,action,NULL);}
 int mod_ui_intent_pop(ModIntent *a){take();int ok=intent_count>0&&!stopped;if(ok){*a=intents[0];memmove(intents,intents+1,(size_t)(--intent_count)*sizeof *intents);}release();return ok;}
-int mod_ui_intent_current(const ModIntent *a){take();int ok=active&&!stopped&&a->generation==snapshot.generation&&a->session==snapshot.session;release();return ok;}
+int mod_ui_intent_current(const ModIntent *a){take();int ok=!stopped&&a->generation==snapshot.generation&&(a->native||(active&&a->session==snapshot.session));release();return ok;}

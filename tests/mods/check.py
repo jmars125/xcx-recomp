@@ -21,7 +21,7 @@ def main():
     env=os.environ.copy(); env['ASAN_OPTIONS']='detect_leaks=1:halt_on_error=1'; env['UBSAN_OPTIONS']='halt_on_error=1:print_stacktrace=1'
     def run(cmd): subprocess.run(list(map(str,cmd)),cwd=ROOT,env=env,check=True)
     common=[args.cc,*flags,'-I'+str(lua),'-I'+str(ROOT/'runtime')]
-    provider=[ROOT/'runtime/mod_menu.c',ROOT/'runtime/mod_provider.c',ROOT/'runtime/mod_provider_platform.c',ROOT/'runtime/sha256.c']
+    provider=[ROOT/'runtime/mod_menu.c',ROOT/'runtime/mod_native_ui.c',ROOT/'runtime/mod_provider.c',ROOT/'runtime/mod_provider_platform.c',ROOT/'runtime/sha256.c']
     run([*common,'-DXCX_MOD_TESTING',ROOT/'tests/mods/driver.c',ROOT/'runtime/mod_package.c',ROOT/'tests/mods/runtime_test.c',ROOT/'tests/mods/settings_test.c',ROOT/'tests/mods/settings_io.c',*provider,*core,'-lm','-o',build/('mod-test'+extension)])
     env['MOD_TEST_EXE']=str(build/('mod-test'+extension))
     run([*common,'-DXCX_MOD_TESTING',ROOT/'tests/mods/settings_driver.c',ROOT/'runtime/mod_package.c',ROOT/'tests/mods/runtime_test.c',ROOT/'tests/mods/settings_test.c',ROOT/'tests/mods/settings_io.c',*provider,*core,'-lm','-o',build/('mod-settings-test'+extension)])
