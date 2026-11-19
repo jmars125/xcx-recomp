@@ -72,6 +72,7 @@ jobs:
     timeout-minutes: 120
     env:
       PACKAGE: XCX-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+      TARBALL: XCX-Setup-${{ needs.version.outputs.version }}-linux.tar.gz
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -90,11 +91,18 @@ jobs:
       - run: sudo apt-get install -y make pkg-config
       - run: >-
           xvfb-run -a python tools/make_release_linux.py --out build/release/XCX-Setup-linux
-          --appimage build/release/${{ env.PACKAGE }}
+          --appimage build/release/${{ env.PACKAGE }} --tarball build/release/${{ env.TARBALL }}
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PACKAGE }}
           path: build/release/${{ env.PACKAGE }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARBALL }}
+          path: build/release/${{ env.TARBALL }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -111,6 +119,9 @@ jobs:
             wrapper: ""
           - runner: ubuntu-24.04
             package: XCX-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+            wrapper: xvfb-run -a
+          - runner: ubuntu-24.04
+            package: XCX-Setup-${{ needs.version.outputs.version }}-linux.tar.gz
             wrapper: xvfb-run -a
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30

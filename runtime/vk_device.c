@@ -42,17 +42,27 @@ static int layer_present(const char *name) {
     return found;
 }
 
-// Mesa's drivers (RADV on Linux and the Steam Deck) keep a shader cache of their own beside our pipeline cache, by
-// default in ~/.cache and up to 1 GB: about 35 MB in a minute of the title screen. A Deck's /home is small and the game
-// usually sits on the SD card, so unless MESA_SHADER_CACHE_DIR names a folder, it goes to mesa-cache beside the exe.
-static void mesa_cache_beside_exe(void) {
+// Driver shader caches of their own beside our pipeline cache. Mesa's (RADV on Linux and the Steam Deck) defaults to
+// ~/.cache and up to 1 GB: about 35 MB in a minute of the title screen. A Deck's /home is small and the game usually
+// sits on the SD card, so unless MESA_SHADER_CACHE_DIR names a folder, it goes to mesa-cache beside the exe. NVIDIA's
+// Linux driver defaults to ~/.cache/nvidia (__GL_SHADER_DISK_CACHE_PATH, which its Vulkan driver reads too): it goes to
+// nvidia-cache beside the exe when that driver is loaded, so the game writes nothing outside its folder (docs/installer.md, "Linux release").
+static void cache_beside_exe(const char *var, const char *name, int make) {
     char dir[PLAT_PATH_MAX * 2];
-    if (plat_getenv("MESA_SHADER_CACHE_DIR", dir, sizeof dir)) return;
+    if (plat_getenv(var, dir, sizeof dir)) return;
     int len = plat_exe_path(dir, sizeof dir - 16);
     char *cut = len ? plat_last_sep(dir) : NULL;
     if (!cut) return;
-    strcpy(cut + 1, "mesa-cache");
-    plat_setenv("MESA_SHADER_CACHE_DIR", dir);
+    strcpy(cut + 1, name);
+    if (make) plat_file_mkdir_p(dir);   // NVIDIA's driver makes only its GLCache folder inside it
+    plat_setenv(var, dir);
+}
+
+static void driver_caches_beside_exe(void) {
+    cache_beside_exe("MESA_SHADER_CACHE_DIR", "mesa-cache", 0);
+#ifndef _WIN32
+    if (plat_dir_exists("/proc/driver/nvidia")) cache_beside_exe("__GL_SHADER_DISK_CACHE_PATH", "nvidia-cache", 1);
+#endif
 }
 
 static int instance_ext_present(const char *name) {
@@ -69,7 +79,7 @@ static int instance_ext_present(const char *name) {
 static int g_surface_caps2;   // VK_KHR_get_surface_capabilities2 is enabled on the instance
 
 static int create_instance(void) {
-    mesa_cache_beside_exe();
+    driver_caches_beside_exe();
     const char *ext[24];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
