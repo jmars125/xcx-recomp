@@ -6,6 +6,14 @@ this file only draws. The window text is in installer/text/<en|ru>.json under "u
 
     --selftest [--shots DIR]   build every screen in both languages and close by itself (PNG per screen with --shots)
     --lang en|ru               window language (default: the Windows display language)
+    --dest DIR                 the install folder to show (default: the one Setup finds, installer/play.py)
+    --play                     start the game when this release built it in that folder, without a window; else open
+                               the window there and start the game once the setup has finished
+    any other argument         goes to the game when Setup starts it (also after --): --fullscreen, --set KEY=VALUE
+
+On start, a finished build of this release in --dest, the remembered install folder (installer/recent.py) or
+beside Setup (installer/play.py find) opens the Play screen: Play starts
+the game, hides the window and waits for the game; Update / reinstall opens the form for that folder.
 """
 import argparse
 import json
@@ -22,6 +30,7 @@ except ImportError:
     ImageGrab = None
 
 from . import ini
+from . import play as plays
 from . import theme
 from .events import GAME_EXE
 from .gui_mods import ModsWindow
@@ -46,7 +55,7 @@ def fix_tcl_paths():
 
 
 class App:
-    def __init__(self, root, ui_lang, layout, run_args=None, remember=True):
+    def __init__(self, root, ui_lang, layout, run_args=None, remember=True, game_args=(), dest=None, auto_play=False):
         self.root, self.layout = root, layout
         self.remember = remember         # read and write the per-user file of the last install (installer/recent.py)
         self.cat = Catalog(ui_lang)
@@ -61,6 +70,10 @@ class App:
         self.lang_code = default_game_language(ui_lang)
         self.screen = None
         self.fitted = None               # the (width, height) fit last gave the window
+        self.game_args = list(game_args)  # passed to the game by Play
+        self.auto_play = auto_play       # --play on a folder that needed the setup first: play once it finished
+        self.game = None                 # the game Play started; the hidden window waits for it
+        self.exit_code = 0
 
         root.title(self.cat('ui.title'))
         icon = layout.runtime / 'xcx.ico'
@@ -94,18 +107,27 @@ class App:
                             command=self.switch_language).pack(side='left', padx=1)
         self.body = ttk.Frame(root, padding=PAD)
         self.body.pack(fill='both', expand=True)
-        self.frames = {'form': self.build_form(), 'run': self.build_run(), 'finish': self.build_finish()}
+        self.frames = {'form': self.build_form(), 'run': self.build_run(), 'finish': self.build_finish(),
+                       'play': self.build_play()}
         self.vars['lang'].set(self.lang_label(self.lang_code))
         self.vars['dest'].trace_add('write', lambda *_: self.fill_from_folder())
         self.vars['dest'].trace_add('write', lambda *_: self.refresh_form())
         self.vars['base'].trace_add('write', lambda *_: self.refresh_form())
-        if remember:
-            # dest goes last: its traces run refresh_form (update hint and recorded language)
-            last = recent.load_bounded()
-            for name in recent.FIELDS:
-                if name in last:
-                    self.vars[name].set(last[name])
-        self.show('form')
+        # The remembered install (installer/recent.py) fills the form, and a finished build of this release in it, in
+        # --dest or beside Setup (installer/play.py find) opens the Play screen instead
+        last = recent.load_bounded() if remember else {}
+        for name in recent.SOURCES:
+            if name in last:
+                self.vars[name].set(last[name])
+        ready, known = plays.find(layout, dest, last.get('dest'))
+        chosen = dest or ready or known or last.get('dest')
+        if chosen:   # dest goes last: its traces fill the empty fields from the folder's record and refresh the form
+            self.vars['dest'].set(os.path.normpath(str(chosen)))
+        if ready is not None and not auto_play:
+            self.refresh_play()
+            self.show('play')
+        else:
+            self.show('form')
 
     # ---- text -----------------------------------------------------------------------------------------------------
 
@@ -131,6 +153,7 @@ class App:
         self.refresh_form()
         self.refresh_run()
         self.refresh_finish()
+        self.refresh_play()
         self.render_log()
 
     def switch_language(self):
@@ -267,11 +290,32 @@ class App:
         self.log_open = False
         return f
 
+    def build_play(self):
+        """The first screen when the folder holds a finished build of this release (installer/play.py)."""
+        f = ttk.Frame(self.body)
+        bar = ttk.Frame(f)
+        bar.pack(side='bottom', fill='x', pady=(12, 0))
+        self.play_button = self.button(bar, 'ui.play', self.play)
+        self.play_button.pack(side='right')
+        self.button(bar, 'ui.close', self.on_close).pack(side='right', padx=(0, 8))
+        self.button(bar, 'ui.reinstall', lambda: self.show('form')).pack(side='left')
+        self.button(bar, 'ui.mods', self.open_mods).pack(side='left', padx=(8, 0))
+        self.label(f, 'ui.play_title', style='Title.TLabel').pack(anchor='w')
+        self.play_text = ttk.Label(f, wraplength=620, justify='left')
+        self.play_text.pack(anchor='w', pady=(8, 8))
+        self.play_error = ttk.Label(f, style='Err.TLabel', wraplength=620, justify='left')
+        self.play_error.pack(anchor='w')
+        self.label(f, 'ui.play_hint', wraplength=620, justify='left').pack(anchor='w', pady=(8, 0))
+        return f
+
     def build_finish(self):
         f = ttk.Frame(self.body)
         bar = ttk.Frame(f)
         bar.pack(side='bottom', fill='x', pady=(12, 0))
-        self.button(bar, 'ui.close', self.on_close).pack(side='right')
+        self.finish_play = self.button(bar, 'ui.play', self.play)
+        self.finish_play.pack(side='right')
+        self.finish_close = self.button(bar, 'ui.close', self.on_close)
+        self.finish_close.pack(side='right', padx=(0, 8))
         self.open_button = self.button(bar, 'ui.open_folder', self.open_folder)
         self.open_button.pack(side='right', padx=(0, 8))
         self.back_button = self.button(bar, 'ui.back', lambda: self.show('form'))
@@ -401,6 +445,8 @@ class App:
         self.show('finish')
         if self.closing:
             self.root.destroy()
+        elif self.auto_play and self.model.result == 'ok':
+            self.play()
 
     def feed(self, line):
         """One stdout line of the CLI: an event updates the model and the log, anything else goes to the log as is."""
@@ -525,6 +571,40 @@ class App:
             self.open_button.state(['!disabled'])
         else:
             self.open_button.state(['disabled' if not Path(m.dest or '.').is_dir() else '!disabled'])
+        if result == 'ok' and m.dest and plays.playable(m.dest, self.layout.release):
+            self.finish_play.pack(side='right', before=self.finish_close)
+        else:
+            self.finish_play.pack_forget()
+
+    # ---- play -----------------------------------------------------------------------------------------------------
+
+    def refresh_play(self):
+        self.play_text.configure(text=self.cat('ui.play_text', release=self.layout.release,
+                                               dest=self.vars['dest'].get().strip()))
+
+    def play(self):
+        """Start the game in the install folder with the arguments Setup did not know, hide the window and wait for the
+        game: Setup ends with it, with its exit code."""
+        dest = self.model.dest if self.screen == 'finish' and self.model.dest else self.vars['dest'].get().strip()
+        try:
+            self.game = plays.start(dest, self.game_args)
+        except OSError as e:
+            self.vars['dest'].set(dest)
+            self.refresh_play()
+            self.play_error.configure(text=self.cat('ui.play_failed', path=str(Path(dest) / GAME_EXE),
+                                                    detail=str(e)))
+            self.show('play')
+            return
+        self.root.withdraw()
+        self.root.after(500, self.wait_game)
+
+    def wait_game(self):
+        code = self.game.poll()
+        if code is None:
+            self.root.after(500, self.wait_game)
+            return
+        self.exit_code = code
+        self.root.destroy()
 
     def open_mods(self):
         """The Mods window (installer/gui_mods.py) for the install folder in the form, which must hold the game."""
@@ -649,6 +729,10 @@ def selftest(layout, shots=None):
             app.model.finish(3)
             app.refresh_finish()
             shot(f'finish-cancelled-{tag}')
+            app.vars['dest'].set('Z:/selftest/XCX')
+            app.refresh_play()
+            app.show('play')
+            shot(f'play-{tag}')
             app.toggle_log()
         root.destroy()
 
@@ -658,21 +742,44 @@ def selftest(layout, shots=None):
     return 0 if len(steps) == len(UI_LANGUAGES) and all(steps) and mixed == [False] else 1
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def split_args(argv):
+    """(Setup's arguments, the game's): everything after a lone -- is the game's."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if '--' in argv:
+        i = argv.index('--')
+        return argv[:i], argv[i + 1:]
+    return argv, []
+
+
+def parse(argv=None):
+    """(Setup's options, the game's arguments): what Setup does not know goes to the game (runtime/main.c usage)."""
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
     ap.add_argument('--selftest', action='store_true')
     ap.add_argument('--shots', type=Path)
     ap.add_argument('--lang', choices=UI_LANGUAGES)
     ap.add_argument('--root', type=Path)
-    args = ap.parse_args(argv)
+    ap.add_argument('--dest', type=Path, help='install folder')
+    ap.add_argument('--play', action='store_true', help='start the game (after the setup, when it is needed)')
+    own, after = split_args(argv)
+    args, unknown = ap.parse_known_args(own)
+    return args, unknown + after
+
+
+def main(argv=None):
+    args, game_args = parse(argv)
     layout = layouts.find(args.root)
     if args.selftest:
         return selftest(layout, args.shots)
+    if args.play:
+        ready, _ = plays.find(layout, args.dest, recent.load_bounded().get('dest'))
+        if ready is not None:
+            return plays.run(ready, game_args)
     fix_tcl_paths()
     root = tk.Tk()
-    App(root, args.lang or windows_ui_language(), layout)
+    app = App(root, args.lang or windows_ui_language(), layout, game_args=game_args, dest=args.dest,
+              auto_play=args.play)
     root.mainloop()
-    return 0
+    return app.exit_code
 
 
 if __name__ == '__main__':

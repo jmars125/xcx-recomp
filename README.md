@@ -43,9 +43,9 @@ Requirements: Windows 10 or later, an x86-64 CPU with AVX2, a GPU with Vulkan 1.
 1. Download `XCX-Setup-<version>-windows.zip` from [Releases](../../releases/latest) and unpack it.
 2. Start `XCX-Setup.exe`. If SmartScreen warns about an unsigned app, choose *More info*, then *Run anyway*.
 3. Pick your game files, the language and an install folder, and press *Start*. The setup builds the game once.
-4. Play `xcx.exe` from the install folder.
+4. Press *Play*, or start `xcx.exe` from the install folder. Started again, `XCX-Setup.exe` opens on *Play* while the build is current.
 
-To update, run a newer `XCX-Setup.exe` on the same folder; saves and settings are kept. Settings are in the in-game menu and in `xcx.ini` ([xcx.ini.example](xcx.ini.example) lists every key). Controls: [docs/controls.md](docs/controls.md). Started from [RecompLauncher](https://recomplauncher.com), the game reports Recomp Achievements ([docs/achievements.md](docs/achievements.md)).
+To update, run a newer `XCX-Setup.exe` on the same folder; saves and settings are kept. Settings are in the in-game menu and in `xcx.ini` ([xcx.ini.example](xcx.ini.example) lists every key), or for one run on the command line (`xcx.exe --fullscreen --set fps_limit=40`, [docs/command-line.md](docs/command-line.md)). Controls: [docs/controls.md](docs/controls.md). Started from [RecompLauncher](https://recomplauncher.com), the game reports Recomp Achievements ([docs/achievements.md](docs/achievements.md)).
 
 ## Credits
 

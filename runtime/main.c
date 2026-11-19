@@ -1,7 +1,11 @@
 #include "mods.h"
 // xcx.exe entry: reserves the guest address space, parses the command line and runs one mode.
 //
-//   xcx.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
+//   xcx.exe [--exefs DIR] [--romfs DIR] [--profile DIR] [--set KEY=VALUE]... [--fullscreen | --windowed] <mode>
+//     --set KEY=VALUE   a setting of xcx.ini (any case, XCX_ optional), as if the environment set XCX_KEY:
+//                       it wins over xcx.ini (cfg.c cfg_args); repeatable; an unknown key stops with exit 2
+//     --fullscreen, --windowed    --set FULLSCREEN=1, --set FULLSCREEN=0
+//     --help            this list on stdout, exit 0
 //     --selftest        layout, dispatch table and host-function registry; needs no game files
 //     --probe-loader    load and relocate the modules, check them against the measured 1.2.1 values
 //     --probe-kernel, --probe-ipc, --probe-services, --probe-fs    host probes
@@ -717,11 +721,28 @@ static int probe_mask(void) {
     return out ? 0 : 1;
 }
 
+static const char USAGE[] =
+    "usage: %s [options] [mode]\n"
+    "\n"
+    "options:\n"
+    "  --set KEY=VALUE   a setting of xcx.ini (xcx.ini.example lists them; any case, XCX_ optional) for this run, with\n"
+    "                    the priority of the environment variable XCX_KEY: it wins over xcx.ini. Repeatable.\n"
+    "  --fullscreen      --set FULLSCREEN=1\n"
+    "  --windowed        --set FULLSCREEN=0\n"
+    "  --exefs DIR, --romfs DIR, --profile DIR\n"
+    "                    the game's ExeFS, RomFS and save folders (default: exefs/, romfs/, profile/ beside the exe)\n"
+    "  --help            this text\n"
+    "\n"
+    "modes (none: play the game):\n"
+    "  --seconds S [--shot PNG]   play until S seconds of game time, then exit (optionally saving that frame)\n"
+    "  --boot                     run the game to the first NVN call\n"
+    "  --selftest | --probe-loader | --probe-cfg | --probe-cheats | --probe-kernel | --probe-ipc | --probe-services |\n"
+    "  --probe-fs | --probe-gfx-abi | --probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-vkmem |\n"
+    "  --probe-vkexec | --probe-vkdevice | --probe-astc | --probe-movie | --probe-mask | --prepare-shaders |\n"
+    "  --warm-shaders             checks and set-up steps (runtime/main.c)\n";
+
 static int usage(const char *argv0) {
-    fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
-                    "--probe-cfg | --probe-cheats | --probe-kernel | --probe-ipc | --probe-services | --probe-fs | --probe-gfx-abi | "
-                    "--probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-vkmem | "
-                    "--probe-vkexec | --probe-astc | --probe-movie | --probe-mask | --prepare-shaders | --warm-shaders | --boot |--seconds S [--shot PNG]]\n", argv0);
+    fprintf(stderr, USAGE, argv0);
     return 2;
 }
 
@@ -767,6 +788,13 @@ static void profile_fallback(RtConfig *c) {
 }
 
 int main(int argc, char **argv) {
+    // Before mem_init, which reads xcx.ini: --set and its short forms become environment variables (cfg.c cfg_args)
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            printf(USAGE, argv[0]);
+            return 0;
+        }
+    if (!cfg_args(&argc, argv)) return 2;
     mem_init();   // first: claim the guest address space before anything else can land there; reads xcx.ini
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);

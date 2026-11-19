@@ -1,6 +1,7 @@
 # xcx.ini: settings for xcx.exe. Copy this file to xcx.ini next to xcx.exe and remove the '#' of a line to change it.
 # Each line shows the default; on a Steam Deck the device profile ([display]) changes a few of them. A XCX_*
-# environment variable of the same name (XCX_FPS_LIMIT for fps_limit) overrides the file. Keys are case-insensitive;
+# environment variable of the same name (XCX_FPS_LIMIT for fps_limit) overrides the file, and so does
+# xcx.exe --set fps_limit=40 (docs/command-line.md). Keys are case-insensitive;
 # '#' and ';' start a comment; [sections] only group lines.
 
 [frame rate]

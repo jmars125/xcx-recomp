@@ -123,6 +123,11 @@ def run_steps(steps, ctx):
                 rep.step(s.id, 'skipped', reason=ctx.reasons[s.id])
                 continue
             current = s.id
+            if not s.always and 'complete' in ctx.state:
+                # the folder is about to change: no longer a finished build to play (installer/play.py) until the
+                # run ends well
+                del ctx.state['complete']
+                ctx.save()
             rep.step(s.id, 'started')
             t0 = rep.elapsed()
             fields = s.run(ctx) or {}
@@ -134,6 +139,7 @@ def run_steps(steps, ctx):
             rep.step(s.id, 'done', seconds=seconds)
             current = None
         ctx.state['release'] = ctx.layout.release
+        ctx.state['complete'] = ctx.layout.release   # a finished build of this release (installer/play.py)
         ctx.save()
         return 'ok'
     except InstallError as e:
