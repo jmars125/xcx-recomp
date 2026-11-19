@@ -229,18 +229,18 @@ typedef struct {
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
 } FeatureChain;
 
-// XCX_VRAM_LIMIT=<MiB>: a test of small cards on a large one. Right after the allocator is made, device-local memory
-// is taken in 256 MiB blocks and held until shutdown, until the largest device-local heap has about that many MiB
-// left, so the driver's paging sees a card of that size. vk_mem_vram takes the blocks out of both the usage and the
-// budget it reports, so the mirror budget check (vk_memory.c, mirror_create) also measures its margin against the
-// small card's budget. The blocks are never bound or touched.
-#define BALLAST_MAX 256
-static VkDeviceMemory ballast[BALLAST_MAX];
-static int n_ballast;
+// XCX_VRAM_LIMIT=<MiB>: a test of small cards on a large one (issue #211, a 2 GB GeForce 920MX). The largest
+// device-local heap is limited to that many MiB through VMA's heap size limit (VmaAllocatorCreateInfo.pHeapSizeLimit):
+// past it every VMA allocation of that heap fails with VK_ERROR_OUT_OF_DEVICE_MEMORY, as on the small card once its
+// memory is spent, and vk_mem_vram reports a budget of 15/16 of the limit (the 920MX reported 1848 to 1875 of 2002 MiB)
+// against the process's use of the heap, so the mirror placement (vk_memory.c mirror_create) and the texture trim
+// (vk_texture.c trim_released) see the small card. The earlier form of this test held device memory unused; it only tested
+// paging: on a card shared with other programs the driver moved the held blocks to host memory.
+static VkDeviceSize heap_limit[VK_MAX_MEMORY_HEAPS];
 
-static void vram_limit(void) {
+static const VkDeviceSize *vram_limit(void) {
     const char *e = cfg_get("XCX_VRAM_LIMIT");
-    if (!e || !*e) return;
+    if (!e || !*e) return NULL;
     uint64_t want = strtoull(e, NULL, 10) << 20;
     const VkPhysicalDeviceMemoryProperties *mp = &g_vk.mem_props;
     uint32_t heap = UINT32_MAX;
@@ -248,25 +248,17 @@ static void vram_limit(void) {
         if ((mp->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
             (heap == UINT32_MAX || mp->memoryHeaps[h].size > mp->memoryHeaps[heap].size))
             heap = h;
-    uint32_t type = UINT32_MAX;
-    for (uint32_t t = 0; t < mp->memoryTypeCount && type == UINT32_MAX; t++)
-        if (mp->memoryTypes[t].heapIndex == heap && mp->memoryTypes[t].propertyFlags == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
-            type = t;
-    if (heap == UINT32_MAX || type == UINT32_MAX || !want || want >= mp->memoryHeaps[heap].size) {
-        rt_log("vk: XCX_VRAM_LIMIT=%s: no device-local heap larger than that, nothing held", e);
-        return;
+    if (heap == UINT32_MAX || !want || want >= mp->memoryHeaps[heap].size) {
+        rt_log("vk: XCX_VRAM_LIMIT=%s: no device-local heap larger than that, no limit", e);
+        return NULL;
     }
-    uint64_t take = mp->memoryHeaps[heap].size - want, held = 0;
-    while (held < take && n_ballast < BALLAST_MAX) {
-        uint64_t n = take - held < (256ull << 20) ? take - held : 256ull << 20;
-        VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = n, .memoryTypeIndex = type};
-        if (vkAllocateMemory(g_vk.device, &ai, NULL, &ballast[n_ballast]) != VK_SUCCESS) break;
-        n_ballast++, held += n;
-    }
-    g_vk.vram_held = held;
-    rt_log("vk: XCX_VRAM_LIMIT=%s: holding %.0f MiB of heap %u (%.0f MiB) in %d blocks, %.0f MiB left", e,
-           held / 1048576.0, heap, mp->memoryHeaps[heap].size / 1048576.0, n_ballast,
-           (mp->memoryHeaps[heap].size - held) / 1048576.0);
+    for (uint32_t h = 0; h < VK_MAX_MEMORY_HEAPS; h++) heap_limit[h] = VK_WHOLE_SIZE;
+    heap_limit[heap] = want;
+    g_vk.vram_limit_heap = heap;
+    g_vk.vram_limit = want;
+    rt_log("vk: XCX_VRAM_LIMIT=%s: heap %u (%.0f MiB) limited to %.0f MiB, budget %.0f MiB", e, heap,
+           mp->memoryHeaps[heap].size / 1048576.0, want / 1048576.0, (want - want / 16) / 1048576.0);
+    return heap_limit;
 }
 
 static int create_device(void) {
@@ -403,9 +395,8 @@ static int create_device(void) {
                                  .vulkanApiVersion = VK_API_VERSION_1_3,
                                  .flags = (g_vk.has_buffer_device_address ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT : 0) |
                                           (g_vk.has_memory_budget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0),
-                                 .pDeviceMemoryCallbacks = vk_headroom_callbacks()};
+                                 .pDeviceMemoryCallbacks = vk_headroom_callbacks(), .pHeapSizeLimit = vram_limit()};
     if ((r = vmaCreateAllocator(&ai, &g_vk.vma)) != VK_SUCCESS) { rt_log("vk: vmaCreateAllocator failed (%d)", (int)r); return 0; }
-    vram_limit();
 
     VkSemaphoreTypeCreateInfo st = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
                                     .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE, .initialValue = 0};
@@ -428,8 +419,6 @@ static void destroy_all(void) {
     if (g_vk.timeline) vkDestroySemaphore(g_vk.device, g_vk.timeline, NULL);
     vk_headroom_stop();
     if (g_vk.vma) vmaDestroyAllocator(g_vk.vma);
-    for (int i = 0; i < n_ballast; i++) vkFreeMemory(g_vk.device, ballast[i], NULL);
-    n_ballast = 0;
     if (g_vk.device) vkDestroyDevice(g_vk.device, NULL);
     if (g_vk.messenger) {
         PFN_vkDestroyDebugUtilsMessengerEXT f =
