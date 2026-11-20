@@ -26,6 +26,9 @@
 # async_preempt = 1
 # Replay NVN submissions on their own thread, at most one frame behind the game (1 = on). Adds up to a frame of latency.
 # replay_async = 0
+# With replay_async = 1: the mirrored vertex and storage data of each frame is read as of the game's submit
+# (copy-on-write), so models do not stretch into spikes at the start of camera pans with large crowds (1 = on).
+# mirror_cow = 0
 # 1 lifts the virtual core gate: guest threads run without the console's limit of one thread per core.
 # free_cores = 0
 # Windows timer resolution of 1 ms for steadier frame pacing (0 = the Windows default).
@@ -138,6 +141,22 @@
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
+# How far from the camera grass loads and is drawn: 1 (the game's ranges, 10 to 90 m per grass layer), 1.5, 2 or 3.
+# Changes take effect at once.
+# grass_distance = 1
+# How many metres further from the camera trees, bushes, rocks and other map objects switch to their detailed models:
+# 0 (the game's distances, under 5 to about 50 m depending on the object), 10, 20, 30, 50, 75, 100, 150, 200, 300,
+# 500, 750 or 1000. Those are the menu's steps; here any value from 0 to 1000 works, and the menu then shows it in
+# its place between the two steps around it. Higher values cost some CPU time per frame. Changes take effect at once.
+# object_lod_range = 0
+# With object_lod_range above 0: auto (the default) treats it as the most to use and lowers the range whenever frames
+# take longer than the frame limit allows (the display's refresh rate without a limit), raising it again when there is
+# time to spare; fixed always uses object_lod_range as set. Changes take effect at once.
+# object_lod_mode = auto
+# How far from you the crowd people (the walkers in NLA) appear and fade out: 1 (the game's distances, about 25 m),
+# 1.5, 2, 3 or 4. Turn on replay_async = 1 before raising it: without it the extra people slow busy places a lot (in
+# the Commercial District at 4x, about 66 instead of 90 fps). Changes take effect at once.
+# crowd_distance = 1
 
 # HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
 # colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
@@ -203,6 +222,17 @@
 # glyph_appearance = colored
 # Mouse camera sensitivity (0 to 10; 0 = no mouse camera and no cursor capture).
 # mouse_sens = 1
+# Gamepad stick deadzones in percent of full deflection (Controls tab; 0 to 40; 7.63 = 2500 of 32767, the original).
+# Raise one if the character keeps walking or the camera keeps turning after you let go of a drifting stick.
+# stick_deadzone_l = 7.63
+# stick_deadzone_r = 7.63
+# The deadzone's shape for both sticks: axis (each axis cut on its own, unchanged past it; the original) or round (the
+# distance from center, and the stick starts from 0 past it).
+# stick_deadzone_shape = axis
+# Where each stick rests, "x,y" in raw SDL units (-16384 to 16384; y down), taken off before the deadzone. The Controls
+# tab's Calibrate stick centers writes these; unset = the controller's own center.
+# stick_center_l = 0,0
+# stick_center_r = 0,0
 # Write the input of this run to a file that replays as a script (docs/controls.md, "Scripted input"). Default: off.
 # input_record = input.txt
 # Remap buttons: the Controls tab of the settings menu (F1) writes these lines. One line per Switch button or stick

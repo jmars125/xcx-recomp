@@ -52,6 +52,10 @@ double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
 extern const char rt_port_version[];
+int rt_grass_available(void);
+int rt_objlod_available(void);
+int rt_objlod_status(float *now_m, float *max_m, float *busy_ms, float *budget_ms);
+int rt_crowd_available(void);
 }
 
 // Roboto Medium (Apache-2.0, ui/fonts/LICENSE-Roboto.txt) with Latin and Cyrillic glyphs.
@@ -604,6 +608,68 @@ static void tab_screen(float scale) {
     opt_end();
 }
 
+// Object detail range (objlod.c): metres added to every map object's LOD distance. The game's own distances run from
+// under 5 m to about 50 m, so the steps are fine at the low end and coarse above.
+static void row_object_lod() {
+    static const char *const steps[] = {"0", "10", "20", "30", "50", "75", "100", "150", "200", "300", "500", "750", "1000"};
+    enum { N = sizeof steps / sizeof *steps };
+    // a value set by hand in xcx.ini between two steps (objlod.c applies any 0..1000) joins the list in its place while
+    // it is set, so the row shows it and left / right step to the steps on either side of it
+    static char own[16], text[N + 1][24];
+    static const char *values[N + 1], *names[N + 1];
+    const char *now = cfg_value("XCX_OBJECT_LOD_RANGE");
+    char *end = NULL;
+    double v = now && *now ? strtod(now, &end) : 0;
+    bool between = end && !*end && v > 0 && v < 1000;
+    for (int i = 0; between && i < N; i++)
+        if (!strcmp(steps[i], now)) between = false;
+    int n = 0;
+    for (int i = 0; i < N; i++) {
+        if (between && atof(steps[i]) > v) {
+            snprintf(own, sizeof own, "%s", now);
+            values[n++] = own;
+            between = false;
+        }
+        values[n++] = steps[i];
+    }
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(values[i], "0")) names[i] = menu_text(UI_MENU_OBJECT_LOD_ORIGINAL);
+        else {
+            snprintf(text[i], sizeof text[i], menu_text(UI_MENU_OBJECT_LOD_STEP), values[i]);
+            names[i] = text[i];
+        }
+    }
+    opt_choice_list("XCX_OBJECT_LOD_RANGE", UI_MENU_OBJECT_LOD, values, names, n, UI_MENU_OBJECT_LOD_DESC);
+    // Adjust range to frame rate (objlod.c): Auto or Fixed, a sub-row of the range shown only above Original; under
+    // Auto the value shows the range in effect
+    if (cfg_double("XCX_OBJECT_LOD_RANGE") > 0) {
+        static const UiTextId mode[] = {UI_MENU_OBJECT_LOD_AUTO, UI_MENU_OBJECT_LOD_FIXED};
+        float now = 0, max = 0, busy = 0, budget = 0;
+        static char note[32];
+        const char *shown = NULL;
+        if (rt_objlod_status(&now, &max, &busy, &budget) && now >= 0) {
+            snprintf(note, sizeof note, menu_text(UI_MENU_OBJECT_LOD_NOW), now);
+            shown = note;
+        }
+        opt_indent_next();
+        opt_choice("XCX_OBJECT_LOD_MODE", UI_MENU_OBJECT_LOD_MODE, mode, 2, UI_MENU_OBJECT_LOD_MODE_DESC, shown);
+    }
+}
+
+// Crowd distance (crowd.c): a multiplier on the crowd people's spawn and fade-out distances.
+static void row_crowd() {
+    static const char *const values[] = {"1", "1.5", "2", "3", "4"};
+    enum { N = sizeof values / sizeof *values };
+    static char text[N][24];
+    static const char *names[N];
+    names[0] = menu_text(UI_MENU_CROWD_ORIGINAL);
+    for (int i = 1; i < N; i++) {
+        snprintf(text[i], sizeof text[i], menu_text(UI_MENU_CROWD_STEP), values[i]);
+        names[i] = text[i];
+    }
+    opt_choice_list("XCX_CROWD_DISTANCE", UI_MENU_CROWD, values, names, N, UI_MENU_CROWD_DESC);
+}
+
 static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
@@ -615,6 +681,14 @@ static void tab_game(float scale) {
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("XCX_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
     opt_toggle("XCX_CHEATS", UI_MENU_CHEATS, UI_MENU_CHEATS_DESC);
+    int grass_ok = rt_grass_available(), crowd_ok = rt_crowd_available(), objlod_ok = rt_objlod_available();   // the 2.0.0 update's (grass.c, crowd.c, objlod.c)
+    if (grass_ok || crowd_ok || objlod_ok) opt_group(UI_MENU_WORLD_GROUP);
+    if (grass_ok) {
+        static const UiTextId grass[] = {UI_MENU_GRASS_ORIGINAL, UI_MENU_GRASS_15, UI_MENU_GRASS_2, UI_MENU_GRASS_3};
+        opt_choice("XCX_GRASS_DISTANCE", UI_MENU_GRASS, grass, 4, UI_MENU_GRASS_DESC);
+    }
+    if (objlod_ok) row_object_lod();
+    if (crowd_ok) row_crowd();
     opt_end();
 }
 
@@ -622,6 +696,181 @@ static void tab_sound(float scale) {
     opt_begin("##sound", scale);
     opt_slider("XCX_VOLUME", UI_MENU_VOLUME, 0, 100, UI_MENU_VOLUME_DESC, 5, "%.0f %%");
     opt_end();
+}
+
+// ---- Controls: the stick rows. Calibration waits CAL_WAIT_NS (the press that started it lets go), then samples both
+// sticks' raw axes for CAL_RUN_NS; the mean of each stick becomes its XCX_STICK_CENTER_*. A spread over CAL_SPREAD on
+// any axis means a stick was touched, and nothing is saved.
+enum { CAL_IDLE, CAL_WAIT, CAL_RUN };
+static const uint64_t CAL_WAIT_NS = 400000000ull, CAL_RUN_NS = 1000000000ull, CAL_NOTE_NS = 3000000000ull;
+static const int CAL_SPREAD = 4000;
+static struct {
+    int state;
+    uint64_t start, note_until;
+    int64_t sum[4];
+    int lo[4], hi[4], n;
+    UiTextId note;
+} g_cal;
+
+static void cal_finish(UiTextId note) {
+    g_cal.state = CAL_IDLE;
+    g_cal.note = note;
+    g_cal.note_until = plat_now_ns() + CAL_NOTE_NS;
+}
+
+// One step per laid-out frame while calibrating; returns the value the button shows.
+static const char *cal_tick(void) {
+    uint64_t now = plat_now_ns();
+    if (g_cal.state == CAL_IDLE)
+        return g_cal.note_until && now < g_cal.note_until ? menu_text(g_cal.note) : "";
+    int16_t raw[4];
+    int32_t shaped[4];
+    if (!input_pad_sticks(raw, shaped)) {
+        cal_finish(UI_MENU_STICK_NO_PAD);
+        return menu_text(g_cal.note);
+    }
+    if (g_cal.state == CAL_WAIT) {
+        if (now - g_cal.start < CAL_WAIT_NS) return menu_text(UI_MENU_STICK_CALIBRATING);
+        g_cal.state = CAL_RUN;
+        g_cal.start = now;
+        g_cal.n = 0;
+        for (int i = 0; i < 4; i++) g_cal.sum[i] = 0, g_cal.lo[i] = 32767, g_cal.hi[i] = -32768;
+    }
+    for (int i = 0; i < 4; i++) {
+        g_cal.sum[i] += raw[i];
+        if (raw[i] < g_cal.lo[i]) g_cal.lo[i] = raw[i];
+        if (raw[i] > g_cal.hi[i]) g_cal.hi[i] = raw[i];
+    }
+    g_cal.n++;
+    if (now - g_cal.start < CAL_RUN_NS) return menu_text(UI_MENU_STICK_CALIBRATING);
+    for (int i = 0; i < 4; i++)
+        if (g_cal.hi[i] - g_cal.lo[i] > CAL_SPREAD) {
+            cal_finish(UI_MENU_STICK_MOVED);
+            return menu_text(g_cal.note);
+        }
+    // A center inside the default deadzone (2500 of 32767) changes nothing a player can feel, so it is not saved, and an
+    // earlier center of that stick is cleared; a stick whose deadzone is set lower keeps any offset larger than its own
+    // deadzone. Inside means what the shape tests: each axis for Per axis, the distance from the center for Round (a
+    // stick resting at 2400,2400 is past a round 2500 deadzone and needs its center). A center is saved at most
+    // INPUT_STICK_CENTER_MAX off on each axis, the most input_stick_center_parse (input_map.c) applies, so xcx.ini holds
+    // what is applied.
+    bool round = !strcmp(cfg_value("XCX_STICK_DEADZONE_SHAPE"), "round");
+    static const char *const keys[2] = {"XCX_STICK_CENTER_L", "XCX_STICK_CENTER_R"};
+    static const char *const reset_keys[2] = {"STICK_CENTER_L", "STICK_CENTER_R"};   // cfg_reset takes them without XCX_
+    static const char *const dead_keys[2] = {"XCX_STICK_DEADZONE_L", "XCX_STICK_DEADZONE_R"};
+    for (int st = 0; st < 2; st++) {
+        int cx = (int)lrint((double)g_cal.sum[st * 2] / g_cal.n), cy = (int)lrint((double)g_cal.sum[st * 2 + 1] / g_cal.n);
+        double dead = cfg_double(dead_keys[st]) / 100 * 32767;
+        double keep = dead < 2500 ? (dead < 0 ? 0 : dead) : 2500;
+        bool outside = round ? hypot((double)cx, (double)cy) > keep : abs(cx) > keep || abs(cy) > keep;
+        if (outside) {
+            const int m = INPUT_STICK_CENTER_MAX;
+            cx = cx < -m ? -m : cx > m ? m : cx;
+            cy = cy < -m ? -m : cy > m ? m : cy;
+            char v[32];
+            snprintf(v, sizeof v, "%d,%d", cx, cy);
+            cfg_set(keys[st], v);
+        } else if (cfg_is_set(keys[st])) {
+            cfg_reset(&reset_keys[st], 1);
+        }
+    }
+    opt_save_soon();
+    rt_log("menu: stick centers calibrated over %d samples: left %s, right %s", g_cal.n,
+           cfg_is_set(keys[0]) ? cfg_value(keys[0]) : "none (inside the deadzone)",
+           cfg_is_set(keys[1]) ? cfg_value(keys[1]) : "none (inside the deadzone)");
+    cal_finish(UI_MENU_STICK_CALIBRATED);
+    return menu_text(g_cal.note);
+}
+
+// Both sticks as the controller reports them and as the game sees them, side by side; nothing without a gamepad.
+static void stick_view(float scale) {
+    int16_t raw[4];
+    int32_t shaped[4];
+    if (!input_pad_sticks(raw, shaped)) return;
+    float r = 52 * scale, gap = 40 * scale, pad = 8 * scale;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    static const char *const dead_keys[2] = {"XCX_STICK_DEADZONE_L", "XCX_STICK_DEADZONE_R"};
+    static const char *const center_keys[2] = {"XCX_STICK_CENTER_L", "XCX_STICK_CENTER_R"};
+    bool round = !strcmp(cfg_value("XCX_STICK_DEADZONE_SHAPE"), "round");
+    const ImU32 ring = IM_COL32(90, 220, 245, 110), grey = IM_COL32(170, 175, 185, 255), cyan = IM_COL32(90, 220, 245, 255),
+                warn = IM_COL32(242, 168, 102, 255);
+    for (int st = 0; st < 2; st++) {
+        ImVec2 c(p.x + pad + r + st * (2 * r + gap), p.y + pad + r);
+        float k = r / 32767.0f;
+        int32_t cx, cy;
+        input_stick_center_parse(cfg_get(center_keys[st]), &cx, &cy);
+        double dead = cfg_double(dead_keys[st]) / 100;
+        float full = 32767.0f - (float)(abs(cx) > abs(cy) ? abs(cx) : abs(cy));
+        ImVec2 cc(c.x + cx * k, c.y + cy * k);
+        dl->AddCircle(c, r, ring, 48, 1.5f * scale);
+        if (round) {
+            dl->AddCircleFilled(cc, (float)(dead * full * k), IM_COL32(90, 220, 245, 28), 48);
+            dl->AddCircle(cc, (float)(dead * full * k), ring, 48, 1.0f * scale);
+        } else {   // per axis: center while both axes are under it (input_map.c stick_axis)
+            float hx = (float)(dead * (32767 - abs(cx)) * k), hy = (float)(dead * (32767 - abs(cy)) * k);
+            dl->AddRectFilled(ImVec2(cc.x - hx, cc.y - hy), ImVec2(cc.x + hx, cc.y + hy), IM_COL32(90, 220, 245, 28));
+            dl->AddRect(ImVec2(cc.x - hx, cc.y - hy), ImVec2(cc.x + hx, cc.y + hy), ring, 0, 0, 1.0f * scale);
+        }
+        float t = 5 * scale;
+        dl->AddLine(ImVec2(cc.x - t, cc.y), ImVec2(cc.x + t, cc.y), grey, 1.0f * scale);
+        dl->AddLine(ImVec2(cc.x, cc.y - t), ImVec2(cc.x, cc.y + t), grey, 1.0f * scale);
+        bool live = shaped[st * 2] || shaped[st * 2 + 1];
+        dl->AddCircleFilled(ImVec2(c.x + raw[st * 2] * k, c.y + raw[st * 2 + 1] * k), 4.5f * scale, live ? warn : grey);
+        if (live)
+            dl->AddCircleFilled(ImVec2(c.x + shaped[st * 2] * k, c.y - shaped[st * 2 + 1] * k), 4.5f * scale, cyan);
+        dl->AddText(ImVec2(c.x - r, c.y - r), grey, st ? "R" : "L");
+    }
+    ImGui::Dummy(ImVec2(2 * (2 * r + pad) + gap, 2 * (r + pad)));
+    opt_text(UI_MENU_STICK_LEGEND);
+}
+
+// The deadzone steps: whole percents 0..40 and 7.63, the default (2500 of 32767, the runtime's original deadzone).
+enum { DEAD_STEPS = 42 };
+static const char *const *dead_list(bool names) {
+    static char text[2][DEAD_STEPS][12];
+    static const char *ptr[2][DEAD_STEPS];
+    if (!ptr[0][0])
+        for (int i = 0, pct = 0; i < DEAD_STEPS; i++) {
+            const char *v = i == 8 ? "7.63" : nullptr;
+            if (v) snprintf(text[0][i], sizeof text[0][i], "%s", v);
+            else snprintf(text[0][i], sizeof text[0][i], "%d", pct++);
+            snprintf(text[1][i], sizeof text[1][i], "%s %%", text[0][i]);
+            ptr[0][i] = text[0][i], ptr[1][i] = text[1][i];
+        }
+    return ptr[names];
+}
+
+// A deadzone row: "8" and "8.0" read as the same step; a value off the list (an edited xcx.ini) shows as it is.
+static void dead_row(const char *key, UiTextId label, UiTextId desc) {
+    const char *const *values = dead_list(false);
+    double v = cfg_double(key);
+    int cur = -1;
+    for (int i = 0; i < DEAD_STEPS; i++)
+        if (fabs(strtod(values[i], nullptr) - v) < 0.001) cur = i;
+    opt_choice_list(key, label, values, dead_list(true), DEAD_STEPS, desc, cur);
+}
+
+static void stick_rows(float scale) {
+    opt_group(UI_MENU_STICK_GROUP);
+    dead_row("XCX_STICK_DEADZONE_L", UI_MENU_STICK_DEAD_L, UI_MENU_STICK_DEAD_L_DESC);
+    dead_row("XCX_STICK_DEADZONE_R", UI_MENU_STICK_DEAD_R, UI_MENU_STICK_DEAD_R_DESC);
+    static const UiTextId shapes[] = {UI_MENU_STICK_SHAPE_AXIS, UI_MENU_STICK_SHAPE_ROUND};
+    opt_choice("XCX_STICK_DEADZONE_SHAPE", UI_MENU_STICK_SHAPE, shapes, 2, UI_MENU_STICK_SHAPE_DESC);
+    if (opt_button("##stick_calibrate", UI_MENU_STICK_CALIBRATE, UI_MENU_STICK_CALIBRATE_DESC, cal_tick()) &&
+        g_cal.state == CAL_IDLE) {
+        g_cal.state = CAL_WAIT;
+        g_cal.start = plat_now_ns();
+        g_cal.note_until = 0;
+    }
+    if (cfg_is_set("XCX_STICK_CENTER_L") || cfg_is_set("XCX_STICK_CENTER_R")) {
+        if (opt_button("##stick_clear", UI_MENU_STICK_CLEAR, UI_MENU_STICK_CLEAR_DESC)) {
+            static const char *const keys[] = {"STICK_CENTER_L", "STICK_CENTER_R"};   // cfg_reset takes them without XCX_
+            cfg_reset(keys, 2);
+            opt_save_soon();
+        }
+    }
+    stick_view(scale);
 }
 
 static void tab_controls(float scale) {
@@ -643,6 +892,7 @@ static void tab_controls(float scale) {
     opt_slider("XCX_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
     opt_toggle("XCX_RUMBLE_TRIGGERS", UI_MENU_RUMBLE_TRIGGERS, UI_MENU_RUMBLE_TRIGGERS_DESC);
     opt_slider("XCX_MOUSE_SENS", UI_MENU_MOUSE_SENS, 0, 10, UI_MENU_MOUSE_SENS_DESC, 0.1f, "%.1f");
+    stick_rows(scale);
     binds_rows(scale);
     opt_end();
     binds_after_page();
@@ -875,6 +1125,10 @@ static void tab_advanced(float scale) {
     static const UiTextId preempt[] = {UI_MENU_PREEMPT_OFF, UI_MENU_PREEMPT_ON, UI_MENU_PREEMPT_INHERIT};   // 0|1|2
     opt_choice("XCX_ASYNC_PREEMPT", UI_MENU_ASYNC_PREEMPT, preempt, 3, UI_MENU_ASYNC_PREEMPT_DESC);
     opt_toggle("XCX_REPLAY_ASYNC", UI_MENU_REPLAY_ASYNC, UI_MENU_REPLAY_ASYNC_DESC);
+    if (cfg_bool("XCX_REPLAY_ASYNC")) {   // a sub-row: the snapshot exists only with the replay on its own thread
+        opt_indent_next();
+        opt_toggle("XCX_MIRROR_COW", UI_MENU_MIRROR_COW, UI_MENU_MIRROR_COW_DESC);
+    }
     opt_toggle("XCX_FREE_CORES", UI_MENU_FREE_CORES, UI_MENU_FREE_CORES_DESC);
     opt_toggle("XCX_TIMER_1MS", UI_MENU_TIMER_1MS, UI_MENU_TIMER_1MS_DESC);
     opt_toggle("XCX_FAST_CORES", UI_MENU_FAST_CORES, UI_MENU_FAST_CORES_DESC);

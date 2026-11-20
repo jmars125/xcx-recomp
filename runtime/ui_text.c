@@ -146,6 +146,33 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                  "Deck's 16:10 screen), keep the picture's proportions with black bars, or stretch it "
                                  "over the whole window.",
     [UI_MENU_PICTURE_FIT_KEEP] = "Keep (bars)", [UI_MENU_PICTURE_FIT_STRETCH] = "Stretch",
+    [UI_MENU_WORLD_GROUP] = "World detail",
+    [UI_MENU_GRASS] = "Grass distance",
+    [UI_MENU_GRASS_DESC] = "How far from the camera grass loads and is drawn. Original keeps the game's ranges (10 to 90 m "
+                           "per grass layer); higher values multiply them, so grass appears further away and its denser "
+                           "layers fill in sooner. Applies at once.",
+    [UI_MENU_GRASS_ORIGINAL] = "Original", [UI_MENU_GRASS_15] = "1.5x", [UI_MENU_GRASS_2] = "2x", [UI_MENU_GRASS_3] = "3x",
+    [UI_MENU_OBJECT_LOD] = "Object detail range",
+    [UI_MENU_OBJECT_LOD_DESC] = "How much further from the camera trees, bushes, rocks and other map objects switch to "
+                                "their detailed models. Original keeps the game's distances (under 5 to about 50 m, "
+                                "depending on the object); each step adds that many metres to all of them. Higher steps "
+                                "cost some CPU time per frame. Applies at once. With Adjust range to frame rate on "
+                                "Auto, this is the most it will use.",
+    [UI_MENU_OBJECT_LOD_ORIGINAL] = "Original", [UI_MENU_OBJECT_LOD_STEP] = "+%s m",
+    [UI_MENU_OBJECT_LOD_MODE] = "Adjust range to frame rate",
+    [UI_MENU_OBJECT_LOD_MODE_DESC] = "Auto lowers the object detail range above when frames take longer than the frame "
+                                     "limit allows (the display's refresh rate when there is no limit), and raises it "
+                                     "again, up to the range set above, when there is time to spare. Fixed always uses "
+                                     "the range as set. Applies at once.",
+    [UI_MENU_OBJECT_LOD_AUTO] = "Auto", [UI_MENU_OBJECT_LOD_FIXED] = "Fixed",
+    [UI_MENU_OBJECT_LOD_NOW] = "now +%.0f m",
+    [UI_MENU_CROWD] = "Crowd distance",
+    [UI_MENU_CROWD_DESC] = "How far from you the crowd people (the walkers in NLA) appear and fade out. Original "
+                           "keeps the game's distances (about 25 m); higher values multiply them. Turn on GPU "
+                           "frame prep on its own thread (Advanced tab) before raising it: without it the extra "
+                           "people slow busy places a lot (in the Commercial District at 4x, about 66 instead of "
+                           "90 fps). Applies at once.",
+    [UI_MENU_CROWD_ORIGINAL] = "Original", [UI_MENU_CROWD_STEP] = "%sx",
     [UI_MENU_SHARPNESS] = "FSR sharpness",
     [UI_MENU_SHARPNESS_DESC] = "Sharpening after FSR scaling; 0 turns it off.",
     [UI_MENU_BRIGHTNESS] = "Brightness",
@@ -217,6 +244,29 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT_XBOX] = "Flipped",
     [UI_MENU_MOUSE_SENS] = "Mouse camera sensitivity",
     [UI_MENU_MOUSE_SENS_DESC] = "How fast the mouse turns the camera.",
+    [UI_MENU_STICK_GROUP] = "Controller sticks",
+    [UI_MENU_STICK_DEAD_L] = "Left stick deadzone",
+    [UI_MENU_STICK_DEAD_L_DESC] = "How far the left stick has to move from its center before the game notices. Raise it if "
+                                  "your character keeps walking after you let go of the stick.",
+    [UI_MENU_STICK_DEAD_R] = "Right stick deadzone",
+    [UI_MENU_STICK_DEAD_R_DESC] = "How far the right stick has to move from its center before the camera turns. Raise it if "
+                                  "the camera keeps turning after you let go of the stick.",
+    [UI_MENU_STICK_SHAPE] = "Deadzone shape",
+    [UI_MENU_STICK_SHAPE_DESC] = "Per axis is the original: each direction of a stick is ignored on its own until it passes "
+                                 "the deadzone, then counts in full. Round ignores the stick until its distance from the "
+                                 "center passes the deadzone, in any direction, and starts from zero past it, which suits "
+                                 "a drifting stick.",
+    [UI_MENU_STICK_SHAPE_AXIS] = "Per axis", [UI_MENU_STICK_SHAPE_ROUND] = "Round",
+    [UI_MENU_STICK_CALIBRATE] = "Calibrate stick centers",
+    [UI_MENU_STICK_CALIBRATE_DESC] = "Let go of both sticks, then press: where each stick rests is measured for a second "
+                                     "and becomes its center. Helps a stick that always drifts the same way; the deadzone "
+                                     "covers the rest.",
+    [UI_MENU_STICK_CALIBRATING] = "let go of the sticks...", [UI_MENU_STICK_CALIBRATED] = "saved",
+    [UI_MENU_STICK_MOVED] = "a stick moved, try again", [UI_MENU_STICK_NO_PAD] = "no controller",
+    [UI_MENU_STICK_CLEAR] = "Clear stick calibration",
+    [UI_MENU_STICK_CLEAR_DESC] = "Forget the measured centers: each stick's center is where the controller reports it.",
+    [UI_MENU_STICK_LEGEND] = "Grey dot: the stick. Cyan dot: what the game sees. Ring or square: the deadzone. "
+                             "Cross: the calibrated center.",
 
     [UI_BINDS_HELP] = "Highlighted options can be cleared with the delete key.",
     [UI_BINDS_COL_KEY1] = "Key 1", [UI_BINDS_COL_KEY2] = "Key 2", [UI_BINDS_COL_PAD] = "Controller",
@@ -277,6 +327,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PREEMPT_OFF] = "Off", [UI_MENU_PREEMPT_ON] = "On", [UI_MENU_PREEMPT_INHERIT] = "Inheritance only",
     [UI_MENU_REPLAY_ASYNC] = "GPU frame prep on its own thread",
     [UI_MENU_REPLAY_ASYNC_DESC] = "Prepares frames for the GPU on a separate thread instead of the game thread. Adds up to one frame of latency.",
+    [UI_MENU_MIRROR_COW] = "Snapshot GPU data at submit",
+    [UI_MENU_MIRROR_COW_DESC] = "With frame prep on its own thread: keeps the vertex and storage data of each frame as it was when the game submitted it, so models do not stretch into spikes at the start of camera pans with large crowds. Costs about 1 ms a frame.",
     [UI_MENU_FREE_CORES] = "Virtual core gate",
     [UI_MENU_FREE_CORES_DESC] = "Lets only one thread run per virtual core, as on the console.",
     [UI_MENU_TIMER_1MS] = "1 ms Windows timer",
@@ -499,6 +551,30 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PICTURE_FIT_DESC] = "Когда форма окна отличается от формы разрешения игры (игра 16:9 на экране Steam Deck "
                                  "16:10), сохранять пропорции картинки с чёрными полосами или растягивать её на всё окно.",
     [UI_MENU_PICTURE_FIT_KEEP] = "Сохранять (полосы)", [UI_MENU_PICTURE_FIT_STRETCH] = "Растягивать",
+    [UI_MENU_WORLD_GROUP] = "Детализация мира",
+    [UI_MENU_GRASS] = "Дальность травы",
+    [UI_MENU_GRASS_DESC] = "Как далеко от камеры загружается и рисуется трава. «Как в игре» оставляет дальность игры "
+                           "(от 10 до 90 м для каждого слоя травы); большие значения умножают её, и трава появляется "
+                           "дальше, а плотные слои заполняются раньше. Применяется сразу.",
+    [UI_MENU_GRASS_ORIGINAL] = "Как в игре", [UI_MENU_GRASS_15] = "1.5x", [UI_MENU_GRASS_2] = "2x",
+    [UI_MENU_GRASS_3] = "3x",
+    [UI_MENU_OBJECT_LOD] = "Дальность детализации объектов",
+    [UI_MENU_OBJECT_LOD_DESC] = "Насколько дальше от камеры деревья, кусты и камни получают детальные модели. «Как в игре» — "
+                                "расстояния игры (до 50 м); шаг добавляет метры ко всем. Чем выше, тем больше нагрузка на процессор. "
+                                "При «Авто» это предел. Применяется сразу.",
+    [UI_MENU_OBJECT_LOD_ORIGINAL] = "Как в игре", [UI_MENU_OBJECT_LOD_STEP] = "+%s м",
+    [UI_MENU_OBJECT_LOD_MODE] = "Подстройка под частоту кадров",
+    [UI_MENU_OBJECT_LOD_MODE_DESC] = "«Авто» снижает дальность, когда кадр не укладывается в ограничение частоты кадров (без него — в частоту "
+                                     "экрана), и поднимает её до заданного значения, когда есть запас. «Фиксированная» — всегда заданное значение. "
+                                     "Применяется сразу.",
+    [UI_MENU_OBJECT_LOD_AUTO] = "Авто", [UI_MENU_OBJECT_LOD_FIXED] = "Фиксированная",
+    [UI_MENU_OBJECT_LOD_NOW] = "сейчас +%.0f м",
+    [UI_MENU_CROWD] = "Дальность толпы",
+    [UI_MENU_CROWD_DESC] = "Как далеко от вас появляются и исчезают прохожие (в NLA). «Как в игре» — расстояния "
+                           "игры (около 25 м); большие значения умножают их. Сначала включите «Подготовка кадра "
+                           "для GPU в отдельном потоке» («Дополнительно»): без неё людные места сильно тормозят. "
+                           "Применяется сразу.",
+    [UI_MENU_CROWD_ORIGINAL] = "Как в игре", [UI_MENU_CROWD_STEP] = "%sx",
     [UI_MENU_SHARPNESS] = "Резкость FSR",
     [UI_MENU_SHARPNESS_DESC] = "Повышение резкости после масштабирования FSR; 0 выключает его.",
     [UI_MENU_BRIGHTNESS] = "Яркость",
@@ -564,6 +640,28 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PAD_LAYOUT_XBOX] = "Обратная",
     [UI_MENU_MOUSE_SENS] = "Чувствительность мыши",
     [UI_MENU_MOUSE_SENS_DESC] = "Как быстро мышь поворачивает камеру.",
+    [UI_MENU_STICK_GROUP] = "Стики контроллера",
+    [UI_MENU_STICK_DEAD_L] = "Мёртвая зона левого стика",
+    [UI_MENU_STICK_DEAD_L_DESC] = "Насколько нужно отклонить левый стик от центра, чтобы игра это заметила. Увеличьте, "
+                                  "если персонаж продолжает идти, когда вы отпустили стик.",
+    [UI_MENU_STICK_DEAD_R] = "Мёртвая зона правого стика",
+    [UI_MENU_STICK_DEAD_R_DESC] = "Насколько нужно отклонить правый стик от центра, чтобы камера повернулась. Увеличьте, "
+                                  "если камера продолжает поворачиваться, когда вы отпустили стик.",
+    [UI_MENU_STICK_SHAPE] = "Форма мёртвой зоны",
+    [UI_MENU_STICK_SHAPE_DESC] = "По осям — как изначально: каждое направление стика не учитывается, пока не выйдет за "
+                                 "мёртвую зону, затем учитывается полностью. Круглая не учитывает стик ближе к центру, "
+                                 "чем мёртвая зона, и начинает с нуля — лучше при дрейфе.",
+    [UI_MENU_STICK_SHAPE_AXIS] = "По осям", [UI_MENU_STICK_SHAPE_ROUND] = "Круглая",
+    [UI_MENU_STICK_CALIBRATE] = "Калибровать центр стиков",
+    [UI_MENU_STICK_CALIBRATE_DESC] = "Отпустите оба стика и нажмите: в течение секунды измеряется положение покоя каждого "
+                                     "стика, и оно становится его центром. Помогает, если стик всегда уводит в одну "
+                                     "сторону; остальное закрывает мёртвая зона.",
+    [UI_MENU_STICK_CALIBRATING] = "отпустите стики...", [UI_MENU_STICK_CALIBRATED] = "сохранено",
+    [UI_MENU_STICK_MOVED] = "стик сдвинулся, ещё раз", [UI_MENU_STICK_NO_PAD] = "нет контроллера",
+    [UI_MENU_STICK_CLEAR] = "Сбросить калибровку стиков",
+    [UI_MENU_STICK_CLEAR_DESC] = "Забыть измеренные центры: центр каждого стика там, где его сообщает контроллер.",
+    [UI_MENU_STICK_LEGEND] = "Серая точка: стик. Голубая: что видит игра. Кольцо или квадрат: мёртвая зона. "
+                             "Крест: откалиброванный центр.",
 
     [UI_BINDS_HELP] = "Выделенные пункты можно очистить клавишей Delete.",
     [UI_BINDS_COL_KEY1] = "Клавиша 1", [UI_BINDS_COL_KEY2] = "Клавиша 2", [UI_BINDS_COL_PAD] = "Контроллер",
@@ -626,6 +724,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PREEMPT_OFF] = "Выкл.", [UI_MENU_PREEMPT_ON] = "Вкл.", [UI_MENU_PREEMPT_INHERIT] = "Только наследование",
     [UI_MENU_REPLAY_ASYNC] = "Подготовка кадра для GPU в отдельном потоке",
     [UI_MENU_REPLAY_ASYNC_DESC] = "Кадр для GPU готовится в отдельном потоке, а не в потоке игры. Добавляет до одного кадра задержки.",
+    [UI_MENU_MIRROR_COW] = "Снимок данных GPU при отправке",
+    [UI_MENU_MIRROR_COW_DESC] = "При подготовке кадра в отдельном потоке: данные вершин и буферов каждого кадра остаются такими, какими были при отправке, и модели не вытягиваются в шипы в начале поворота камеры при больших толпах. Стоит около 1 мс на кадр.",
     [UI_MENU_FREE_CORES] = "Ограничение виртуальных ядер",
     [UI_MENU_FREE_CORES_DESC] = "На каждом виртуальном ядре работает один поток, как на консоли.",
     [UI_MENU_TIMER_1MS] = "Таймер Windows 1 мс",
