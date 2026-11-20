@@ -1231,6 +1231,8 @@ enum { MR_BUDGET, MR_UNTRACKED, MR_OVERLAP, MR_ALLOC, MR_N };
 
 int vk_mirror_on;
 static int mirror_verify;
+static int mirror_snap = 1;            // XCX_MIRROR_SNAPSHOT: the prologue copies come from a CPU copy made at the submit
+static int mirror_snap_check;          // XCX_MIRROR_SNAPSHOT=check: at the fence, compare the copy with guest memory
 static int mirror_gap = 2;             // pre-snap: hot pools at most this many 2 MiB regions apart share one query
 static PoolRec **mlist;                // pool_lock: mirrored pools by import_lo
 static int nm, mcap;
@@ -1246,6 +1248,7 @@ static PlatMutex flush_lock = PLAT_MUTEX_INIT;
 typedef struct {
     uint64_t subs, syncs, upload_bytes, upload_copies, first_n, first_bytes, wb_bytes, wb_copies, wb_ranges;
     uint64_t presnap_queries, sync_queries, presnap_t, sync_t, prologues, presnap_bytes;
+    uint64_t snap_bytes, live_bytes, snap_t;   // prologue copies through a submit-time snapshot / live; memcpy time
 } MirrorAcc;
 static MirrorAcc mrep;                 // replay: this submission
 static MirrorAcc macc;                 // mirror_stat_lock: since the last summary
@@ -1267,6 +1270,9 @@ static void mirror_mode(int discrete) {
     }
     vk_mirror_on = mode > 0;
     mirror_verify = mode == 2;
+    const char *sn = cfg_get("XCX_MIRROR_SNAPSHOT");
+    mirror_snap = !sn || !*sn || strcmp(sn, "0");
+    mirror_snap_check = sn && !strcmp(sn, "check");
     const char *g = cfg_get("XCX_MIRROR_GAP");
     mirror_gap = g && *g ? atoi(g) : 2;
     if (mirror_gap < 0) mirror_gap = 0;
@@ -1293,8 +1299,9 @@ static void mirror_mode(int discrete) {
         rt_log("mem: copy-on-write snapshot %s: %d KiB blocks, %llu MiB for saved copies", cow_on ? "on" : "off (no arena)",
                1 << (shift - 10), (unsigned long long)mib);
     }
-    rt_log("mem: mode %s (%s): %s", mode == 2 ? "verify" : mode ? "mirror" : "import", why,
-           mode ? "pools used as buffers get a device-local mirror" : "every CPU-visible pool is imported host memory");
+    rt_log("mem: mode %s (%s): %s%s", mode == 2 ? "verify" : mode ? "mirror" : "import", why,
+           mode ? "pools used as buffers get a device-local mirror" : "every CPU-visible pool is imported host memory",
+           mode && !mirror_snap ? "; XCX_MIRROR_SNAPSHOT=0: mirror syncs read guest memory when the GPU runs them" : "");
 }
 
 static void range_add(MRange **a, int *n, int *cap, PoolRec *r, uint64_t off, uint64_t size) {
@@ -1906,11 +1913,160 @@ void vk_mem_mirror_begin(void) {
 
 int vk_mem_mirror_pending(void) { return npend + ncow_sp; }
 
-void vk_mem_mirror_prologue(VkCommandBuffer cb) {
+// Issue 210: the prologue's copies used to read the imported guest buffer when the GPU reached them. A GPU-bound game
+// (100% load at 1440p and up, Mailbox or no frame limit) runs one or two submissions behind, and by then the game has
+// rewritten those vertex and storage pages for the next frame: whole meshes drawn from half-written data (polygons
+// stretched across the screen). Now the replay copies the pages into a staging buffer at the submit (CPU memcpy, the
+// bytes as the game left them when it submitted) and the GPU copies the staging buffer. A batch over SNAP_MAX (the first
+// use of a big pool, at load) keeps the live copy. XCX_MIRROR_SNAPSHOT=0: the old live copies.
+// With XCX_MIRROR_COW on, both run and cover different pages: the pages mirror_sync reads while the replay records
+// (cowq) go through the copy-on-write saved copies, which hold the bytes as of the game's submit even though the
+// replay records up to a frame later, and land in cow_sp; this snapshot covers pend, the ranges copy-on-write leaves
+// live (first uses, flushed ranges). Taken at the record rather than the submit there, it is still earlier than the
+// GPU's read. The prologue copies pend first and cow_sp after a barrier, so the saved copies win where they overlap.
+#define SNAP_MAX (64ull << 20)
+typedef struct { const uint8_t *src; uint64_t pos, len; } SnapPiece;
+typedef struct {
+    VkBuffer buf;
+    VmaAllocation alloc;
+    const uint8_t *map;                // check mode: the snapshot, and where each piece came from
+    SnapPiece *pc;
+    int npc, cpc;
+} SnapBuf;
+static volatile int64_t sc_subs, sc_changed_subs, sc_changed_bytes, sc_bytes;   // check mode, since the last log
+// Write-backs (vk_mem_mirror_end) of submissions the GPU may not have run yet: guest memory there gets the GPU's
+// bytes only when it does, so a snapshot would copy the bytes from before over the mirror. Ranges that overlap one keep
+// the live copy, which runs after the write-back in queue order.
+typedef struct { PoolRec *r; uint64_t off, size, fence; } WbPend;
+static WbPend *wbp;                    // replay
+static int nwbp, cwbp;
+static MRange *live;                   // replay: this prologue's ranges that keep the live copy
+static int nlive, clive;
+
+static void wbp_prune(void) {
+    uint64_t done = vk_sync_fence_done();
+    int k = 0;
+    for (int j = 0; j < nwbp; j++)
+        if (wbp[j].fence > done) wbp[k++] = wbp[j];
+    nwbp = k;
+}
+
+static int wb_overlap(const MRange *m) {
+    for (int j = 0; j < nwbp; j++)
+        if (wbp[j].r == m->r && wbp[j].off < m->off + m->size && m->off < wbp[j].off + wbp[j].size) return 1;
+    return 0;
+}
+
+static void snap_free(void *arg) {   // completion thread, once the submission that copied from it is done
+    SnapBuf *sb = arg;
+    if (sb->pc) {   // check mode: bytes the CPU changed between the submit and the GPU finishing the submission
+        int64_t changed = 0, total = 0;
+        for (int i = 0; i < sb->npc; i++) {
+            const SnapPiece *p = &sb->pc[i];
+            total += (int64_t)p->len;
+            for (uint64_t o = 0; o < p->len; o += 256) {
+                uint64_t n = p->len - o < 256 ? p->len - o : 256;
+                if (memcmp(sb->map + p->pos + o, p->src + o, (size_t)n)) changed += (int64_t)n;
+            }
+        }
+        plat_inc64(&sc_subs);
+        plat_add64(&sc_bytes, total);
+        if (changed) plat_inc64(&sc_changed_subs), plat_add64(&sc_changed_bytes, changed);
+        free(sb->pc);
+    }
+    vmaDestroyBuffer(vk_ctx()->vma, sb->buf, sb->alloc);
+    free(sb);
+}
+
+// Merges a[] (sorted by range_cmp) as copy_ranges does; returns the merged bytes.
+static uint64_t merged_bytes(const MRange *a, int n) {
+    uint64_t total = 0, end = 0;
+    const PoolRec *cur = NULL;
+    for (int i = 0; i < n; i++) {
+        uint64_t lim = a[i].r->import_hi - a[i].r->import_lo, lo = a[i].off, hi = a[i].off + a[i].size;
+        if (hi > lim) hi = lim;
+        if (lo >= hi) continue;
+        if (a[i].r != cur) cur = a[i].r, end = 0;
+        else if (lo < end) lo = end;
+        if (hi > lo) total += hi - lo;
+        if (hi > end) end = hi;
+    }
+    return total;
+}
+
+// Records the copies of a[] (n > 0) from a snapshot taken now, except the ranges that overlap a pending write-back,
+// which it moves into live[] for the caller's copy_ranges. A batch over SNAP_MAX is copied live here.
+static void snap_ranges(VkCommandBuffer cb, MRange *a, int n, uint64_t fence) {
+    uint64_t t0 = qpc();
+    wbp_prune();
+    nlive = 0;
+    if (nwbp) {
+        int k = 0;
+        for (int i = 0; i < n; i++) {
+            if (!wb_overlap(&a[i])) { a[k++] = a[i]; continue; }
+            if (nlive == clive) grow((void **)&live, &clive, sizeof *live);
+            live[nlive++] = a[i];
+        }
+        n = k;
+    }
+    qsort(a, (size_t)n, sizeof *a, range_cmp);
+    uint64_t total = merged_bytes(a, n);
+    SnapBuf *sb = total && total <= SNAP_MAX ? calloc(1, sizeof *sb) : NULL;
+    if (!sb) {
+        uint64_t b0 = mrep.upload_bytes;
+        copy_ranges(cb, a, n, 1, &mrep.upload_bytes, &mrep.upload_copies);
+        mrep.live_bytes += mrep.upload_bytes - b0;
+        return;
+    }
+    uint8_t *dst = vk_staging(total, &sb->buf, &sb->alloc);
+    if (mirror_snap_check) sb->map = dst;
+    uint64_t pos = 0;
+    for (int i = 0; i < n;) {
+        PoolRec *r = a[i].r;
+        uint64_t lim = r->import_hi - r->import_lo, end = 0;
+        int k = 0;
+        for (; i < n && a[i].r == r; i++) {
+            uint64_t lo = a[i].off, hi = a[i].off + a[i].size;
+            if (hi > lim) hi = lim;
+            if (lo < end) lo = end;
+            if (lo >= hi) continue;
+            end = hi;
+            memcpy(dst + pos, (const uint8_t *)(uintptr_t)(r->import_lo + lo), (size_t)(hi - lo));
+            if (sb->map) {
+                if (sb->npc == sb->cpc) grow((void **)&sb->pc, &sb->cpc, sizeof *sb->pc);
+                sb->pc[sb->npc++] = (SnapPiece){(const uint8_t *)(uintptr_t)(r->import_lo + lo), pos, hi - lo};
+            }
+            if (k && mregions[k - 1].dstOffset + mregions[k - 1].size == lo) mregions[k - 1].size += hi - lo;
+            else {
+                if (k == cregions) grow((void **)&mregions, &cregions, sizeof *mregions);
+                mregions[k++] = (VkBufferCopy){pos, lo, hi - lo};
+            }
+            pos += hi - lo;
+        }
+        if (!k) continue;
+        vkCmdCopyBuffer(cb, sb->buf, r->mbuf, (uint32_t)k, mregions);
+        mrep.upload_copies += (uint64_t)k;
+    }
+    vmaFlushAllocation(vk_ctx()->vma, sb->alloc, 0, VK_WHOLE_SIZE);
+    mrep.upload_bytes += total;
+    mrep.snap_bytes += total;
+    mrep.snap_t += qpc() - t0;
+    vk_completion_add(fence, snap_free, sb);
+}
+
+void vk_mem_mirror_prologue(VkCommandBuffer cb, uint64_t fence) {
     if (!npend && !ncow_sp) return;
     mbarrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
              VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    if (npend) copy_ranges(cb, pend, npend, 1, &mrep.upload_bytes, &mrep.upload_copies);
+    uint64_t b0 = mrep.upload_bytes;
+    if (npend && !mirror_snap) copy_ranges(cb, pend, npend, 1, &mrep.upload_bytes, &mrep.upload_copies);
+    else if (npend) {
+        snap_ranges(cb, pend, npend, fence);
+        b0 = mrep.upload_bytes;   // snap_ranges counted its own live copies
+        if (nlive) copy_ranges(cb, live, nlive, 1, &mrep.upload_bytes, &mrep.upload_copies);
+        nlive = 0;
+    }
+    mrep.live_bytes += mrep.upload_bytes - b0;
     if (npend && ncow_sp)   // the staged bytes win where a live copy overlaps them
         mbarrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                  VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -2016,7 +2172,13 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
     if (nwbl) {
         mbarrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        for (int i = 0; i < nwbl; i++) wbl[i].r->wb_sub = msub;
+        if (mirror_snap) wbp_prune();
+        for (int i = 0; i < nwbl; i++) {
+            wbl[i].r->wb_sub = msub;
+            if (!mirror_snap) continue;
+            if (nwbp == cwbp) grow((void **)&wbp, &cwbp, sizeof *wbp);
+            wbp[nwbp++] = (WbPend){wbl[i].r, wbl[i].off, wbl[i].size, fence};
+        }
         if (cow_on) {
             WbEnt *e = calloc(1, sizeof *e);
             if (e) e->r = malloc((size_t)nwbl * sizeof(MRange));
@@ -2071,8 +2233,13 @@ static void mirror_log(uint64_t frame) {
     double f = frame > last ? (double)(frame - last) : 1.0, M = 1048576.0;
     last = frame;
     uint64_t fc = (uint64_t)plat_xchg64(&m_flush_calls, 0), fb = (uint64_t)plat_xchg64(&m_flush_bytes, 0);
-    char ver[160] = "";
-    if (mirror_verify)
+    char ver[400] = "";
+    if (mirror_snap_check) {
+        int64_t n = plat_xchg64(&sc_subs, 0), cn = plat_xchg64(&sc_changed_subs, 0);
+        int64_t cb = plat_xchg64(&sc_changed_bytes, 0), tb = plat_xchg64(&sc_bytes, 0);
+        snprintf(ver, sizeof ver, "; snapshot check: %lld of %lld submissions had pages rewritten before their fence, "
+                 "%.3f of %.3f MiB", (long long)cn, (long long)n, cb / M, tb / M);
+    } else if (mirror_verify)
         snprintf(ver, sizeof ver, "; verify: pages compared %lld, skipped %lld (written since), mismatches %lld",
                  (long long)plat_xchg64(&v_pages, 0), (long long)plat_xchg64(&v_skipped, 0),
                  (long long)plat_xchg64(&v_mismatch, 0));
@@ -2080,14 +2247,16 @@ static void mirror_log(uint64_t frame) {
            "budget %lld (%.1f MiB), untracked "
            "%lld, overlapping %lld, failed %lld; per frame: submits %.2f, syncs %.1f, upload %.3f MiB in %.1f ranges, "
            "first use %.2f pools %.3f MiB, write-back %.3f MiB in %.1f ranges, flush calls %.1f (%.3f MiB), queries "
-           "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f)%s",
+           "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f); upload "
+           "snapshot %.3f MiB (%.3f ms), live %.3f MiB%s",
            (unsigned long long)frame, (long long)m_live_n, m_live_bytes / M, (long long)m_host_n, m_host_bytes / M,
            (long long)m_refused_n[MR_BUDGET],
            m_refused_bytes[MR_BUDGET] / M, (long long)m_refused_n[MR_UNTRACKED], (long long)m_refused_n[MR_OVERLAP],
            (long long)m_refused_n[MR_ALLOC], a.subs / f, a.syncs / f, a.upload_bytes / f / M, a.upload_copies / f,
            a.first_n / f, a.first_bytes / f / M, a.wb_bytes / f / M, a.wb_copies / f, fc / f, fb / f / M,
            a.presnap_queries / f, a.presnap_bytes / f / M, a.sync_queries / f, a.prologues / f, qpc_ms(a.presnap_t + a.sync_t) / f,
-           qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, ver);
+           qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, a.snap_bytes / f / M, qpc_ms(a.snap_t) / f, a.live_bytes / f / M,
+           ver);
 }
 
 // With XCX_TRACE=perf every 600 frames: what holds device-local memory, to see what grows over a long session.
