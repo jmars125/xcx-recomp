@@ -965,25 +965,32 @@ static void ui_rect(const Cpu *c, float *x, float *w, float y, float h, int view
 }
 
 // A frosted pane (the Stats pane in Ground Gear, the Soul Challenge banner) first blurs the part of the frame behind it into
-// a small target. Its block, bound while that target is set, holds that part as texture coordinates: scale and offset
-// across, the same down, then 1 1 0 0. The pane itself narrows and may move to an edge, so the part it blurs follows it;
-// otherwise the pane shows, squeezed, what lies behind its 16:9 place.
+// a small target. Its block, bound while that target is set, holds that part as texture coordinates: scale, slant and
+// offset across, the same down, then 1 1 0 0. The pane itself narrows and may move to an edge, so the part it blurs
+// follows it; otherwise the pane shows, squeezed, what lies behind its 16:9 place. The tabs of the map's L/R bar are
+// slanted (across depends on down, 0.024 over the tab's height), and they blurred the map behind their 16:9 place: the
+// probe icon to the bar's left showed blurred inside it, and the FrontierNav tab's highlight reached too far left (#90).
 #define UI_BACKDROP_SIZE 0x130
 static void ui_fit_backdrop(const Cpu *c, uint64_t addr, float k) {
-    static _Thread_local struct { uint64_t addr; float x; } done[8];
+    static _Thread_local struct { uint64_t addr; float x, ox; } done[8];
     float *f = (float *)(uintptr_t)addr;
-    if (f[1] != 0 || f[2] != 0 || f[4] != 0 || f[6] != 0 || f[8] != 1 || f[9] != 1 || f[10] != 0 || f[11] != 0) return;
-    if (!(f[0] > 0 && f[3] >= 0 && f[3] + f[0] <= 1.001f && f[5] > 0)) return;
+    if (f[2] != 0 || f[4] != 0 || f[6] != 0 || f[8] != 1 || f[9] != 1 || f[10] != 0 || f[11] != 0) return;
+    float a = f[3] + (f[1] < 0 ? f[1] : 0), b = f[3] + f[0] + (f[1] > 0 ? f[1] : 0);   // the part's ends across
+    if (!(f[0] > 0 && fabsf(f[1]) < f[0] && a >= -0.001f && b <= 1.001f && f[5] > 0)) return;
     unsigned slot = (unsigned)(addr >> 4) % 8;   // narrow already when bound again
-    if (done[slot].addr == addr && done[slot].x == f[0]) return;
-    float lo = 2 * f[3] - 1, hi = lo + 2 * f[0];   // the pane's reach in clip space, as ui_fit sees the pane
+    if (done[slot].addr == addr && done[slot].x == f[0] && done[slot].ox == f[3]) return;
+    float lo = 2 * a - 1, hi = 2 * b - 1;   // the pane's reach in clip space, as ui_fit sees the pane
     float shift = ui_shift(ui_node(c), lo, hi, k);
-    f[0] *= k, f[3] = (lo * k + shift + 1) / 2;
-    done[slot].addr = addr, done[slot].x = f[0];
+    f[0] *= k, f[1] *= k, f[3] = (f[3] * 2 * k - k + shift + 1) / 2;
+    done[slot].addr = addr, done[slot].x = f[0], done[slot].ox = f[3];
+}
+
+static void ui_fit_done(uint64_t *at, float *x, uint64_t addr, const float *f) {
+    *at = addr, x[0] = f[0], x[1] = f[3], x[2] = f[5], x[3] = f[7];
 }
 
 static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
-    static _Thread_local struct { uint64_t addr; float x; } done[64];
+    static _Thread_local struct { uint64_t addr; float x[4]; } done[64];   // x: the block's f[0] f[3] f[5] f[7] once narrowed
     float k = res_ui_fit();
     if (k >= 1 || st != 0 || c->x[30] != UI_BIND_LR) return;
     if (!ui_on_output) {
@@ -996,8 +1003,14 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     // 60 fps to 10 on a wide frame.
     float *f = (float *)(uintptr_t)addr;
     if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0) return;
-    unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
-    if (done[slot].addr == addr && done[slot].x == f[0]) return;
+    // A block bound for a second draw is narrow already. It is known by its address and its rect as narrowed: the width
+    // alone is not enough, as the game reuses the addresses for other elements frame by frame, and the world labels come
+    // in fixed widths, some half of another (0.35 and 0.175 of the clip width). A fresh label at the address of one
+    // narrowed to its own width passed for done and kept the canvas's scale for that frame: twice as wide and twice as
+    // far from the centre, as NPC names and icons flashed at some camera angles (#224).
+    unsigned slot = (unsigned)(addr >> 4) % 64;
+    if (done[slot].addr == addr && done[slot].x[0] == f[0] && done[slot].x[1] == f[3] && done[slot].x[2] == f[5] &&
+        done[slot].x[3] == f[7]) return;
     float a = f[3], b = f[3] + f[0], lo = a < b ? a : b, hi = a < b ? b : a;
     // An element as wide as the canvas, or a tall shade over a whole side, keeps its full reach. Tall means over three
     // quarters of the canvas's height: the Load Game rows and the Active Members level linework (the lower right quarter)
@@ -1027,13 +1040,13 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
         if (side == UI_PANE_STRETCH) {
             float p = right ? (1 - lo * k) / (hi - lo) : (hi * k + 1) / (hi - lo), q = right ? 1 - p * hi : -1 - p * lo;
             f[0] *= p, f[3] = f[3] * p + q;
-            done[slot].addr = addr, done[slot].x = f[0];
+            ui_fit_done(&done[slot].addr, done[slot].x, addr, f);
             return;
         }
         shift = side < 0 ? k - 1 : side > 0 ? 1 - k : 0;
     }
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
-    done[slot].addr = addr, done[slot].x = f[0];
+    ui_fit_done(&done[slot].addr, done[slot].x, addr, f);
 }
 
 // Uniform and storage buffers: one record per binding (CB_SIZE/ADDRESS 4 words + CB_BIND 1 on hardware).
