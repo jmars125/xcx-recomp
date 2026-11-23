@@ -283,6 +283,20 @@ site xcx60 main 5d9708 79005680 @page:x9 1e230000 bd404d21 1e211800 1e250000 790
 # 2.5 s at 120. The 300 is divided by the patch page's +0x4c (30 / frame rate) instead, so the box holds 10 s at any
 # frame rate. x9 is set here anyway and s0-s1 are free: calls come just before and the function returns after.
 site xcx60 main 7fc8d0 52802589 @page:x9 bd404d21 52802589 1e230120 1e211800 1e250009
+# Skell fuel (#221): the Skell's fuel update (main+0x1a0cc4, run once per frame from main+0x1946a8) works out a change
+# per frame with no frame time in it: the recovery (the Skell's parameter 1, or 4, times its percent bonuses), less
+# the consumption (parameter 3, times a global factor in state 6), plus a bonus per second / 30, and adds it to the
+# fuel at +0x3cf0 of the Skell (main+0x1a0f9c), clamped to 0 and the maximum (stored by main+0x1a10c0). Fuel drained
+# and refilled twice as fast at 60 fps and 4 times as fast at 120. The change is scaled by the patch page's +0x4c
+# (30 / frame rate) before it is added. x9 is not read again in the function and s1 is written before its next read.
+site xcx60 main 1a0f9c 1e20294c @page:x9 bd404d21 1e210800 1e20294c
+# The Skell manager's timers (#221): its update (main+0x138a50) steps them by 1 / (60 / the game's frame interval in
+# vsyncs) per frame, 1/60 s with our one vsync a frame. main+0x1382f0 adds that to three timers per Skell, which act
+# after whole seconds (+0xa50, +0xa54, +0xa58 of its parameters; the last fills a Skell's fuel to the maximum), and the
+# update adds it to its clock at +0x208. Right only at 60 fps: half speed at 30, twice as fast at 120. The step is the
+# patch page's +0x40 (the measured frame time) times the interval (60 / s0) instead, as the menus' frame step (#63):
+# 2/60 s in 30 fps cutscenes, as on the console. x9 is unused in the function and s1 is not read again.
+site xcx60 main 138a90 1e201828 @page:x9 bd404128 52a84e09 1e270121 1e210908 1e201908
 
 # Grass distance (runtime/grass.c, XCX_GRASS_DISTANCE). runtime/grass.c writes three floats to the patch page: +0x100
 # the scale, +0x104 the fine window (30 m x scale) and +0x108 the minimum range (30 m x scale).
