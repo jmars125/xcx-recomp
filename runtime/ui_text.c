@@ -425,6 +425,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u, %.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1, sharpness %d%%", [UI_MENU_OV_SCALE_NONE] = "none (1:1)",
     [UI_MENU_OV_SCALE_BILINEAR] = "bilinear",
+    [UI_MENU_OV_UPSCALER] = "Upscaler", [UI_MENU_OV_TUP_DLAA] = "NVIDIA DLAA", [UI_MENU_OV_TUP_OFF] = "off",
+    [UI_MENU_OV_FMT_TUP_PENDING] = "%s (%s after restart)",
 };
 
 static const char *const text_ru[UI_TEXT_COUNT] = {
@@ -825,6 +827,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u, %.0f%%",
     [UI_MENU_OV_FMT_FSR] = "AMD FSR 1, резкость %d%%", [UI_MENU_OV_SCALE_NONE] = "нет (1:1)",
     [UI_MENU_OV_SCALE_BILINEAR] = "билинейное",
+    [UI_MENU_OV_UPSCALER] = "Апскейлер", [UI_MENU_OV_TUP_DLAA] = "NVIDIA DLAA", [UI_MENU_OV_TUP_OFF] = "выкл.",
+    [UI_MENU_OV_FMT_TUP_PENDING] = "%s (%s после перезапуска)",
 };
 
 #define SWKBD_ONLY(name, ...) static const char *const name[UI_TEXT_COUNT] = {SWKBD(__VA_ARGS__)}

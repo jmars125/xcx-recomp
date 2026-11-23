@@ -23,6 +23,7 @@ void vk_dlss_viewport(VkViewport *v);
 int vk_dlss_skip_draw(VkExec *ex);
 void vk_dlss_frame(void);   // each present (vk_backend.c present_image)
 int vk_dlss_on(void);       // DLSS runs (NGX up, upscaler = dlss), as of the last present
+const char *vk_dlss_mode(void);   // "DLAA", "Quality", ... as DLSS last ran; NULL while off (overlay)
 // A draw of the scene (with its depth, between the G-buffer and the post passes) on a frame DLSS runs on: the draws the
 // motion passes below look at.
 int vk_dlss_scene_draw(const VkExec *ex);

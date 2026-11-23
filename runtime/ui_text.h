@@ -183,7 +183,10 @@ typedef enum {
     UI_MENU_OV_FMT_SCENE,     // "%ux%u, %.0f%%": the scene and its share of the game image's width
     UI_MENU_OV_FMT_FSR,       // "AMD FSR 1, sharpness %d%%"
     UI_MENU_OV_SCALE_NONE, UI_MENU_OV_SCALE_BILINEAR,
-    UI_MENU_LAST_ID = UI_MENU_OV_SCALE_BILINEAR,
+    // the Upscaler line: DLAA (DLSS at the game resolution), no temporal upscaler, and DLSS waiting for a restart
+    UI_MENU_OV_UPSCALER, UI_MENU_OV_TUP_DLAA, UI_MENU_OV_TUP_OFF,
+    UI_MENU_OV_FMT_TUP_PENDING,   // "%s (%s after restart)": the one running, then the one chosen
+    UI_MENU_LAST_ID = UI_MENU_OV_FMT_TUP_PENDING,
     // Controller palette in the SDL text-entry window; existing catalog ids remain stable.
     UI_SWKBD_GRID_HINT, UI_SWKBD_PALETTE, UI_SWKBD_SPACE, UI_SWKBD_BACKSPACE, UI_SWKBD_UNBOUND, UI_SWKBD_SHIFT, UI_SWKBD_MOMENTARY_SHIFT,
     UI_MENU_TAB_MODS,

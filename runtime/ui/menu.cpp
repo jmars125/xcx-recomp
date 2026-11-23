@@ -49,6 +49,8 @@ void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
 double frame_step_limit_hz(void);
+const char *vk_dlss_mode(void);   // vk_dlss.c: "DLAA", "Quality", ... as DLSS last ran; NULL while off
+int vk_dlss_wanted(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
 extern const char rt_port_version[];
@@ -1774,13 +1776,29 @@ static void perf_label(UiTextId label, const ImVec4 &c) {
 
 static float perf_gb(float mb) { return mb < 0 ? -1 : mb / 1024; }
 
-// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), how the
-// present scales the image to the window (gfx_present.c, the last present), the frame limit and the presentation mode
-// in use.
+// The temporal upscaler that ran last (vk_dlss.c vk_dlss_mode): DLAA when DLSS draws at the game resolution (render
+// scale 100), DLSS with its quality mode, or off. The Scaling line is only how the present fits the picture to the
+// window, so with DLAA running it said "none (1:1)" and nothing said DLAA ran (#222). Upscaler = dlss chosen while the
+// game runs starts after a restart (vk_dlss_wanted); the line says so, as XC3's overlay does.
+static void perf_upscaler(char *b, size_t n) {
+    char run[48];
+    const char *mode = vk_dlss_mode();
+    if (mode && !strcmp(mode, "DLAA")) snprintf(run, sizeof run, "%s", menu_text(UI_MENU_OV_TUP_DLAA));
+    else if (mode && *mode) snprintf(run, sizeof run, "%s %s", menu_text(UI_MENU_UPSCALER_DLSS), mode);
+    else if (mode) snprintf(run, sizeof run, "%s", menu_text(UI_MENU_UPSCALER_DLSS));
+    else snprintf(run, sizeof run, "%s", menu_text(UI_MENU_OV_TUP_OFF));
+    if (!strcmp(cfg_value("XCX_UPSCALER"), "dlss") && !vk_dlss_wanted())
+        snprintf(b, n, menu_text(UI_MENU_OV_FMT_TUP_PENDING), run, menu_text(UI_MENU_UPSCALER_DLSS));
+    else snprintf(b, n, "%s", run);
+}
+
+// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), the
+// temporal upscaler (perf_upscaler), how the present scales the image to the window (gfx_present.c, the last present),
+// the frame limit and the presentation mode in use.
 static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
-    char v[6][64];
+    char v[7][64];
     snprintf(v[0], sizeof v[0], menu_text(UI_MENU_OV_FMT_SIZE), t->width, t->height);
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
@@ -1795,14 +1813,17 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     if (hz > 0) snprintf(v[4], sizeof v[4], menu_text(UI_MENU_OV_FPS), hz);
     const char *pm = present_name(gfx_window_present_mode());
     snprintf(v[5], sizeof v[5], "%s", pm ? pm : menu_text(UI_MENU_OV_NONE));
-    static const UiTextId labels[6] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE,
-                                       UI_MENU_OV_SCALING, UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT};
+    perf_upscaler(v[6], sizeof v[6]);
+    static const UiTextId labels[7] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE,   UI_MENU_OV_SCALING,
+                                       UI_MENU_OV_LIMIT,  UI_MENU_OV_PRESENT, UI_MENU_OV_UPSCALER};
+    static const int order[7] = {0, 1, 2, 6, 3, 4, 5};   // the upscaler after the 3D scene it works on
     if (!ImGui::BeginTable("##perfp", 2, ImGuiTableFlags_SizingFixedFit)) return;
     float vw = 0;
     for (auto &s : v) vw = fmaxf(vw, ImGui::CalcTextSize(s).x);
     ImGui::TableSetupColumn("##p0", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("##p1", ImGuiTableColumnFlags_WidthFixed, vw);
-    for (int i = 0; i < 6; i++) {
+    for (int k = 0; k < 7; k++) {
+        int i = order[k];
         perf_label(labels[i], c);
         ImGui::TableNextColumn();
         perf_right(v[i], false);
