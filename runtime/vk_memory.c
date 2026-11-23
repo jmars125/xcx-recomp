@@ -1935,7 +1935,7 @@ typedef struct {
 } SnapBuf;
 static volatile int64_t sc_subs, sc_changed_subs, sc_changed_bytes, sc_bytes;   // check mode, since the last log
 // Write-backs (vk_mem_mirror_end) of submissions the GPU may not have run yet: guest memory there gets the GPU's
-// bytes only when it does, so a snapshot would copy the bytes from before over the mirror. Ranges that overlap one keep
+// bytes only when it does, so a snapshot would copy the bytes from before over the mirror. The bytes one covers keep
 // the live copy, which runs after the write-back in queue order.
 typedef struct { PoolRec *r; uint64_t off, size, fence; } WbPend;
 static WbPend *wbp;                    // replay
@@ -1949,12 +1949,6 @@ static void wbp_prune(void) {
     for (int j = 0; j < nwbp; j++)
         if (wbp[j].fence > done) wbp[k++] = wbp[j];
     nwbp = k;
-}
-
-static int wb_overlap(const MRange *m) {
-    for (int j = 0; j < nwbp; j++)
-        if (wbp[j].r == m->r && wbp[j].off < m->off + m->size && m->off < wbp[j].off + wbp[j].size) return 1;
-    return 0;
 }
 
 static void snap_free(void *arg) {   // completion thread, once the submission that copied from it is done
@@ -1994,22 +1988,57 @@ static uint64_t merged_bytes(const MRange *a, int n) {
     return total;
 }
 
-// Records the copies of a[] (n > 0) from a snapshot taken now, except the ranges that overlap a pending write-back,
-// which it moves into live[] for the caller's copy_ranges. A batch over SNAP_MAX is copied live here.
+static void live_add(PoolRec *r, uint64_t off, uint64_t size) {
+    if (nlive == clive) grow((void **)&live, &clive, sizeof *live);
+    live[nlive++] = (MRange){r, off, size};
+}
+
+// Moves the bytes of m that a pending write-back covers into live[] and appends the rest, split around them, to
+// keep[]. Only those bytes need the queue order: the rest of a page next to a GPU-written range is the game's own data.
+static MRange *keep;
+static int nkeep, ckeep;
+static void wb_split(MRange m) {
+    while (m.size) {
+        uint64_t lo = m.off + m.size, hi = lo;   // the first pending write-back in m, clipped
+        for (int j = 0; j < nwbp; j++) {
+            if (wbp[j].r != m.r || wbp[j].off >= m.off + m.size || wbp[j].off + wbp[j].size <= m.off) continue;
+            uint64_t a = wbp[j].off > m.off ? wbp[j].off : m.off, b = wbp[j].off + wbp[j].size;
+            if (b > m.off + m.size) b = m.off + m.size;
+            if (a < lo) lo = a, hi = b;
+            else if (a == lo && b > hi) hi = b;
+        }
+        if (lo > m.off) {
+            if (nkeep == ckeep) grow((void **)&keep, &ckeep, sizeof *keep);
+            keep[nkeep++] = (MRange){m.r, m.off, lo - m.off};
+        }
+        if (hi > lo) live_add(m.r, lo, hi - lo);
+        m.size = m.off + m.size - hi;
+        m.off = hi;
+    }
+}
+
+// Records the copies of a[] (n > 0) from a snapshot taken now, except the bytes that a pending write-back covers,
+// which it moves into live[] for the caller's copy_ranges. Ranges of SNAP_BIG and up (a pool's first use, at load)
+// go live when the batch exceeds SNAP_MAX, and the whole batch when the rest still does.
+#define SNAP_BIG (4ull << 20)
 static void snap_ranges(VkCommandBuffer cb, MRange *a, int n, uint64_t fence) {
     uint64_t t0 = qpc();
     wbp_prune();
     nlive = 0;
     if (nwbp) {
-        int k = 0;
-        for (int i = 0; i < n; i++) {
-            if (!wb_overlap(&a[i])) { a[k++] = a[i]; continue; }
-            if (nlive == clive) grow((void **)&live, &clive, sizeof *live);
-            live[nlive++] = a[i];
-        }
-        n = k;
+        nkeep = 0;
+        for (int i = 0; i < n; i++) wb_split(a[i]);
+        a = keep, n = nkeep;
     }
     qsort(a, (size_t)n, sizeof *a, range_cmp);
+    if (merged_bytes(a, n) > SNAP_MAX) {
+        int k = 0;
+        for (int i = 0; i < n; i++)
+            if (a[i].size >= SNAP_BIG) live_add(a[i].r, a[i].off, a[i].size);
+            else a[k++] = a[i];
+        n = k;
+    }
+    if (!n) return;
     uint64_t total = merged_bytes(a, n);
     SnapBuf *sb = total && total <= SNAP_MAX ? calloc(1, sizeof *sb) : NULL;
     if (!sb) {
@@ -2063,7 +2092,12 @@ void vk_mem_mirror_prologue(VkCommandBuffer cb, uint64_t fence) {
     else if (npend) {
         snap_ranges(cb, pend, npend, fence);
         b0 = mrep.upload_bytes;   // snap_ranges counted its own live copies
-        if (nlive) copy_ranges(cb, live, nlive, 1, &mrep.upload_bytes, &mrep.upload_copies);
+        if (nlive) {   // after the snapshot's copies: a big live range may cover some of them
+            mbarrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            qsort(live, (size_t)nlive, sizeof *live, range_cmp);
+            copy_ranges(cb, live, nlive, 1, &mrep.upload_bytes, &mrep.upload_copies);
+        }
         nlive = 0;
     }
     mrep.live_bytes += mrep.upload_bytes - b0;
