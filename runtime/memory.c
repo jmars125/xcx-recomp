@@ -717,10 +717,11 @@ uint32_t mem_unmap(uint64_t dst, uint64_t src, uint64_t n) { return stack_move(1
 // before they are decommitted (#172). Skipping the cutscene that follows the first choice of a New Game crashed one
 // player every time: a UI layout pane's draw (main+0xa30ff0 -> main+0xa2a56c) read its draw entries (resource +0x340,
 // then +0x30) from a heap page of the alias region that was not mapped at that moment. The game's heaps give pages
-// back with UnmapPhysicalMemory all the time (a few calls per frame), and here they are decommitted at once, so a read
-// just after a free faults whenever the freeing thread runs first, a matter of thread timing (not reproduced here; the
-// same skip played through in our runs). Held pages are read-write, so such a late read sees the old contents. A held page mapped again is zeroed, as a fresh mapping is; the pool accounting drops the
-// pages at the unmap.
+// back with UnmapPhysicalMemory all the time (a few calls per frame), and here they were decommitted at once, so a read
+// just after a free faulted whenever the freeing thread ran first, a matter of thread timing (not reproduced here; the
+// same skip played through in our runs). Held pages are read-write, so such a late read sees the old contents. A held
+// page mapped again is decommitted first and comes back zeroed, as a fresh mapping does. The pool accounting drops
+// the pages at the unmap.
 #define HOLD_RUNS 1024
 #define HOLD_MAX_BYTES (512ull << 20)
 typedef struct { uint64_t first, count, t_ms; } HeldRun;
@@ -760,16 +761,16 @@ static void alias_runs(uint64_t first, uint64_t count, uint8_t want, int do_comm
         while (j < count && alias_pages[first + j] == want) j++;
         uint64_t a = L.alias.base + (first + i) * PAGE, n = (j - i) * PAGE;
         if (do_commit) {
-            commit(a, n, "physical memory");
-            for (uint64_t p = first + i; p < first + j; p++)   // held pages keep old contents: zero them
+            for (uint64_t p = first + i; p < first + j; p++)   // held pages keep old contents: decommit them first
                 if (alias_held[p]) {
                     uint64_t q = p;
                     while (q < first + j && alias_held[q]) q++;
-                    memset((void *)(uintptr_t)(L.alias.base + p * PAGE), 0, (q - p) * PAGE);
+                    decommit(L.alias.base + p * PAGE, (q - p) * PAGE, "physical memory");
                     memset(alias_held + p, 0, q - p);
                     held_bytes -= (q - p) * PAGE;
                     p = q - 1;
                 }
+            commit(a, n, "physical memory");
         } else if (grace_ms > 0) {
             memset(alias_held + first + i, 1, j - i);
             held_bytes += n;
