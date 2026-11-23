@@ -53,7 +53,8 @@ game hashes and version in) and links them with that library. The library holds 
 
 --cpu x86-64-v2 builds for processors without AVX2 (before Intel Haswell and AMD Excavator) instead of x86-64-v3. It
 applies to the generated C and runtime/ alike, so a --runtime-lib must be built with the same --cpu. Without FMA in
-hardware every fused multiply-add of the game becomes a call to the C library's fma, so such a build runs slower.
+hardware a single-precision fused multiply-add takes a dozen instructions (runtime/simd_fp.h FN(hfma)) and a double
+one a call to the C library's fma, so such a build runs slower.
 
 Standard library only.
 """
