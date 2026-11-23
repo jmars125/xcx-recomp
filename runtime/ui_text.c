@@ -238,10 +238,14 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_GLYPH_APPEARANCE] = "Button Appearance",
     [UI_MENU_GLYPH_APPEARANCE_DESC] = "Colored - Uses colored or solid options where applicable\nStandard - Uses colorless options where applicable",
     [UI_MENU_GLYPH_UNSUPPORTED] = "Available only for the verified XCX 2.0.0 build",
-    [UI_MENU_PAD_LAYOUT] = "Confirmation/Cancel",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Default: Original\nFlipped: Swaps confirmation and cancel buttons",
-    [UI_MENU_PAD_LAYOUT_AUTO] = "Automatic", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Default",
-    [UI_MENU_PAD_LAYOUT_XBOX] = "Flipped",
+    [UI_MENU_PAD_LAYOUT] = "Confirm button",
+    [UI_MENU_PAD_LAYOUT_DESC] = "Which face button confirms (the game's A) and which cancels.\n"
+                                "Right: by position, as on a Switch (the original). On an Xbox pad the right button "
+                                "is B, so the button prompts show B for confirm, as in the XC3 recomp.\n"
+                                "Bottom: by label: Xbox A, PlayStation cross. Confirm and cancel swap places.\n"
+                                "Automatic: Right on Nintendo pads, Bottom on the others (default).",
+    [UI_MENU_PAD_LAYOUT_AUTO] = "Automatic", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Right",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Bottom", [UI_MENU_PAD_LAYOUT_IN_USE] = "in use: %s",
     [UI_MENU_MOUSE_SENS] = "Mouse camera sensitivity",
     [UI_MENU_MOUSE_SENS_DESC] = "How fast the mouse turns the camera.",
     [UI_MENU_STICK_GROUP] = "Controller sticks",
@@ -634,10 +638,15 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_RUMBLE_CURVE_DESC] = "Чем ниже значение, тем сильнее слабая вибрация.",
     [UI_MENU_RUMBLE_TRIGGERS] = "Вибрация триггеров (Xbox)",
     [UI_MENU_RUMBLE_TRIGGERS_DESC] = "Вибрация и в триггерах контроллера Xbox.",
-    [UI_MENU_PAD_LAYOUT] = "Подтверждение/Отмена",
-    [UI_MENU_PAD_LAYOUT_DESC] = "Стандартная: как в оригинале\nОбратная: меняет местами кнопки подтверждения и отмены",
-    [UI_MENU_PAD_LAYOUT_AUTO] = "Автоматически", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Стандартная",
-    [UI_MENU_PAD_LAYOUT_XBOX] = "Обратная",
+    [UI_MENU_PAD_LAYOUT] = "Кнопка подтверждения",
+    [UI_MENU_PAD_LAYOUT_DESC] = "Какая кнопка подтверждает (A в игре) и какая отменяет.\n"
+                                "Правая: по положению, как на Switch (как в оригинале). На контроллере Xbox правая "
+                                "кнопка — B, поэтому подсказки показывают B для подтверждения, как в XC3 recomp.\n"
+                                "Нижняя: по надписи: A на Xbox, крест на PlayStation. Подтверждение и отмена "
+                                "меняются местами.\n"
+                                "Автоматически: правая на контроллерах Nintendo, нижняя на остальных (по умолчанию).",
+    [UI_MENU_PAD_LAYOUT_AUTO] = "Автоматически", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Правая",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Нижняя", [UI_MENU_PAD_LAYOUT_IN_USE] = "сейчас: %s",
     [UI_MENU_MOUSE_SENS] = "Чувствительность мыши",
     [UI_MENU_MOUSE_SENS_DESC] = "Как быстро мышь поворачивает камеру.",
     [UI_MENU_STICK_GROUP] = "Стики контроллера",
