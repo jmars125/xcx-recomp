@@ -178,6 +178,10 @@ int mem_frozen(uint64_t a);                                // the 2 MiB region o
                                                            // since its freeze
 void mem_thaw(uint64_t a, uint64_t n);                     // makes the frozen regions over [a, a+n) writable again;
                                                            // before a kernel write (file read) into guest memory
+uint32_t mem_unmapped(uint64_t a, uint64_t n, uint32_t *seen);
+                                                           // 1 when pages of [a, a+n) were decommitted (heap shrink,
+                                                           // UnmapPhysicalMemory, stack moves) or made read-only or
+                                                           // no-access since *seen (0: never asked), then *seen = now
 void mem_freeze_stats(uint64_t *frozen, uint64_t *freezes, uint64_t *fault_thaws, uint64_t *other_thaws);
                                                            // regions frozen now; freezes and thaws since the last call
 // Copy-on-write snapshots (memory.c, "copy-on-write blocks"): the async replay reads guest memory as of a submission.
