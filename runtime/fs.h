@@ -45,6 +45,9 @@ void fs_trace(const char *what, const char *path);         // XCX_TRACE=fs: one 
 int fs_aoc_list(int32_t *out, int offset, int count);       // add-on content indices present (fs_host.c)
 void fs_host_set_profile(const char *dir);                 // profile directory; before the first storage mount only
                                                            // (default rt_config()->profile)
+// Path of a file named name in the profile directory (beside save/ and save-tx/), for host-side data that is not part of
+// the game's journaled save; 1 on success, 0 before the storage roots exist or when it does not fit cap.
+int fs_host_profile_file(const char *name, char *out, size_t cap);
 int fs_save_busy(void);                                    // a save is being written: a save file open for writing,
                                                            // or save data changed in the last 3 s and not committed
 void fs_save_flush(void);                                  // wait for a save Commit still running in the background;
