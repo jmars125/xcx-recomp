@@ -302,6 +302,42 @@ class KeysTest(unittest.TestCase):
         self.assertEqual(self.inputs_error(''), 'check.keys_no_header_key')
 
 
+class PrepareTest(unittest.TestCase):
+    """#223: a new release's translator, rebuilt from the same sources, keeps the shader cache; another one clears it."""
+
+    def run_prepare(self, old_exe, old_id, new_exe, new_id):
+        from installer import steps
+        with tempfile.TemporaryDirectory() as tmp:
+            root, dest = Path(tmp) / 'release', Path(tmp) / 'install'
+            for d, exe, xid in ((root, new_exe, new_id), (dest, old_exe, old_id)):
+                d.mkdir()
+                (d / steps.XLATE).write_bytes(exe)
+                if xid is not None:
+                    (d / steps.XLATE).with_suffix('.id').write_text(xid + '\n', encoding='ascii')
+            (dest / 'shader-cache').mkdir()
+            (dest / 'shader-cache' / 'a.spv').write_bytes(b'x')
+            ctx = SimpleNamespace(dest=dest, layout=SimpleNamespace(xlate=root / steps.XLATE, root=root, dev=False),
+                                  reporter=SimpleNamespace(progress=lambda *a, **k: None))
+            source_files, steps.source_files = steps.source_files, lambda root, dev: []
+            try:
+                steps.Prepare().run(ctx)
+            finally:
+                steps.source_files = source_files
+            self.assertEqual((dest / steps.XLATE).read_bytes(), new_exe)
+            return (dest / 'shader-cache' / 'a.spv').is_file()
+
+    def test_rebuilt_translator_keeps_the_cache(self):
+        self.assertTrue(self.run_prepare(b'build 1', 'ab' * 32, b'build 2', 'AB' * 32))
+
+    def test_other_translator_clears_the_cache(self):
+        self.assertFalse(self.run_prepare(b'build 1', 'ab' * 32, b'build 2', 'cd' * 32))
+
+    def test_without_ids_the_exe_decides(self):
+        self.assertTrue(self.run_prepare(b'same', None, b'same', None))
+        self.assertFalse(self.run_prepare(b'build 1', None, b'build 2', None))
+        self.assertFalse(self.run_prepare(b'build 1', 'ab' * 32, b'build 2', None))
+
+
 class CliTest(unittest.TestCase):
     def test_auto_language_keeps_the_one_in_the_ini(self):
         from installer.cli import auto_language
