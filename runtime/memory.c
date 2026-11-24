@@ -51,6 +51,7 @@ static uint64_t mods_lo, mods_hi;   // fixed module window
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static uint64_t heap_size, alias_bytes;
 static uint8_t *alias_pages;        // 1 per mapped 4 KiB page of the alias region
+static uint8_t *alias_held;         // 1 per unmapped page still committed during its grace period (alias_map)
 typedef struct { uint64_t dst, src, size; } StackMap;
 static StackMap stack_maps[MAX_STACK_MAPS];
 static unsigned nstack_maps;
@@ -519,7 +520,8 @@ void mem_init(void) {
 
     plat_mem_fault_hook(thaw_fault);   // before the crash handler
     alias_pages = calloc(ALIAS_PAGES, 1);
-    if (!alias_pages) rt_fatal("memory: cannot allocate the alias page map");
+    alias_held = calloc(ALIAS_PAGES, 1);
+    if (!alias_pages || !alias_held) rt_fatal("memory: cannot allocate the alias page map");
     // xcx.ini is read here, once the address space is claimed and before the first setting: the pool size below
     // depends on XCX_APP_POOL and on the resolution settings (resolution.c decides them once, on this first call).
     cfg_init();
@@ -710,6 +712,47 @@ uint32_t mem_unmap(uint64_t dst, uint64_t src, uint64_t n) { return stack_move(1
 
 // ---- 0x2C/0x2D MapPhysicalMemory, UnmapPhysicalMemory. Horizon maps only the still-unmapped pages of the range and
 // leaves mapped pages and their contents alone; XCX's heaps grow by re-mapping ranges they partly own.
+//
+// Unmapped pages stay committed, with their contents, for a grace period (XCX_PHYS_GRACE_MS, default 500 ms; 0 off)
+// before they are decommitted (#172). Skipping the cutscene that follows the first choice of a New Game crashed one
+// player every time: a UI layout pane's draw (main+0xa30ff0 -> main+0xa2a56c) read its draw entries (resource +0x340,
+// then +0x30) from a heap page of the alias region that was not mapped at that moment. The game's heaps give pages
+// back with UnmapPhysicalMemory all the time (a few calls per frame), and here they were decommitted at once, so a read
+// just after a free faulted whenever the freeing thread ran first, a matter of thread timing (not reproduced here; the
+// same skip played through in our runs). Held pages are read-write, so such a late read sees the old contents. A held
+// page mapped again is decommitted first and comes back zeroed, as a fresh mapping does. The pool accounting drops
+// the pages at the unmap.
+#define HOLD_RUNS 1024
+#define HOLD_MAX_BYTES (512ull << 20)
+typedef struct { uint64_t first, count, t_ms; } HeldRun;
+static HeldRun held[HOLD_RUNS];
+static unsigned held_head, held_n;   // ring of runs in unmap order
+static uint64_t held_bytes;          // pages still held (alias_held set, alias_pages clear)
+static int grace_ms = -1;
+
+static void release_held_locked(const HeldRun *h) {   // under lock: decommit what of the run is still held
+    uint64_t i = 0;
+    while (i < h->count) {
+        if (!alias_held[h->first + i]) { i++; continue; }
+        uint64_t j = i;
+        while (j < h->count && alias_held[h->first + j]) j++;
+        decommit(L.alias.base + (h->first + i) * PAGE, (j - i) * PAGE, "physical memory");
+        memset(alias_held + h->first + i, 0, j - i);
+        held_bytes -= (j - i) * PAGE;
+        i = j;
+    }
+}
+
+static void expire_held_locked(uint64_t now) {   // under lock: runs past their grace, and the oldest over the cap
+    while (held_n) {
+        HeldRun *h = &held[held_head];
+        if (now - h->t_ms < (uint64_t)grace_ms && held_bytes <= HOLD_MAX_BYTES) break;
+        release_held_locked(h);
+        held_head = (held_head + 1) % HOLD_RUNS;
+        held_n--;
+    }
+}
+
 static void alias_runs(uint64_t first, uint64_t count, uint8_t want, int do_commit) {   // under lock
     uint64_t i = 0;
     while (i < count) {
@@ -717,8 +760,29 @@ static void alias_runs(uint64_t first, uint64_t count, uint8_t want, int do_comm
         uint64_t j = i;
         while (j < count && alias_pages[first + j] == want) j++;
         uint64_t a = L.alias.base + (first + i) * PAGE, n = (j - i) * PAGE;
-        if (do_commit) commit(a, n, "physical memory");
-        else decommit(a, n, "physical memory");
+        if (do_commit) {
+            for (uint64_t p = first + i; p < first + j; p++)   // held pages keep old contents: decommit them first
+                if (alias_held[p]) {
+                    uint64_t q = p;
+                    while (q < first + j && alias_held[q]) q++;
+                    decommit(L.alias.base + p * PAGE, (q - p) * PAGE, "physical memory");
+                    memset(alias_held + p, 0, q - p);
+                    held_bytes -= (q - p) * PAGE;
+                    p = q - 1;
+                }
+            commit(a, n, "physical memory");
+        } else if (grace_ms > 0) {
+            memset(alias_held + first + i, 1, j - i);
+            held_bytes += n;
+            if (held_n == HOLD_RUNS) {
+                release_held_locked(&held[held_head]);
+                held_head = (held_head + 1) % HOLD_RUNS;
+                held_n--;
+            }
+            held[(held_head + held_n++) % HOLD_RUNS] = (HeldRun){first + i, j - i, plat_now_ms()};
+        } else {
+            decommit(a, n, "physical memory");
+        }
         memset(alias_pages + first + i, !want, j - i);
         i = j;
     }
@@ -729,6 +793,11 @@ static uint32_t alias_map(int unmap, uint64_t a, uint64_t n) {
     if (!inside(a, n, L.alias)) return R_INVALID_REGION;
     uint64_t first = (a - L.alias.base) / PAGE, count = n / PAGE;
     plat_mutex_lock(&lock);
+    if (grace_ms < 0) {
+        const char *e = cfg_get("XCX_PHYS_GRACE_MS");
+        grace_ms = e ? atoi(e) : 500;
+        if (grace_ms < 0) grace_ms = 0;
+    }
     uint32_t r = R_OK;
     if (unmap) {
         for (unsigned i = 0; i < nstack_maps; i++)
@@ -751,6 +820,7 @@ static uint32_t alias_map(int unmap, uint64_t a, uint64_t n) {
         alias_bytes += fresh * PAGE;
     }
 out:
+    expire_held_locked(plat_now_ms());
     plat_mutex_unlock(&lock);
     if (r) rt_log("%sMapPhysicalMemory %#llx+%#llx failed %#x (alias %#llx used, heap %#llx)", unmap ? "Un" : "",
                   (unsigned long long)a, (unsigned long long)n, r, (unsigned long long)alias_bytes,

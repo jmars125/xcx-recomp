@@ -639,6 +639,9 @@ static void check_memory(void) {
     CHECK(mem_unmap(stack, a, 0x4000) == 0 && LD64(a + 0x10) == 0x5678, "UnmapMemory did not copy the stack back");
 
     CHECK(mem_unmap_physical(a - 0x4000, 0x20000) == 0, "UnmapPhysicalMemory");
+    const char *grace = cfg_get("XCX_PHYS_GRACE_MS");   // memory.c alias_map: a late read sees the old contents
+    if (!grace || atoi(grace) > 0)
+        CHECK(LD64(a + 0x10) == 0x5678, "unmapped physical memory is not readable in its grace period");
     mem_query(a, &q);
     CHECK(q.state == 0 && q.base == g->alias.base && q.size == g->alias.size, "QueryMemory on the free alias region");
     CHECK(mem_map_physical(a, 0x1000) == 0 && LD64(a + 0x10) == 0 && mem_unmap_physical(a, 0x1000) == 0,
