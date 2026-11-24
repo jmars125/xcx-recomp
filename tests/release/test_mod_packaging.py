@@ -41,11 +41,14 @@ class ModPackaging(unittest.TestCase):
                 text, _, _ = packaged.ninja_file(out / 'gen', out / 'link', {}, 2, runtime_lib=out / 'runtime/libxcxrt.a')
             self.assertNotIn('/lua/', text)
             self.assertIn('mod_menu_adapter.c', text)
+            self.assertIn('native_ui_adapter.c', text)
 
     def test_runtime_archive_defers_adapter_to_install(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(bg, 'vma_include', return_value=Path('include')):
             text, _, _ = bg.ninja_file(ROOT / 'tools/runtime-layout', Path(tmp), {}, 2, make_lib=True)
             self.assertNotIn('mod_menu_adapter.c', text)
+            self.assertNotIn('native_ui_adapter.c', text)
+            self.assertIn('mod_native_ui.c', text)
             self.assertIn('mod_runtime.c', text)
             self.assertIn('lapi.c', text)
 
@@ -65,6 +68,7 @@ class ModPackaging(unittest.TestCase):
             with patch.object(steps, 'run_tool', side_effect=tool):
                 steps.Lift().run(ctx)
             self.assertIn('--mod-menu-hook', seen)
+            self.assertIn('--native-ui-hook', seen)
 
     def test_installer_copies_only_managed_public_files(self):
         import installer.steps as steps

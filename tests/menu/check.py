@@ -6,7 +6,7 @@ s=(ROOT/'tests/actions/lua_driver.c').read_text().replace('#include "mod_interna
 flags=['-O1','-g','-std=gnu11','-DXCX_MOD_TESTING','-Iruntime','-Ibuild/lua-src']
 if a.sanitize:flags+=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
 lua=ROOT/'build/lua-src';core=[x for x in sorted(lua.glob('*.c')) if x.name not in ('lua.c','luac.c','linit.c') and (not x.name.endswith('lib.c') or x.name in ('lauxlib.c','lbaselib.c','lstrlib.c','ltablib.c','lmathlib.c'))]
-source=[ROOT/'runtime'/n for n in ['mod_menu.c','mod_runtime.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']];env=os.environ.copy();env.update(ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1',MENU_TEST_EXE=str(out/('host'+EXE)))
+source=[ROOT/'runtime'/n for n in ['mod_menu.c','mod_native_ui.c','mod_runtime.c','mod_provider.c','mod_provider_platform.c','mod_package.c','mod_settings.c','sha256.c']];env=os.environ.copy();env.update(ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1',MENU_TEST_EXE=str(out/('host'+EXE)))
 io=ROOT/'tests/mods/settings_io.c'
 if WIN:
  io=out/'io.c';io.write_text('#include <stddef.h>\nvoid plat_file_mkdir_p(const char*p){(void)p;} int plat_file_write_atomic(const char*p,const void*d,size_t n){(void)p;(void)d;(void)n;return 0;}\n')
