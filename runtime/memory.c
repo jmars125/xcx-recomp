@@ -469,9 +469,36 @@ static void commit(uint64_t a, uint64_t n, const char *what) {
     if (!ok) rt_fatal("memory: commit %s %#llx+%#llx failed", what, (unsigned long long)a, (unsigned long long)n);
 }
 
+// The latest UNMAP_LOG ranges whose pages were decommitted or changed protection, numbered by unmap_seq (mem_unmapped).
+// The texture write-back caches whether a texture's storage is mapped; without this it asked the OS again only after a
+// pool's end, and a heap shrink or UnmapPhysicalMemory under a texture still dirty from the GPU made its write-back copy
+// fault (issue 232). Under frz_lock.
+#define UNMAP_LOG 64
+static struct { uint64_t a, end; } unmap_log[UNMAP_LOG];
+static uint32_t unmap_seq = 1;   // the number the next range gets; 0 is never one
+
+static void unmap_note_locked(uint64_t a, uint64_t n) {
+    if (!n) return;
+    unmap_log[unmap_seq % UNMAP_LOG].a = a, unmap_log[unmap_seq % UNMAP_LOG].end = a + n;
+    if (!++unmap_seq) unmap_seq = 1;
+}
+
+uint32_t mem_unmapped(uint64_t a, uint64_t n, uint32_t *seen) {
+    plat_mutex_lock(&frz_lock);
+    uint32_t s = *seen, now = unmap_seq, hit = 0;
+    if (!s || now - s > UNMAP_LOG) hit = 1;   // first ask, or the log no longer reaches back that far
+    else
+        for (; s != now && !hit; s++)
+            hit = unmap_log[s % UNMAP_LOG].a < a + n && a < unmap_log[s % UNMAP_LOG].end;
+    *seen = now;
+    plat_mutex_unlock(&frz_lock);
+    return hit;
+}
+
 static void decommit(uint64_t a, uint64_t n, const char *what) {
     plat_mutex_lock(&frz_lock);
     thaw_range_locked(a, n, 3);
+    unmap_note_locked(a, n);
     int ok = !n || plat_mem_decommit(a, n);
     plat_mutex_unlock(&frz_lock);
     if (!ok) rt_fatal("memory: decommit %s %#llx+%#llx failed", what, (unsigned long long)a, (unsigned long long)n);
@@ -480,6 +507,7 @@ static void decommit(uint64_t a, uint64_t n, const char *what) {
 static void protect(uint64_t a, uint64_t n, int prot, const char *what) {
     plat_mutex_lock(&frz_lock);
     thaw_range_locked(a, n, 3);
+    if (prot != PLAT_PROT_RW) unmap_note_locked(a, n);
     int ok = !n || plat_mem_protect(a, n, prot);
     plat_mutex_unlock(&frz_lock);
     if (!ok) rt_fatal("memory: protect %s %#llx+%#llx failed", what, (unsigned long long)a, (unsigned long long)n);
