@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / 'recomp'))
 
 import flags  # noqa: E402
 import appendage  # noqa: E402
+import load_menu  # noqa: E402
 import romfs_mods  # noqa: E402
 import jumptables  # noqa: E402
 import patches  # noqa: E402
@@ -236,6 +237,7 @@ class Emitter:
         self.mod_menu_hook = mod_menu_hook and mod.name == "main"
         self.mod = mod
         self.appendage = appendage.verified(mod)
+        self.load_menu = load_menu.verified(mod)
         self.romfs_mods = romfs_mods.verified(mod)
         self.starts = starts
         self.patched = patched or {}   # {address: (set index, [replacement words])} (recomp/patches.py)
@@ -452,6 +454,8 @@ class Emitter:
             # An unresolved computed br re-enters the function through fb_<entry>, which switches on c->pc to any
             # instruction. A goto to a shared dispatch block inside the body instead turns every instruction into
             # a loop header, and clang's loop passes then take tens of seconds on one function.
+            if self.load_menu and load_menu.entry(mod, entry):
+                raise ValueError(f'Load menu: hook site {entry:#x} is in a function with an unresolved jump')
             fb = f'fb_{entry:x}'
             cases = ' '.join(f'case {hx(t)}: goto L_{t:x};' for t in range(entry, end, 4))
             redispatch = f'{MUSTTAIL} {fb}(c);'
@@ -464,6 +468,8 @@ class Emitter:
             redispatch = f'{MUSTTAIL} rt_dispatch(c);'
             out = [f'void {fname(entry)}(Cpu *c) {{', f'    FN_ENTER({hx(entry)});']
             if self.appendage and (hook := appendage.entry(mod, entry)):
+                out.append('    ' + hook)
+            if self.load_menu and (hook := load_menu.entry(mod, entry)):
                 out.append('    ' + hook)
             if fp.used:
                 out.append('    ' + fp.decl())
@@ -849,6 +855,7 @@ def main():
     write_layout(mods, args.out)
     write_if_changed(args.out / 'mod_menu_config.h', '// ' + GENERATED_MARKER + '\n#pragma once\n#define MOD_MENU_HOOKS ' + str(int(args.mod_menu_hook)) + '\n')
     table = patches.load(args.patches, mods) if args.patches else patches.Table()
+    load_menu.validate_patches(table)
     if args.mod_menu_hook:
         mod_menu.validate_patches(table)
     write_if_changed(args.out / 'patches.h', patches.header_text(table, GENERATED_MARKER))
