@@ -67,11 +67,15 @@ SN T FN(nan3)(Cpu *c, T a, T b, T d) {
 // sets, a denormal operand then counts as itself instead of as zero (a denormal times 2^100 gives about 2^-30 where ARM
 // gives z) and a denormal result is not flushed. FN(hfma) runs the operands and the result through a multiplication
 // by a 1 the compiler cannot fold away (exact, but it applies DAZ/FTZ) and gives such a zero the exact product's sign.
+// HFMA is for the paths that run with MXCSR rounding to nearest, which is every path but FN(slow) (cpu.h
+// rt_fpcr_sync; FPCR.RMode sends an operation to FN(slow), which switches RC around it). HFMA_ANY is correct in every
+// rounding mode and is what FN(slow) and the helpers it calls use.
 #ifdef __FMA__
 #define HFMA_K(x, y, z) __builtin_elementwise_fma(x, y, z)
 #define HFMA_VK(x, y, z) __builtin_elementwise_fma(x, y, z)
+#define HFMA_ANY_K(x, y, z) __builtin_elementwise_fma(x, y, z)
 #else
-SN T FN(hfma)(T x, T y, T z) {
+SN T FN(hfma_any)(T x, T y, T z) {
     T one = K(1);
     __asm__("" : "+x"(one));
     x *= one, y *= one, z *= one;
@@ -79,37 +83,89 @@ SN T FN(hfma)(T x, T y, T z) {
     if (r == 0 && z == 0 && x != 0 && y != 0) r = FN(fv)((FN(fb)(x) ^ FN(fb)(y)) & SGN);
     return r * one;
 }
+#define HFMA_ANY_K(x, y, z) FN(hfma_any)(x, y, z)
+#if NB == 32
+// Single precision in round to nearest without the C library, which cost a call with two MXCSR writes (glibc) or a
+// software emulation (UCRT on a CPU without FMA3) for each scalar FMADD and each lane of FMLA. The product of two
+// floats is exact in double (48 significant bits), so only the sum rounds. It is taken to double rounded to odd: 2Sum
+// gives the exact error of the nearest double sum (every value is a multiple of 2^-298, so no double is denormal and
+// DAZ/FTZ never touch them); an inexact sum steps toward zero when it rounded away (the truncation) and sets its
+// lowest bit. Rounding a round-to-odd value of 53 bits to 24 bits rounds the exact x*y + z once (Boldo and Melquiond,
+// "Emulation of FMA and correctly rounded sums: proved algorithms using rounding to odd"), and the float conversion
+// applies FTZ as the SSE operation does; the operands go through the unfoldable 1 for DAZ as in FN(hfma_any). A
+// product that underflows against a zero z keeps the exact product's sign (its double is not zero), x*y == -z gives
+// +0 as ARM does in round to nearest, and an infinite or NaN sum passes through for the callers' NaN fix-ups.
+SI float FN(hfma)(float x, float y, float z) {
+    float one = 1;
+    __asm__("" : "+x"(one));
+    double p = (double)(x * one) * (double)(y * one), zd = z * one, s = p + zd;
+    double bp = s - zd, bz = s - bp, e = (p - bp) + (zd - bz);
+    uint64_t u, ue;
+    memcpy(&u, &s, sizeof u), memcpy(&ue, &e, sizeof ue);
+    if ((ue << 1) != 0 && (u & 0x7ff0000000000000ull) != 0x7ff0000000000000ull) {
+        if ((u ^ ue) >> 63) u--;   // s rounded away from zero: step to the truncation
+        u |= 1;
+        memcpy(&s, &u, sizeof s);
+    }
+    return (float)s;
+}
+SI vf32 FN(vhfma)(vf32 x, vf32 y, vf32 z) {   // FN(hfma) on four lanes, as two double pairs
+    typedef double vd4 __attribute__((vector_size(32)));
+    typedef uint64_t vu4 __attribute__((vector_size(32)));
+    typedef int64_t vs4 __attribute__((vector_size(32)));
+    vf32 one = VK(1);
+    __asm__("" : "+x"(one));
+    vd4 p = __builtin_convertvector(x * one, vd4) * __builtin_convertvector(y * one, vd4);
+    vd4 zd = __builtin_convertvector(z * one, vd4), s = p + zd;
+    vd4 bp = s - zd, bz = s - bp, e = (p - bp) + (zd - bz);
+    vu4 u = (vu4)s, ue = (vu4)e;
+    const vu4 em = (vu4){} + 0x7ff0000000000000ull;
+    vu4 inexact = (vu4)(((ue << 1) != 0) & ((u & em) != em)) & 1;
+    vu4 away = (vu4)((vs4)(u ^ ue) >> 63) & 1;
+    return __builtin_convertvector((vd4)((u - (away & inexact)) | inexact), vf32);
+}
+#else
+SI T FN(hfma)(T x, T y, T z) { return FN(hfma_any)(x, y, z); }
 SN VT FN(vhfma)(VT x, VT y, VT z) {
     VT r;
-    for (int i = 0; i < NL; i++) r[i] = FN(hfma)(x[i], y[i], z[i]);
+    for (int i = 0; i < NL; i++) r[i] = FN(hfma_any)(x[i], y[i], z[i]);
     return r;
 }
+#endif
 #define HFMA_K(x, y, z) FN(hfma)(x, y, z)
 #define HFMA_VK(x, y, z) FN(vhfma)(x, y, z)
 #endif
 #define HFMA(KK, x, y, z) HFMA_##KK(x, y, z)
+#define HFMA_ANY(KK, x, y, z) HFMA_ANY_##KK(x, y, z)
 
 // The arithmetic itself, for scalars (KK = K) and vectors (KK = VK). MADD: a + b*d (a = addend).
-// RECPS/RSQRTS get their first operand already negated (FPNeg happens before NaN processing).
-#define FCALC(op, a, b, d, KK)                                                                       \
+// RECPS/RSQRTS get their first operand already negated (FPNeg happens before NaN processing). FCALC_H takes the fused
+// multiply-add: HFMA in round to nearest, HFMA_ANY in FN(slow).
+#define FCALC(op, a, b, d, KK) FCALC_H(op, a, b, d, KK, HFMA)
+#define FCALC_H(op, a, b, d, KK, H)                                                                  \
     ((op) == FOP_ADD ? (a) + (b) : (op) == FOP_SUB ? (a) - (b)                                     \
    : (op) == FOP_MUL || (op) == FOP_MULX ? (a) * (b) : (op) == FOP_NMUL ? -((a) * (b))              \
    : (op) == FOP_DIV ? (a) / (b) : (op) == FOP_ABD ? __builtin_elementwise_abs((a) - (b))          \
    : (op) == FOP_SQRT ? __builtin_elementwise_sqrt(a)                                              \
-   : (op) == FOP_MADD ? HFMA(KK, b, d, a)                                                          \
-   : (op) == FOP_RECPS ? HFMA(KK, a, b, KK(2))                                                     \
-   : (op) == FOP_RSQRTS ? HFMA(KK, a, b, KK(3)) * KK(0.5) : (a))
+   : (op) == FOP_MADD ? H(KK, b, d, a)                                                             \
+   : (op) == FOP_RECPS ? H(KK, a, b, KK(2))                                                        \
+   : (op) == FOP_RSQRTS ? H(KK, a, b, KK(3)) * KK(0.5) : (a))
 
 // Lanes whose fast result needs fixing: NaN results (NaN operand or invalid op), RSQRTS overflow.
 #define FBAD(op, r) ((op) == FOP_RSQRTS ? ((r) != (r)) | (__builtin_elementwise_abs(r) == K(INFINITY)) : (r) != (r))
 
 // (3 + a*b) / 2 with one rounding (a already negated): halve a normal operand first, so a product beyond
 // the format's range (which the fast path rounds to inf, or to the largest normal when rounding down) is exact.
-SN T FN(rsqrts)(T a, T b) {
-    if (__builtin_elementwise_abs(a) >= FN(fv)(2 * MINN)) return HFMA(K, a * K(0.5), b, K(1.5));
-    if (__builtin_elementwise_abs(b) >= FN(fv)(2 * MINN)) return HFMA(K, a, b * K(0.5), K(1.5));
-    return HFMA(K, a, b, K(3)) * K(0.5);
-}
+// FN(rsqrts) in round to nearest, FN(rsqrts_any) in any mode (FN(slow)).
+#define FN_RSQRTS(name, H)                                                                        \
+    SN T name(T a, T b) {                                                                         \
+        if (__builtin_elementwise_abs(a) >= FN(fv)(2 * MINN)) return H(K, a * K(0.5), b, K(1.5)); \
+        if (__builtin_elementwise_abs(b) >= FN(fv)(2 * MINN)) return H(K, a, b * K(0.5), K(1.5)); \
+        return H(K, a, b, K(3)) * K(0.5);                                                         \
+    }
+FN_RSQRTS(FN(rsqrts), HFMA)
+FN_RSQRTS(FN(rsqrts_any), HFMA_ANY)
+#undef FN_RSQRTS
 
 // ARM result for a lane flagged by FBAD (operands already flushed).
 SN T FN(fix)(Cpu *c, int op, T a, T b, T d) {
@@ -133,7 +189,7 @@ SN T FN(fix)(Cpu *c, int op, T a, T b, T d) {
     case FOP_RSQRTS:
         if (!nan) {
             if ((FN(isinf)(x) && FN(iszero)(y)) || (FN(iszero)(x) && FN(isinf)(y))) return K(1.5);
-            return FN(rsqrts)(a, b);
+            return simd_directed(c) ? FN(rsqrts_any)(a, b) : FN(rsqrts)(a, b);   // FN(slow) runs it in RMode
         }
         break;
     case FOP_NMUL: return FN(neg)(FN(nan2)(c, a, b));
@@ -166,13 +222,13 @@ SN T FN(slow)(Cpu *c, int op, T a, T b, T d) {
     if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
     unsigned old = simd_rm_enter(fpcr);
     volatile T va = a, vb = b, vd = d;
-    volatile T vr = op == FOP_RSQRTS ? FN(rsqrts)(va, vb) : FCALC(op, va, vb, vd, K);
+    volatile T vr = op == FOP_RSQRTS ? FN(rsqrts_any)(va, vb) : FCALC_H(op, va, vb, vd, K, HFMA_ANY);
     T r = vr;
     if (FBAD(op, r)) vr = FN(fix)(c, op, a, b, d), r = vr;
     if ((fpcr & FPCR_FZ) && (FN(fb)(r) & ~SGN) <= MINN && !FN(iszero)(FN(fb)(r))) {
         if ((FN(fb)(r) & ~SGN) == MINN) {
             simd_rm_rz();
-            volatile T vz = FCALC(op, va, vb, vd, K);
+            volatile T vz = FCALC_H(op, va, vb, vd, K, HFMA_ANY);
             if ((FN(fb)(vz) & ~SGN) < MINN) r = FN(fv)(FN(fb)(r) & SGN);
         } else {
             r = FN(fv)(FN(fb)(r) & SGN);
@@ -386,6 +442,9 @@ SI T FN(recpx)(Cpu *c, T a) {
 }
 
 #undef HFMA
+#undef HFMA_ANY
+#undef HFMA_ANY_K
+#undef FCALC_H
 #undef HFMA_K
 #undef HFMA_VK
 #undef FN
