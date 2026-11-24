@@ -8,8 +8,12 @@ xcx-install.json records the same paths ("paths", written by installer/cli.py, r
 picks by hand fills the form too; this file is the pointer to the last folder, and the fallback for paths a run that
 stopped before its first save never recorded there.
 
-Windows: %APPDATA%\\XCX Recomp\\setup.json; elsewhere $XDG_CONFIG_HOME/xcx-recomp/setup.json (default
-~/.config/xcx-recomp/setup.json). XCX_SETUP_RECENT names another file (tests).
+Windows: %APPDATA%\\XCX Recomp\\setup.json. Linux writes nothing outside the install folder by default (docs/installer.md,
+"Linux release"): the unpacked release (the tarball) keeps setup.json in its own folder, the AppImage (a read-only
+mount) keeps no file, and a repository checkout uses $XDG_CONFIG_HOME/xcx-recomp/setup.json (default ~/.config). The
+AppImage's Play still finds a build beside the .AppImage file (installer/play.py), and a picked install folder still
+fills the form from its own xcx-install.json. XCX_SETUP_RECENT names the file to use instead, on any system: a
+launcher or a player who wants the AppImage to remember sets it (tests use it too).
 
 Adapted from TotK Recomp (github.com/valentderah/totk-pc-recomp, MIT), installer/recent.py and installer/gui.py
 load_recent: the per-user file, the checks on load and the bounded wait for a path on a gone network share.
@@ -19,6 +23,7 @@ import os
 import threading
 from pathlib import Path
 
+from . import layout as layouts
 from . import state as statefile
 
 FORMAT = 1
@@ -28,13 +33,21 @@ FIELDS = ('dest',) + SOURCES
 WAIT = 1.5   # seconds the window waits for load()
 
 
+SETUP_ROOT = Path(__file__).resolve().parent.parent   # the release folder or the repository
+
+
 def path():
+    """The file, or None where Setup keeps none (the Linux AppImage)."""
     override = os.environ.get(ENV)
     if override:
         return Path(override)
     if os.name == 'nt':
         base = os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming'
         return Path(base) / 'XCX Recomp' / 'setup.json'
+    if os.environ.get('APPIMAGE'):
+        return None
+    if layouts.is_release(SETUP_ROOT):
+        return SETUP_ROOT / 'setup.json'
     base = os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config'
     return Path(base) / 'xcx-recomp' / 'setup.json'
 
@@ -61,8 +74,11 @@ def first_file(value):
 
 
 def read():
+    target = path()
+    if target is None:
+        return {}
     try:
-        data = json.loads(path().read_text(encoding='utf-8'))
+        data = json.loads(target.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -118,6 +134,8 @@ def save(dest, sources):
     """Records dest and the non-empty entries of sources (base, update, dlc, keys) as absolute paths; an entry left
     empty keeps its saved value. Atomic; a failure to write is ignored, the window works without it."""
     target = path()
+    if target is None:
+        return
     data = {name: v for name, v in read().items() if name in FIELDS and isinstance(v, str)}
     data['dest'] = os.path.abspath(dest.strip())
     for name, value in sources.items():

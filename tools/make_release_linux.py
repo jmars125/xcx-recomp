@@ -1,7 +1,7 @@
-"""Assemble the Linux release folder of docs/installer.md ("Linux release") and pack it as an AppImage.
+"""Assemble the Linux release folder of docs/installer.md ("Linux release") and pack it as an AppImage and a tarball.
 
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux \\
-        [--appimage build/release/XCX-Setup-<version>-linux.AppImage]
+        [--appimage build/release/XCX-Setup-<version>-linux.AppImage] [--tarball build/release/XCX-Setup-<version>-linux.tar.gz]
     .venv/bin/python tools/make_release_linux.py --out build/release/XCX-Setup-linux --prove
 
 The same model as the Windows release (tools/make_release.py, whose download cache, unpacking and checks this reuses): the
@@ -21,8 +21,11 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
     bin/       xcx_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)
     recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, docs/mods/, public API references and examples/mods/hello/, VERSION
     AppRun, xcx-setup.desktop, xcx-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
+    xcx-setup  the start script of the unpacked folder (the tarball): runs AppRun with its arguments
 
---appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles
+--appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --tarball packs
+the same folder as XCX-Setup/ in a .tar.gz, for a launcher that deploys it unpacked (a Flatpak sandbox runs no
+AppImage without FUSE); the archive keeps the modes and the symlinks. --prove compiles
 generated/upd (2.0.0) and links build/release-linux-check/xcx with the folder's tools only, then runs the probes beside it;
 it reads game-derived files, so it is a local step, never CI's. Everything else needs no game files
 (.github/workflows/release.yml): libxcxrt.a takes the module layout from tools/runtime-layout.
@@ -414,7 +417,9 @@ def sys_version(out):
 
 
 APPRUN = '''#!/bin/sh
-# The AppImage entry: the setup window, run by the bundled Python from the read-only mount (no bytecode written there).
+# The AppImage entry (and the tarball's, through xcx-setup): the setup window, run by the bundled Python from the
+# read-only mount (no bytecode written there). Its arguments go to the window: --play starts the game when this
+# release built it (installer/play.py), and what the window does not know goes on to the game.
 HERE="$(dirname "$(readlink -f "$0")")"
 export PYTHONDONTWRITEBYTECODE=1
 export TCL_LIBRARY="$HERE/python/lib/tcl9.0"
@@ -431,7 +436,7 @@ exec "$HERE/python/bin/python3" -m installer.gui "$@"
 DESKTOP = '''[Desktop Entry]
 Type=Application
 Name=XCX Recomp Setup
-Comment=Builds Tears of the Kingdom for this PC from your own game files
+Comment=Builds Xenoblade Chronicles X for this PC from your own game files
 Exec=AppRun
 Icon=xcx-setup
 Categories=Game;
@@ -439,9 +444,22 @@ Terminal=false
 '''
 
 
+# The unpacked folder's entry: the tarball has no AppImage runtime to start AppRun
+START = '''#!/bin/sh
+# XCX Recomp Setup, unpacked: the same as running the AppImage (AppRun beside this script), with the same arguments:
+#   ./xcx-setup                                  the setup window
+#   ./xcx-setup --play [--dest DIR] [GAME ARGS]  the game when it is built, else the window, then the game
+#   ./xcx-setup -m installer --dest DIR ...      the command line without a window (docs/installer.md)
+exec "$(dirname "$(readlink -f "$0")")/AppRun" "$@"
+'''
+TAR_ROOT = 'XCX-Setup'   # the tarball's one top folder
+
+
 def build_entry(out):
     (out / 'AppRun').write_text(APPRUN, encoding='utf-8')
     (out / 'AppRun').chmod(0o755)
+    (out / 'xcx-setup').write_text(START, encoding='utf-8')
+    (out / 'xcx-setup').chmod(0o755)
     (out / 'xcx-setup.desktop').write_text(DESKTOP, encoding='utf-8')
     shutil.copy2(out / 'runtime' / 'xcx.png', out / 'xcx-setup.png')
     (out / '.DirIcon').symlink_to('xcx-setup.png')
@@ -454,6 +472,14 @@ def write_appimage(out, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, ARCH='x86_64', APPIMAGE_EXTRACT_AND_RUN='1')
     run([tool, '--no-appstream', '--runtime-file', runtime, out, path], env=env)
+    print(f'{path}: {mr.mib(path.stat().st_size)}')
+
+
+def write_tarball(out, path):
+    """The folder as TAR_ROOT/ in a gzip tarball: names sorted, owner root, so two builds of one tree match."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    run(['tar', '--sort=name', '--owner=0', '--group=0', '--numeric-owner', '--format=gnu',
+         '--transform', f's,^{out.name},{TAR_ROOT},', '-C', out.parent, '-czf', path, out.name])
     print(f'{path}: {mr.mib(path.stat().st_size)}')
 
 
@@ -518,6 +544,37 @@ def check_bundle(out):
     if r.returncode:
         sys.exit(f'bundle check: window selftest exit {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}')
     print('bundle check: the window built every screen in both languages and closed')
+    for entry in ('AppRun', 'xcx-setup'):
+        check_play(out, entry)
+
+
+FAKE_GAME = '''#!/bin/sh
+printf '%s\\n' "$@" > args.txt
+[ -z "$TCL_LIBRARY$APPDIR" ] || exit 9
+exit 7
+'''
+
+
+def check_play(out, entry):
+    """entry --play on a folder that looks like a finished build of this release starts its game with the arguments
+    the window does not know, waits for it and ends with its exit code (installer/play.py)."""
+    dest = CHECK / 'play' / entry
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    release = (out / 'VERSION').read_text().strip()
+    (dest / 'xcx-install.json').write_text(f'{{"format": 1, "release": "{release}", "complete": "{release}", '
+                                           f'"inputs": {{}}, "steps": {{}}}}\n')
+    (dest / 'xcx').write_text(FAKE_GAME)
+    (dest / 'xcx').chmod(0o755)
+    game = ['--fullscreen', '--set', 'FPS_LIMIT=30', '--', '--profile', 'my saves']
+    r = subprocess.run([str(out / entry), '--play', '--dest', str(dest), *game], cwd='/', capture_output=True,
+                       text=True, timeout=120)
+    got = (dest / 'args.txt').read_text().splitlines() if (dest / 'args.txt').is_file() else None
+    want = ['--fullscreen', '--set', 'FPS_LIMIT=30', '--profile', 'my saves']
+    if r.returncode != 7 or got != want:
+        sys.exit(f'play check ({entry}): exit {r.returncode}, game arguments {got}, wanted exit 7 and {want}\n'
+                 f'{r.stdout[-2000:]}\n{r.stderr[-2000:]}')
+    print(f'play check: {entry} --play started the built game with its arguments and returned its exit code')
 
 
 def prove(out):
@@ -558,6 +615,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--out', type=Path, required=True, help='release folder (replaced)')
     ap.add_argument('--appimage', type=Path, help='also pack the folder as this AppImage')
+    ap.add_argument('--tarball', type=Path, help='also pack the folder as this .tar.gz (XCX-Setup/ inside)')
     ap.add_argument('--prove', action='store_true', help='only run the compile-and-probe check on an existing folder')
     args = ap.parse_args()
     out = args.out.resolve()
@@ -583,6 +641,8 @@ def main():
     mr.sizes(out)
     if args.appimage:
         write_appimage(out, args.appimage.resolve())
+    if args.tarball:
+        write_tarball(out, args.tarball.resolve())
 
 
 if __name__ == '__main__':

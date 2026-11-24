@@ -15,7 +15,9 @@ holds only the game; the installer and its tools stay outside it.
      RomFS of the updated game. It needs no update file, and `prod.keys` only for add-on content (issue #175);
    - the game language and the install folder.
 3. Waits for the setup, one time. The window shows each step and its progress.
-4. Plays `xcx.exe` from the install folder. The installer and the source NSP or XCI can be deleted.
+4. Plays: **Play** on the finish screen, `xcx.exe` from the install folder, or `XCX-Setup.exe` again, which opens on
+   a Play screen while the folder holds a finished build of its release ([command-line.md](command-line.md),
+   "XCX-Setup"). The source NSP or XCI can be deleted.
 
 The install folder (`main.c` `portable_paths()` reads this layout; it stays portable):
 
@@ -41,9 +43,12 @@ The window starts filled in from the last install it ran (issue #155): the insta
 the add-on content and the keys file, so an update is one click on Start. A new release unpacks into a new folder, so
 the paths live outside it:
 
-- `%APPDATA%\XCX Recomp\setup.json` (`$XDG_CONFIG_HOME/xcx-recomp/setup.json`, default `~/.config/xcx-recomp/`,
-  elsewhere) points at the last install folder and keeps the paths of its last Start (`installer/recent.py`). The
-  window writes it when Start passes the form's checks.
+- `setup.json` points at the last install folder and keeps the paths of its last Start (`installer/recent.py`). The
+  window writes it when Start passes the form's checks. On Windows it is `%APPDATA%\XCX Recomp\setup.json`. On Linux,
+  which writes nothing outside the install folder by default, the unpacked tarball keeps it in its own folder
+  (`XCX-Setup/setup.json`), the AppImage keeps none (its folder is a read-only mount), and a repository checkout uses
+  `$XDG_CONFIG_HOME/xcx-recomp/setup.json` (default `~/.config`). `XCX_SETUP_RECENT=<file>` names the file instead, on
+  any system: set it to make the AppImage remember.
 - The install folder's `xcx-install.json` records `"paths"`, the files the last run named (`--game` as given, not what
   it resolved to; a run given only `--dest` keeps them). The CLI writes them, so a run from RecompLauncher or a script
   counts too, and picking another install folder in the window fills the empty fields from that folder.
@@ -115,6 +120,7 @@ A cancelled or failed setup resumes from the last finished step (`xcx-install.js
 
 ```
 python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR [--root DIR] [--temp DIR] [--verify]
+                    [--play [GAME ARGUMENTS...]]
 ```
 
 - On a folder with `xcx-install.json` only `--dest` is needed; the game files only when the extraction must run again.
@@ -124,6 +130,10 @@ python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR
   `--dlss-file PATH` copies a DLSS library, only NVIDIA's release the download takes (`DLSS_SHA256`), instead of
   downloading one; `--progress-lines` prints `progress 0.4 Text` lines instead of JSON events. Empty values
   (`--dlc=`, `--update=`, a launcher's optional input left empty) count as not given.
+- `--play` (`installer/play.py`): once the folder holds a finished build of this release, start the game and wait for
+  it; the exit code is then the game's. A folder that already holds one, given no game files, starts at once without
+  running the steps. With `--play`, arguments the installer does not know and all after a lone `--` go to the game
+  (`--fullscreen`, `--set KEY=VALUE`, [command-line.md](command-line.md)); without it they are a usage error.
 - NSZ and XCZ (`installer/nsz.py`): the checks read their NCA headers in place; the extraction first rebuilds each as a
   plain NSP in the temp folder (every NCA checked against its own name, a SHA-256), then goes on as with an NSP.
 - An extracted game (`installer/extracted.py`): `--game FOLDER`, or a folder as `--base`, holding `exefs/` of the 2.0.0
@@ -144,12 +154,15 @@ python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR
   the merged RomFS (15.9 GiB) before it deletes them. The check computes the exact figure.
 - Window (`python -m installer.gui`, `installer/gui.py` draws, `installer/guilogic.py` decides): form, step list with
   progress, space line, collapsible log, Cancel (Ctrl+Break to the CLI's process group, then it waits for the exit),
-  finish screen with Open folder. English or Russian, chosen from the Windows display language, switchable in the
+  finish screen with Open folder and Play; a Play screen first when Setup finds a finished build of its release
+  (`installer/play.py`, [command-line.md](command-line.md)). English or Russian, chosen from the Windows display language, switchable in the
   window; every sentence is an id in `installer/text/<en|ru>.json`. A folder with `xcx-install.json` needs only the
   folder. An extracted game folder as the base game (`Form.extracted_game`, `installer/extracted.py` find) goes to the
   CLI as `--base FOLDER` without `--update`; a folder that is no extracted game is refused in the form. `--selftest [--shots DIR]` builds every screen in both languages and closes itself.
 - `tests/installer_gui_test.py`: event model, form, catalogs, cancel, the self-closing window and one end-to-end run
   of the CLI in `--verify` mode (needs `build/install-test` and `build/extracted/v121`; see its docstring).
+- `tests/installer_play_test.py`: the finished-build marker, where Setup looks for one, the arguments the game gets and
+  a fake game started from the window's and the CLI's `--play`.
 - `tests/installer_test.py`: bookkeeping with fake steps. `tests/installer_e2e.py`: a dev-mode run with the files of
   `config.local.toml`.
 
@@ -182,7 +195,9 @@ xcx.ini.example, VERSION  the default ini; the release string (the repository's 
 ## Linux release
 
 `tools/make_release_linux.py` builds the same setup for Linux and packs it as `XCX-Setup-<version>-linux.AppImage` (the static
-type-2 runtime: no libfuse2 needed on the host). The player makes it executable and starts it; on a Steam Deck, from
+type-2 runtime: no libfuse2 needed on the host) and as `XCX-Setup-<version>-linux.tar.gz`, the same folder unpacked
+under `XCX-Setup/` with the start script `xcx-setup`, for a launcher that deploys it where an AppImage cannot run
+(a Flatpak sandbox has no FUSE). The player makes the AppImage executable and starts it; on a Steam Deck, from
 Desktop Mode. Building the release also needs Git, `make`, `pkg-config` and `file` (used by appimagetool).
 Use Xvfb for the installer selftests on a headless machine. The bundled Tcl/Tk 9.0.4 is rebuilt with
 Xft against the sniper sysroot so Russian text uses system TrueType fonts. The setup builds the game into the folder they pick, as on Windows, and the game is `xcx` there with
@@ -190,6 +205,7 @@ Xft against the sniper sysroot so Russian text uses system TrueType fonts. The s
 
 ```
 AppRun                starts python/bin/python3 -m installer.gui (no bytecode written into the read-only mount)
+xcx-setup             the tarball's start script: AppRun with the same arguments
 xcx-setup.desktop, xcx-setup.png
 installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, VERSION   as on Windows
 python/               python-build-standalone 3.14 (with tkinter) + the installer's packages; a .pth puts the folder,
@@ -210,7 +226,12 @@ bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0
 - The setup's temp folder is `.setup-temp` inside the install folder (`--temp` changes it): the AppImage is mounted
   read-only, and a Steam Deck's `/home` is often too full for the generated C while the game goes to the SD card.
 - The game keeps Mesa's shader cache in `mesa-cache` beside `xcx` unless `MESA_SHADER_CACHE_DIR` is set, for the
-  same reason: RADV fills its default folder in `~/.cache` up to 1 GB.
+  same reason: RADV fills its default folder in `~/.cache` up to 1 GB. With NVIDIA's driver loaded, its cache goes to
+  `nvidia-cache` beside `xcx` unless `__GL_SHADER_DISK_CACHE_PATH` is set (`runtime/vk_device.c`).
+- Nothing else goes outside the install folder: the setup's tools get `TMPDIR` in the temp folder
+  (`installer/cli.py`), the game's settings, saves, logs, mods and caches live beside `xcx`, and the AppImage
+  remembers no install folder unless `XCX_SETUP_RECENT` names a file for it (`installer/recent.py`). The one exception is the system's own font cache: the setup
+  window's Tk asks fontconfig for fonts, and fontconfig may refresh `~/.cache/fontconfig` as it would for any program.
 - The window follows `LANG` for English or Russian, cancels through SIGTERM to the CLI's process group (the CLI handles
   it as Ctrl+Break on Windows) and opens the finished folder with `xdg-open`.
 - Requirements beyond Windows': Linux 6.7 or later (the write watch, `docs/building.md`) and glibc 2.34.
@@ -221,23 +242,24 @@ bin/                  xcx_xlate, hactool, ninja, libSDL3.so.0
 `MOD_MAIN_BASE`, all the runtime reads of the module layout, from `tools/runtime-layout/layout.h`; nothing game-derived
 reaches a runner or a package except the committed execution profile, which also builds the Windows `libxcxrt.a`.
 
-Each run builds `XCX-Setup-<version>-windows.zip` on Windows and `XCX-Setup-<version>-linux.AppImage` on Linux, with
+Each run builds `XCX-Setup-<version>-windows.zip` on Windows and `XCX-Setup-<version>-linux.AppImage` and
+`XCX-Setup-<version>-linux.tar.gz` on Linux, with
 `check_content`, the check-only installer pass and the window's `--selftest` inside `tools/make_release.py` and
 `tools/make_release_linux.py`. Runners have no GPU, so the host check runs on Mesa's CPU Vulkan driver
 (`.github/actions/software-vulkan`). A second runner then unpacks each package and repeats those checks
-(`tools/check_release.py`). Downloads are cached from `toolchain/release-dl/`.
+(`tools/check_release.py`), and on Linux also starts a fake build with `--play` through `AppRun` and `xcx-setup`. Downloads are cached from `toolchain/release-dl/`.
 
 For a test build, push a tag `test-<name>` on the commit to try (`git tag test-issue123 && git push origin
 test-issue123`), or start the Release workflow on a branch from the Actions tab (`gh workflow run release.yml --ref
 <branch>`). Either only builds and checks: no draft release is made. The packages are the run's artifacts, named
-`XCX-Setup-test-<name>-windows.zip` and `XCX-Setup-test-<name>-linux.AppImage` for a tag (the `VERSION` for a run
+`XCX-Setup-test-<name>-windows.zip`, `XCX-Setup-test-<name>-linux.AppImage` and `-linux.tar.gz` for a tag (the `VERSION` for a run
 started by hand); link the run in the issue for the reporter.
 
 For a release:
 
 1. On the release branch, bump `VERSION` and push.
 2. Tag that commit `v<VERSION>` and push the tag. A tag that differs from `VERSION` stops the run. A passing run
-   creates a draft release with both packages and generated notes.
+   creates a draft release with the three packages and generated notes.
 3. Prove the packages locally. `--prove` reads `generated/upd`, `build/extracted/upd` and `build/upd/shaders`, which are
    game-derived, so it never runs on a runner. Its shader probes need a census: make one once, from the shaders a local
    2.0.0 build met in play (`build/upd/shader-programs.bin`). Download both packages from the draft, then:
