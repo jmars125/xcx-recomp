@@ -878,6 +878,19 @@ static void stick_rows(float scale) {
     stick_view(scale);
 }
 
+// "in use: Right" under Automatic: the confirm button Automatic picked for the connected pad (input.c pad_layout_get),
+// so the row says which physical button confirms without opening the description (#225). NULL without a pad or when a
+// button is chosen outright.
+static const char *pad_layout_note(void) {
+    int l = input_pad_layout();
+    const char *set = cfg_value("XCX_PAD_LAYOUT");
+    if (l < 0 || (strcasecmp(set, "nintendo") == 0 || strcasecmp(set, "xbox") == 0)) return nullptr;
+    static char note[96];
+    snprintf(note, sizeof note, menu_text(UI_MENU_PAD_LAYOUT_IN_USE),
+             menu_text(l == PAD_LAYOUT_XBOX ? UI_MENU_PAD_LAYOUT_XBOX : UI_MENU_PAD_LAYOUT_NINTENDO));
+    return note;
+}
+
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
     static const char *const glyph_values[] = {"auto","original","playstation","xbox","steam","keyboard"};
@@ -891,7 +904,7 @@ static void tab_controls(float scale) {
     opt_choice_list("XCX_GLYPH_APPEARANCE", UI_MENU_GLYPH_APPEARANCE, appearance_values, appearance_names, 2,
                     UI_MENU_GLYPH_APPEARANCE_DESC);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
-    opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC);
+    opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
     opt_toggle("XCX_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
     opt_slider("XCX_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
     opt_slider("XCX_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");

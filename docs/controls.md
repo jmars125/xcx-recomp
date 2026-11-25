@@ -2,13 +2,13 @@
 
 Input comes from the first SDL3 gamepad, the keyboard and the mouse, merged into one Switch controller (`runtime/input_win.c`). Buttons are ORed; each stick takes the source with the larger deflection. Keys and mouse buttons count only while the game window is in the foreground. `XCX_INPUT=none` disables both (automated runs). `XCX_*` settings can also be set in `xcx.ini` next to `xcx.exe` (`input = none`, `motion = 0`, `rumble = 0`); the environment overrides the file. `XCX_RUMBLE_STRENGTH` is the rumble strength in percent (0 to 300, default 130; 0 is the same as `rumble = 0`). `XCX_RUMBLE_CURVE` is the exponent applied to the amplitude before the strength (0.2 to 1.5, default 0.6; lower makes weak pulses stronger, 1 is linear). `XCX_RUMBLE_TRIGGERS=1` also drives the impulse triggers of an Xbox pad.
 
-`XCX_PAD_LAYOUT` (`pad_layout`, the *Confirmation/Cancel* row on the Controls tab, live; options Automatic, Default and Flipped) picks which face button is Switch A:
+`XCX_PAD_LAYOUT` (`pad_layout`, the *Confirm button* row on the Controls tab, live; options Automatic, Right and Bottom) picks which face button is Switch A, the game's confirm button:
 
-- `nintendo` (shown as *Default*): by position, as on a Switch, the original layout (the table below).
-- `xbox` (shown as *Flipped*, which swaps the confirmation and cancel buttons): south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
+- `nintendo` (shown as *Right*): by position, as on a Switch, the original layout (the table below). Confirm is the right face button on every pad; on an Xbox pad that button is labelled B, and with Xbox button icons the prompts show B for confirm, as the XC3 recomp does.
+- `xbox` (shown as *Bottom*; confirm and cancel swap places compared with the original): south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
 - `auto` (default): `nintendo` for a pad whose east button SDL reports labelled A (Switch Pro Controller, Nintendo-layout pads), `xbox` for the others.
 
-The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. The game's button prompts stay Switch letters by default. The experimental HUD style preference below is separate from this input layout.
+The log names the layout in effect (`input: gamepad layout ...`); the menu shows the button it picked under *Automatic* ("in use: Right"). The game's button prompts stay Switch letters by default. The experimental HUD style preference below is separate from this input layout.
 
 | Switch | Gamepad (by position, Nintendo layout) | Keyboard and mouse | Action in the world |
 |---|---|---|---|
@@ -117,7 +117,7 @@ Original leaves game artwork unchanged. Automatic also keeps native virtual labe
 
 **Button Appearance: Colored (default) / Standard** is separate from style and bindings. Colored face buttons uses licensed PlayStation, Xbox and Steam face-button variants. Other buttons, keyboard/mouse and native Nintendo retain Standard. Automatic honors the applicable appearance choice.
 
-The existing **Confirmation/Cancel** option changes physical mappings: which physical button emits A/B/X/Y. Glyph style and appearance only change displayed artwork. They do not replace that option or alter your rebinding settings.
+The existing **Confirm button** option changes physical mappings: which physical button emits A/B/X/Y. Glyph style and appearance only change displayed artwork. They do not replace that option or alter your rebinding settings.
 
 The weapon guide uses the current X binding (Space on the default keyboard map); field A, Target and Board guides use A, R and ZL respectively. The default keyboard ZL has multiple bindings, so Board retains native virtual artwork. Unsupported bindings keep the original virtual label for that guide.
 
