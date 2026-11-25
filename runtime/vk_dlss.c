@@ -821,6 +821,21 @@ static int perf_quality(uint32_t w, uint32_t ow) {
     return k >= 0.66 ? 2 : k >= 0.57 ? 1 : k >= 0.49 ? 0 : 3;
 }
 
+// The overlay's Upscaler line (menu.cpp perf_upscaler): the mode DLSS last ran in, named as NVIDIA names it. "DLAA"
+// when the scene is drawn at the game resolution (render scale 100), "" while DLSS is on but has not run yet (no 3D
+// scene so far), NULL while it is off.
+const char *vk_dlss_mode(void) {
+    if (!dl_active()) return NULL;
+    if (!D.last) return "";
+    switch (perf_quality(D.last->w, D.last->ow)) {
+    case NGX_PERFQ_DLAA: return "DLAA";
+    case 2: return "Quality";
+    case 1: return "Balanced";
+    case 0: return "Performance";
+    default: return "Ultra Performance";
+    }
+}
+
 static void evaluate(VkExec *ex, const VkExecTarget *dst) {
     const VkExecTarget *t = &D.color, *z = &D.depth;
     uint32_t w = t->width, h = t->height, ow = dst->width, oh = dst->height;
