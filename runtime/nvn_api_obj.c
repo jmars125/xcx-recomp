@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "gfx.h"
 #include "host.h"
 #include "nvn_api.h"
@@ -670,6 +671,46 @@ static void sleep_until(uint64_t deadline) {
     }
 }
 
+// Issues 186, 192, 210, 211: on the Switch an image comes back to WindowAcquireTexture only after the display let go of
+// it, so after the GPU finished the frame drawn into it: the game never runs more than its active images ahead of the
+// GPU, and it rewrites vertex and storage data of earlier frames without a fence. Here the acquire only waits for the
+// display time, so a GPU-bound game (a Steam Deck on a 1080p screen, a 2 GB laptop card, 1440p and up on any card)
+// ran several frames ahead, and the GPU drew meshes from data the game had already overwritten for a later frame:
+// polygons stretched across the screen. Waiting for the submissions before the image's previous present restores the
+// Switch's bound. XCX_ACQUIRE_WAIT=0 turns it off.
+static void acquire_gpu_wait(win_t *o, int idx) {
+    static int on = -1;
+    static volatile int64_t acquires, behind, wait_ns;
+    if (on < 0) {
+        const char *v = cfg_get("XCX_ACQUIRE_WAIT");
+        on = !v || !*v || strcmp(v, "0");
+        rt_log("nvn: window acquire %s", on ? "waits for the GPU to finish the image's previous frame (Switch behaviour)"
+                                            : "does not wait for the GPU (XCX_ACQUIRE_WAIT=0)");
+    }
+    uint64_t f = idx < 4 ? o->gpu[idx] : 0;
+    if (!f) return;
+    const GfxBackend *b = gfx_backend();
+    int64_t n = __atomic_add_fetch(&acquires, 1, __ATOMIC_RELAXED);
+    if (b->fence_done() < f) {
+        __atomic_add_fetch(&behind, 1, __ATOMIC_RELAXED);
+        if (on) {
+            uint64_t p0 = perf_begin(), t0 = kern_now_ns();
+            b->fence_wait(f, 1000000000ull);   // a hung GPU only slows the game down, it does not stop it
+            perf_end(PERF_FENCE, p0);
+            __atomic_add_fetch(&wait_ns, (int64_t)(kern_now_ns() - t0), __ATOMIC_RELAXED);
+        }
+    }
+    if (n % 1800 == 0) {   // the GPU still ran the image's previous frame at that many acquires
+        int64_t k = __atomic_exchange_n(&behind, 0, __ATOMIC_RELAXED), ns = __atomic_exchange_n(&wait_ns, 0, __ATOMIC_RELAXED);
+        if (on)
+            rt_log("nvn: window acquire: the GPU was still on the image's previous frame at %lld of the last 1800 acquires; "
+                   "%.2f ms waited on average", (long long)k, k ? ns / 1e6 / k : 0.0);
+        else
+            rt_log("nvn: window acquire: the GPU was still on the image's previous frame at %lld of the last 1800 acquires "
+                   "(not waited for)", (long long)k);
+    }
+}
+
 // NVNwindowAcquireTextureResult nvnWindowAcquireTexture(NVNwindow *w, NVNsync *s, int *index): blocks here, not in the
 // present, until the image's previous present plus one period has passed (the game often presents with a lock held).
 // That is the time the next frame goes to the display, so the image is free as soon as that time is reached.
@@ -686,6 +727,7 @@ NVN_API(nvnWindowAcquireTexture) {
         sleep_until(at);
         perf_end(PERF_PACE, p0);
     }
+    acquire_gpu_wait(o, idx);
     // The sync means "the display no longer reads this image". Presents are copies queued in submit order, so it is
     // already satisfied: fenced = 3 with fence 0.
     if (s) {
@@ -715,6 +757,7 @@ NVN_API(nvnQueuePresentTexture) {
     gfx_backend()->present(t, o->crop, slot);
     o->ticket[idx] = o->presents;
     o->avail[idx] = slot + period;
+    o->gpu[idx] = nvn_fence_last();
     frame_step_present(slot, o->interval);   // frame_rate.c: the real-time step follows the display times
     rt_frame_presented(t, o->presents);
 }
