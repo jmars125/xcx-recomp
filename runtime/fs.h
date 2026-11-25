@@ -27,6 +27,7 @@ enum { FS_ENTRY_DIRECTORY = 0, FS_ENTRY_FILE = 1 };                 // nn::fs::D
 // Handles 0x1_0000_0000 + j; host storage uses 0x2_0000_0000 + j (files) and 0x3_0000_0000 + j (directories).
 #define ROMFS_HANDLE_BASE 0x100000000ull
 int romfs_owns(const char *path);                          // path is on the mounted RomFS ("<mount>:...")
+const char *romfs_mount_name(void);                        // the RomFS mount's name; "" before MountRom
 int romfs_handle(uint64_t h);                              // h is a RomFS file handle
 uint32_t romfs_mount(const char *name);                    // nn::fs::MountRom; a second name is fatal
 uint32_t romfs_open(uint64_t *out, const char *path, int mode);

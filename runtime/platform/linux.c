@@ -28,6 +28,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/utsname.h>
@@ -772,6 +773,45 @@ int64_t plat_file_size(const char *path) {
     return stat(path, &st) ? -1 : (int64_t)st.st_size;
 }
 
+int plat_file_stat(const char *path, int64_t *size, int64_t *mtime_ns) {
+    struct stat st;
+    if (stat(path, &st)) return 0;
+    *size = (int64_t)st.st_size;
+    *mtime_ns = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+    return 1;
+}
+
+// File systems known to keep a change time no copy tool can set and an inode number of the file's own (statfs
+// f_type). Not vfat, exfat, ntfs through FUSE or network file systems: some report the last-write time as the change
+// time, or make inode numbers up per mount.
+static int keeps_identity(long type) {
+    static const unsigned long known[] = {
+        0xEF53,      // ext2, ext3, ext4
+        0x9123683E,  // btrfs
+        0x58465342,  // xfs
+        0xF2F52010,  // f2fs
+        0x2FC12FC1,  // zfs
+        0xCA451A4E,  // bcachefs
+        0x01021994,  // tmpfs
+        0x794C7630,  // overlayfs
+    };
+    for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
+        if ((unsigned long)(unsigned int)type == known[i]) return 1;
+    return 0;
+}
+
+int plat_file_identity(const char *path, uint64_t id[4]) {
+    struct stat st;
+    struct statfs fs;
+    if (statfs(path, &fs) || !keeps_identity((long)fs.f_type)) return 0;
+    if (stat(path, &st) || (!st.st_ctim.tv_sec && !st.st_ctim.tv_nsec)) return 0;
+    id[0] = (uint64_t)st.st_ctim.tv_sec * 1000000000u + (uint64_t)st.st_ctim.tv_nsec;
+    id[1] = (uint64_t)st.st_ino;
+    id[2] = 0;
+    id[3] = (uint64_t)st.st_dev;
+    return 1;
+}
+
 // The owner's write permission stands for Windows' read-only attribute.
 int plat_file_set_readonly(const char *path, int on) {
     struct stat st;
@@ -1049,6 +1089,73 @@ void plat_reexec(void) {
     execv("/proc/self/exe", argv);
     fprintf(stderr, "FATAL: re-running the process failed (%s)\n", strerror(errno));
     _exit(70);
+}
+
+// Whether environment entry e ("NAME=value") is named name.
+static int env_named(const char *e, const char *name) {
+    size_t n = strlen(name);
+    return !strncmp(e, name, n) && e[n] == '=';
+}
+
+int plat_start_copy(const char *set, const char *const *drop) {
+    static char args[16384];
+    char *argv[256];
+    int argc = 0;
+    FILE *f = fopen("/proc/self/cmdline", "rbe");
+    size_t n = f ? fread(args, 1, sizeof args - 1, f) : 0;
+    if (f) fclose(f);
+    args[n] = 0;
+    for (size_t i = 0; i < n && argc < 255; i += strlen(args + i) + 1) argv[argc++] = args + i;
+    argv[argc] = NULL;
+    if (!argc) return 0;
+    // the copy's environment: this process's, less drop and set's name, plus set; this process's own isn't touched
+    char setname[256] = "";
+    const char *eq = set ? strchr(set, '=') : NULL;
+    if (eq && (size_t)(eq - set) < sizeof setname) memcpy(setname, set, (size_t)(eq - set));
+    size_t count = 0;
+    for (char **e = environ; e && *e; e++) count++;
+    char **envp = malloc((count + 2) * sizeof *envp);
+    if (!envp) return 0;
+    size_t k = 0;
+    for (char **e = environ; e && *e; e++) {
+        int skip = setname[0] && env_named(*e, setname);
+        for (const char *const *d = drop; d && *d && !skip; d++) skip = env_named(*e, *d);
+        if (!skip) envp[k++] = *e;
+    }
+    if (set) envp[k++] = (char *)set;
+    envp[k] = NULL;
+    // no descriptor of this process goes to the copy, whether or not it was opened with O_CLOEXEC
+    posix_spawn_file_actions_t fa;
+    int have_fa = posix_spawn_file_actions_init(&fa) == 0;
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+    if (have_fa) posix_spawn_file_actions_addclosefrom_np(&fa, 3);
+#endif
+    pid_t pid;
+    int ok = posix_spawn(&pid, "/proc/self/exe", have_fa ? &fa : NULL, NULL, argv, envp) == 0;
+    if (have_fa) posix_spawn_file_actions_destroy(&fa);
+    free(envp);
+    return ok;
+}
+
+// Ended: no /proc entry, or a zombie its parent hasn't reaped yet (the launcher may not wait for it).
+static int process_ended(uint32_t pid) {
+    char path[64], buf[512];
+    snprintf(path, sizeof path, "/proc/%u/stat", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 1;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    const char *e = strrchr(buf, ')');
+    return !e || e[1] != ' ' || e[2] == 'Z' || e[2] == 'X';
+}
+
+int plat_wait_process_exit(uint32_t pid, uint32_t ms) {
+    for (uint32_t t = 0;; t += 50) {
+        if (process_ended(pid)) return 1;
+        if (t >= ms) return 0;
+        usleep(50000);
+    }
 }
 
 int plat_mem_read(uint64_t addr, void *out, size_t n) {

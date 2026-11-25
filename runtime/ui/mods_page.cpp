@@ -1,12 +1,18 @@
 #include "mods_page.h"
 #include "imgui.h"
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 extern "C" {
 #include "mods.h"
 #include "mod_settings.h"
 #include "mod_library.h"
+#include "romfs_mods.h"
+#include "bdat_merge.h"
 #include "ui_text.h"
+// host.h is C only: the one the page needs, as declared there
+int rt_restart_game(void);
+int rt_restart_started(void);
 }
 #ifdef XCX_MOD_UI_TESTING
 #include "imgui_internal.h"
@@ -16,12 +22,237 @@ static ImVec2 mods_row_low[MOD_UI_MAX],mods_row_high[MOD_UI_MAX];
 static ImGuiID mods_button_id[4];static ImGuiWindow *mods_button_window[4];
 static ImVec2 mods_button_low[4],mods_button_high[4];static int mods_button_count;
 static ImVec2 mods_retry_low,mods_retry_high;static bool mods_retry_visible;
+// the Mod priority section as drawn (tests/mods_priority_check.cpp): each line and how it looks (P a priority row,
+// H the merges' heading, R the restart line, O left out, Y caveat, G grey, N a summary; M the Merge now button, W
+// merging, X the next start's heading, then its lines as above, Z none to merge, S the start-up lines' heading, A the
+// merge-automatically box, D a mod's own lines under its row, E none for it, U Revert to the start-up list, Q Restart
+// now), and the rows' Up buttons
+static char prio_lines[64][340],prio_tag[64];static int prio_count;static ImVec2 prio_up_low[32],prio_up_high[32];
+static ImVec2 prio_off_low[32],prio_off_high[32];static bool prio_off_shown[32];   // Turn off buttons; T lines: tags
+static ImVec2 prio_merge_low,prio_merge_high,prio_auto_low,prio_auto_high,prio_undo_low,prio_undo_high,prio_restart_low,prio_restart_high;
+static ImVec2 prio_tag_low[32],prio_tag_high[32];   // the rows' notes, which open their lines (D)
+static ImVec2 prio_yes_low,prio_yes_high;            // the restart confirmation's Restart (C: its question)
+static void prio_line(char tag,const char *text){if(prio_count<64){prio_tag[prio_count]=tag;snprintf(prio_lines[prio_count++],sizeof prio_lines[0],"%s",text);}}
+#define PRIO_LINE(tag,text) prio_line(tag,text)
+#else
+#define PRIO_LINE(tag,text) ((void)0)
 #endif
 static const char *status_name(int status) {
     switch(status) {case MOD_LOADED:return "Loaded";case MOD_DISABLED:return "Disabled";case MOD_INCOMPATIBLE:return "Incompatible";case MOD_FAULTED:return "Faulted";default:return "Starting";}
 }
 static char requested_owner[65],requested_page[65];
 void mods_page_select(const char *owner,const char *page){snprintf(requested_owner,sizeof requested_owner,"%s",owner);snprintf(requested_page,sizeof requested_page,"%s",page);}
+
+// A merge's lines (this run's, or with ahead those made for the next start): the summaries plain, changes left out
+// orange, caveats yellow, mods that add nothing or are partly alike grey. The count drawn.
+static void merge_line(int kind,const char *line) {
+    if(kind>=3){ImGui::TextDisabled("%s",line);return;}   // a mod that adds nothing, or partly alike: no conflict
+    if(kind)ImGui::PushStyleColor(ImGuiCol_Text,kind==1?ImVec4(1.0f,0.7f,0.4f,1):ImVec4(1.0f,0.9f,0.5f,1));
+    ImGui::TextUnformatted(line);
+    if(kind)ImGui::PopStyleColor();
+}
+
+static int merge_lines(bool ahead) {
+    char line[320];int kind=0,i=0;
+    for(;ahead?bdat_merge_next_status(i,line,sizeof line,&kind):bdat_merge_status(i,line,sizeof line,&kind);++i){
+        PRIO_LINE(kind>=3?'G':kind==1?'O':kind==2?'Y':'N',line);
+        merge_line(kind,line);
+    }
+    return i;
+}
+
+// The game-file mods that are on, highest priority first as romfs-enabled.txt lists them (runtime/romfs_mods.c,
+// romfs_mods_priority), with Up and Down to change which one wins, and what the data table merges did this run
+// (runtime/bdat_merge_serve.c): a summary per file, then its changes left out (orange) and caveats (yellow). Shown
+// while any is on, or when a merge ran. The list file is read again once a second and after a change.
+// Once the list differs from what the game merged at start-up, Merge now merges it ahead (romfs_mods_premerge): its
+// lines and tags then show what the next start will have, and that start uses the files it made. "Merge
+// automatically" (bdat_merge_auto) has romfs_mods.c do that by itself after each change. A row's note opens that
+// mod's own lines from the merge reports under it; Revert to the start-up list undoes the changes, and Restart now
+// restarts the game (asking first in the world: anything since the last save would be lost).
+static void mod_priority(const ModLibView &v,bool idle) {
+    static char ids[32][65],tag[32][200];static int n,tag_flags[32],changed[32];
+    static uint64_t seen=~0ull;static double next;static bool stale,listchg,restart_failed,write_failed;static int ahead;
+    static char open_id[65],dl[64][320];static int dk[64],dn;   // the row whose lines are open, and its lines
+    static uint64_t ids_seen;   // a hash of ids at the last refresh: a list that changed since clears write_failed
+    double now=ImGui::GetTime();
+    // a new library view at once while it is idle; during a download or install (which publishes one per chunk) once
+    // a second, like the timer: each refresh looks at every mod file of the merged tables (romfs_mods_check_files)
+    if((v.generation!=seen&&idle)||now>=next){
+        romfs_mods_check_files();   // one look at the files for all rows; the calls below compare what it saw
+        listchg=romfs_mods_list_changed()!=0;
+        n=romfs_mods_priority(ids,32);stale=romfs_mods_tables_changed()!=0;seen=v.generation;next=now+1.0;
+        uint64_t h=1469598103934665603ull;   // fnv-1a over the ids in order
+        for(int i=0;i<n;++i)for(const char *c=ids[i];;++c){h=(h^(unsigned char)*c)*1099511628211ull;if(!*c)break;}
+        if(h!=ids_seen)write_failed=false;   // the list changed some other way (Revert, the library, another program)
+        ids_seen=h;
+        ahead=stale?romfs_mods_premerge_state():0;
+        if(ahead==1||(stale&&!ahead&&romfs_mods_auto_merge()))next=now+0.25;   // merging, or about to: look again soon
+        for(int i=0;i<n;++i){
+            changed[i]=stale?romfs_mod_changed(ids[i]):0;
+            bool got=stale&&ahead==2?bdat_merge_next_mod_tag(ids[i],tag[i],sizeof tag[i],&tag_flags[i])
+                                    :bdat_merge_mod_tag(ids[i],tag[i],sizeof tag[i],&tag_flags[i]);
+            if(!got)tag[i][0]=0;
+        }
+        if(open_id[0])dn=bdat_merge_mod_lines(open_id,stale&&ahead==2,dl,dk,64);
+    }
+    bool tags_now=!stale||ahead==2;   // tags of the list as it is: this run's, or those merged ahead for it
+    char line[320];int kind=0;bool merges=bdat_merge_status(0,line,sizeof line,&kind)!=0;
+    if(n<1&&!merges&&!stale)return;   // one mod on stays listed, for its Turn off
+    ImGui::Spacing();ImGui::SeparatorText(menu_text(UI_MODS_PRIORITY));
+    bool autom=romfs_mods_auto_merge()!=0;
+    if(ImGui::Checkbox(menu_text(UI_MODS_MERGE_AUTO),&autom)){romfs_mods_set_auto_merge(autom);next=0;}
+    PRIO_LINE('A',menu_text(UI_MODS_MERGE_AUTO));
+#ifdef XCX_MOD_UI_TESTING
+    prio_auto_low=ImGui::GetItemRectMin();prio_auto_high=ImGui::GetItemRectMax();
+#endif
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",menu_text(UI_MODS_MERGE_AUTO_DESC));
+    if(n>=1){
+        ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",menu_text(UI_MODS_PRIORITY_NOTE));ImGui::PopTextWrapPos();
+        int move=-1,off=-1;bool up=false;
+        for(int i=0;i<n;++i){
+            const char *name=ids[i];
+            for(int k=0;k<v.count;++k)if(!strcmp(v.rows[k].id,ids[i])&&v.rows[k].name[0])name=v.rows[k].name;
+            ImGui::PushID(ids[i]);
+            ImGui::BeginDisabled(!idle||i==0);if(ImGui::Button(menu_text(UI_MODS_UP))){move=i;up=true;}ImGui::EndDisabled();
+#ifdef XCX_MOD_UI_TESTING
+            if(i<32){prio_up_low[i]=ImGui::GetItemRectMin();prio_up_high[i]=ImGui::GetItemRectMax();}
+#endif
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!idle||i==n-1);if(ImGui::Button(menu_text(UI_MODS_DOWN))){move=i;up=false;}ImGui::EndDisabled();
+            ImGui::SameLine();   // every mod can be turned off from here, beside its Up and Down
+            ImGui::BeginDisabled(!idle);if(ImGui::Button(menu_text(UI_MODS_TURN_OFF)))off=i;ImGui::EndDisabled();
+#ifdef XCX_MOD_UI_TESTING
+            if(i<32){prio_off_low[i]=ImGui::GetItemRectMin();prio_off_high[i]=ImGui::GetItemRectMax();prio_off_shown[i]=true;}
+#endif
+            ImGui::SameLine();ImGui::Text("%d. %s",i+1,name);PRIO_LINE('P',name);
+            // the mods behind the restart line: updated, or turned on, since the game read its tables
+            if(changed[i]){
+                const char *what=menu_text(changed[i]==1?UI_MODS_CHANGED_UPDATED:UI_MODS_CHANGED_ON);
+                ImGui::SameLine();ImGui::TextColored(ImVec4(1.0f,0.82f,0.1f,1),"(%s)",what);PRIO_LINE('V',what);
+            }
+            // what the merges said about it, after its name
+            if(tag[i][0]&&tags_now){
+                ImGui::SameLine();
+                int f=tag_flags[i];
+                ImVec4 c=f&BDAT_TAG_LEFT_OUT?ImVec4(1.0f,0.7f,0.4f,1):f&BDAT_TAG_CAVEAT?ImVec4(1.0f,0.9f,0.5f,1):ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+                // a button that looks like the note, so a controller reaches it too: it opens this mod's lines below
+                char label[220];snprintf(label,sizeof label,"(%s)##tag",tag[i]);
+                ImGui::PushStyleColor(ImGuiCol_Text,c);ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0,0,0,0));
+                if(ImGui::SmallButton(label)){
+                    if(!strcmp(open_id,ids[i]))open_id[0]=0;
+                    else{snprintf(open_id,sizeof open_id,"%s",ids[i]);dn=bdat_merge_mod_lines(open_id,stale&&ahead==2,dl,dk,64);}
+                }
+                ImGui::PopStyleColor(2);PRIO_LINE('T',tag[i]);
+#ifdef XCX_MOD_UI_TESTING
+                if(i<32){prio_tag_low[i]=ImGui::GetItemRectMin();prio_tag_high[i]=ImGui::GetItemRectMax();}
+#endif
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",menu_text(UI_MODS_DETAILS_HINT));
+                if(!strcmp(open_id,ids[i])){
+                    ImGui::Indent();ImGui::PushTextWrapPos(0);
+                    if(!dn){ImGui::TextDisabled("%s",menu_text(UI_MODS_DETAILS_NONE));PRIO_LINE('E',menu_text(UI_MODS_DETAILS_NONE));}
+                    for(int k=0;k<dn;++k){merge_line(dk[k],dl[k]);PRIO_LINE('D',dl[k]);}
+                    ImGui::PopTextWrapPos();ImGui::Unindent();
+                }
+            }
+            ImGui::PopID();
+        }
+        // a list that could not be written says so under the list (the log says why) until the next change works
+        if(write_failed){
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(ImVec4(1.0f,0.55f,0.5f,1),"%s",menu_text(UI_MODS_LIST_WRITE_FAILED));
+            ImGui::PopTextWrapPos();PRIO_LINE('F',menu_text(UI_MODS_LIST_WRITE_FAILED));
+        }
+        if(move>=0){write_failed=romfs_mods_move(ids[move],up)==0;next=0;}   // -1, nothing to move: no failure
+        // through the library, as its On box does, so its row above shows the change at once (the library says so
+        // itself when it can't write the list); a mod it doesn't list (a folder it can't read) straight in the list file
+        if(off>=0){
+            bool listed=false;
+            for(int k=0;k<v.count;++k)listed|=!strcmp(v.rows[k].id,ids[off])&&v.rows[k].installed;
+            if(listed){modlib_set_enabled(ids[off],0);write_failed=false;}else write_failed=!romfs_mods_set(ids[off],0);
+            next=0;
+        }
+    }
+    // The merges were made at start-up and the game doesn't read its tables again, so once the list would make them
+    // otherwise (romfs_mods_tables_changed) the lines say so first, instead of passing for the list as it is now, and
+    // offer to merge the list as it is now ahead of the restart.
+    if(merges||stale){
+        ImGui::PushTextWrapPos(0);
+        if(!stale){
+            ImGui::TextDisabled("%s",menu_text(UI_MODS_MERGES));PRIO_LINE('H',menu_text(UI_MODS_MERGES));
+            merge_lines(false);
+            ImGui::PopTextWrapPos();
+            return;
+        }
+        PRIO_LINE('R',menu_text(UI_MODS_MERGES_STALE));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.0f,0.82f,0.1f,1));ImGui::TextUnformatted(menu_text(UI_MODS_MERGES_STALE));ImGui::PopStyleColor();
+        // the buttons right under it, in a row: Merge now (unless merging by itself), Revert to the start-up list (once
+        // the list itself changed: an updated mod alone can't be undone here), Restart now
+        bool can_merge=ahead==0&&!autom;
+        if(can_merge){
+            if(ImGui::Button(menu_text(UI_MODS_MERGE_NOW))){if(romfs_mods_premerge()){ahead=1;next=now+0.25;}}
+            PRIO_LINE('M',menu_text(UI_MODS_MERGE_NOW));
+#ifdef XCX_MOD_UI_TESTING
+            prio_merge_low=ImGui::GetItemRectMin();prio_merge_high=ImGui::GetItemRectMax();
+#endif
+            ImGui::SameLine();
+        }
+        if(listchg){
+            if(ImGui::Button(menu_text(UI_MODS_UNDO))){if(romfs_mods_restore_list())modlib_reread_enabled();next=0;}
+            PRIO_LINE('U',menu_text(UI_MODS_UNDO));
+#ifdef XCX_MOD_UI_TESTING
+            prio_undo_low=ImGui::GetItemRectMin();prio_undo_high=ImGui::GetItemRectMax();
+#endif
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",menu_text(UI_MODS_UNDO_DESC));
+            ImGui::SameLine();
+        }
+        ImGui::BeginDisabled(ahead==1||rt_restart_started());
+        if(ImGui::Button(menu_text(UI_MODS_RESTART))){
+            restart_failed=false;
+            if(romfs_game_in_world())ImGui::OpenPopup("##restart");   // in the world: ask first
+            else if(!rt_restart_game())restart_failed=true;
+        }
+        ImGui::EndDisabled();
+        PRIO_LINE('Q',menu_text(UI_MODS_RESTART));
+#ifdef XCX_MOD_UI_TESTING
+        prio_restart_low=ImGui::GetItemRectMin();prio_restart_high=ImGui::GetItemRectMax();
+#endif
+        if(ImGui::BeginPopupModal("##restart",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoTitleBar)){
+            ImGui::TextUnformatted(menu_text(UI_MODS_RESTART_CONFIRM));PRIO_LINE('C',menu_text(UI_MODS_RESTART_CONFIRM));
+            ImGui::BeginDisabled(rt_restart_started());
+            if(ImGui::Button(menu_text(UI_MODS_RESTART_YES))){ImGui::CloseCurrentPopup();if(!rt_restart_game())restart_failed=true;}
+            ImGui::EndDisabled();
+#ifdef XCX_MOD_UI_TESTING
+            prio_yes_low=ImGui::GetItemRectMin();prio_yes_high=ImGui::GetItemRectMax();
+#endif
+            ImGui::SameLine();
+            if(ImGui::Button(menu_text(UI_MODS_RESTART_NO))||ImGui::IsKeyPressed(ImGuiKey_Escape,false)||
+               ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight,false))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        if(can_merge)ImGui::TextDisabled("%s",menu_text(UI_MODS_MERGE_NOW_DESC));
+        if(restart_failed)ImGui::TextColored(ImVec4(1.0f,0.55f,0.5f,1),"%s",menu_text(UI_MODS_RESTART_FAILED));
+        // then what the next start will have; with merge automatically on there's no button: romfs_mods.c merges a moment after the last change, so the
+        // wait for that already counts as merging
+        if(ahead==1||(ahead==0&&autom)){
+            ImGui::TextDisabled("%s",menu_text(UI_MODS_MERGING));PRIO_LINE('W',menu_text(UI_MODS_MERGING));
+        }else if(ahead==2){
+            ImGui::TextDisabled("%s",menu_text(UI_MODS_MERGES_NEXT));PRIO_LINE('X',menu_text(UI_MODS_MERGES_NEXT));
+            if(!merge_lines(true)){ImGui::TextUnformatted(menu_text(UI_MODS_MERGES_NEXT_NONE));PRIO_LINE('Z',menu_text(UI_MODS_MERGES_NEXT_NONE));}
+        }
+        // what the game is running with, out of the way under a heading of its own
+        if(merges){
+            ImGui::Spacing();
+            PRIO_LINE('S',menu_text(UI_MODS_MERGES_START));
+            if(ImGui::TreeNode("##start","%s",menu_text(UI_MODS_MERGES_START))){
+                ImGui::TextDisabled("%s",menu_text(UI_MODS_MERGES));PRIO_LINE('H',menu_text(UI_MODS_MERGES));
+                merge_lines(false);
+                ImGui::TreePop();
+            }
+        }
+        ImGui::PopTextWrapPos();
+    }
+}
 
 // The mod library (runtime/mod_library.c): its mods and the installed ones on the left, the picked one's text and
 // buttons on the right. Jobs run on the library's thread; this only reads its view and asks. Returns whether a row
@@ -71,6 +302,21 @@ static bool library(float scale,bool focus_first) {
         if(r.description[0])ImGui::TextWrapped("%s",r.description);
         if(r.notes[0]){ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",r.notes);ImGui::PopTextWrapPos();}
         ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",menu_text(strcmp(r.kind,"lua")?UI_MODS_KIND_ROMFS:UI_MODS_KIND_LUA));ImGui::PopTextWrapPos();
+        if(r.installed&&r.enabled&&!strcmp(r.kind,"romfs")){   // its place in the Mod priority list below
+            static char rank_id[65];static int rank,ranks;static double rank_next;static uint64_t rank_gen=~0ull;
+            if(strcmp(rank_id,r.id)||(v.generation!=rank_gen&&idle)||ImGui::GetTime()>=rank_next){   // as mod_priority
+                rank_gen=v.generation;
+                char ids[32][65];ranks=romfs_mods_priority(ids,32);rank=0;
+                for(int k=0;k<ranks;++k)if(!strcmp(ids[k],r.id))rank=k+1;
+                snprintf(rank_id,sizeof rank_id,"%s",r.id);rank_next=ImGui::GetTime()+1.0;
+            }
+            if(rank){
+                ImGui::TextDisabled(menu_text(UI_MODS_PRIORITY_OF),rank,ranks);
+#ifdef XCX_MOD_UI_TESTING
+                char t[96];snprintf(t,sizeof t,menu_text(UI_MODS_PRIORITY_OF),rank,ranks);PRIO_LINE('K',t);
+#endif
+            }
+        }
         if(r.in_library&&!strcmp(r.kind,"romfs")&&(!r.installed||r.update)&&r.homepage[0]){
             ImGui::PushTextWrapPos(0);ImGui::TextDisabled(menu_text(UI_MODS_SOURCE),r.size/1048576.0,r.homepage);ImGui::PopTextWrapPos();
         }
@@ -93,12 +339,13 @@ static bool library(float scale,bool focus_first) {
         if(strcmp(confirm_remove,r.id))confirm_remove[0]=0;   // another mod picked: the second press starts over
         ImGui::PopID();ImGui::EndTable();
     }
+    mod_priority(v,idle);
     return focused;
 }
 
 void mods_page(float scale,float bottom,bool focus_first) {
 #ifdef XCX_MOD_UI_TESTING
-    mods_widget_count=0;mods_retry_visible=false;mods_button_count=0;
+    mods_widget_count=0;mods_retry_visible=false;mods_button_count=0;prio_count=0;memset(prio_off_shown,0,sizeof prio_off_shown);
 #endif
     mod_ui_interaction(1);
     static ModSnapshot snapshot;mod_ui_snapshot(&snapshot);

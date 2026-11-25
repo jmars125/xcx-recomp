@@ -1,0 +1,71 @@
+# The data table merge's tests on Linux and Windows: the writer's round trip and the merge rules of docs/bdat-merge.md
+# (tests/bdat_merge_test.py, through tests/bdat_merge_check.c built from runtime/bdat_merge.c), and the F1 Mods tab's
+# Mod priority section drawn headless (tests/mods_priority_test.py), romfs_mods.c's "what changed since start-up"
+# (tests/romfs_mods_test.py), then a compile of the merge's game side (runtime/bdat_merge_serve.c and the files
+# below). The tables and mods are made up by the tests; no game files. Windows builds with MSYS2 UCRT64 clang, the
+# mingw target the release's llvm-mingw has; Linux with the runner's clang.
+name: Data table merge tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            clang: clang
+          - runner: windows-2025
+            clang: C:\msys64\ucrt64\bin\clang.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A core update (pacman, bash, msys2-runtime) makes the first -Syu close MSYS2 before it installs anything, so
+      # update twice, then install.
+      - if: runner.os == 'Windows'
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+          C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-zstd"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y libzstd-dev
+      - name: Tests
+        shell: bash
+        env:
+          XCX_CLANG: ${{ matrix.clang }}
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:$PATH"
+          # The tests skip themselves without clang; here that would be a pass that tested nothing.
+          "$XCX_CLANG" --version
+          python tests/bdat_merge_test.py -v
+          python tests/mods_priority_test.py -v
+          python tests/romfs_mods_test.py -v
+      # The merge's game side (runtime/bdat_merge_serve.c: its threads, the quick check and the cache check; the
+      # archive hook and the mod list in romfs_mods.c; the library's lists in mod_library.c; Restart in main.c) and the
+      # platform file it needs file times, file identities and the restart's process start from are built only with
+      # the whole game, which these runners don't build; compile them here so a mistake on either system shows.
+      # linux.c's one SDL call gets a declaration of its own, since the runner has no SDL3 package.
+      - name: Compile the merge's game side
+        shell: bash
+        env:
+          CLANG: ${{ matrix.clang }}
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:$PATH"
+          stub="$RUNNER_TEMP/sdl"
+          mkdir -p "$stub/SDL3"
+          printf '#include <stdbool.h>\nbool SDL_SetClipboardText(const char *text);\n' > "$stub/SDL3/SDL_clipboard.h"
+          plat=runtime/platform/linux.c
+          if [ "$RUNNER_OS" = Windows ]; then plat=runtime/platform/win32.c; fi
+          for f in runtime/bdat_merge_serve.c runtime/romfs_mods.c runtime/mod_library.c runtime/main.c \
+                   runtime/fs_host.c "$plat"; do
+            "$CLANG" -std=gnu11 -fsyntax-only -Wall -Werror=implicit-function-declaration -Iruntime -I"$stub" "$f"
+          done

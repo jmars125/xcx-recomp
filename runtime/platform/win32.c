@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <ctype.h>
 #include <wctype.h>
 
 #include "platform.h"
@@ -568,6 +569,58 @@ int64_t plat_file_size(const char *path) {
     return (int64_t)(((uint64_t)d.nFileSizeHigh << 32) | d.nFileSizeLow);
 }
 
+int plat_file_stat(const char *path, int64_t *size, int64_t *mtime_ns) {
+    wchar_t w[WPATH];
+    WIN32_FILE_ATTRIBUTE_DATA d;
+    if (!widen(path, w, WPATH) || !GetFileAttributesExW(w, GetFileExInfoStandard, &d)) return 0;
+    *size = (int64_t)(((uint64_t)d.nFileSizeHigh << 32) | d.nFileSizeLow);
+    *mtime_ns = (int64_t)(((uint64_t)d.ftLastWriteTime.dwHighDateTime << 32) | d.ftLastWriteTime.dwLowDateTime) * 100;
+    return 1;
+}
+
+int plat_file_identity(const char *path, uint64_t id[4]) {
+    wchar_t w[WPATH];
+    if (!widen(path, w, WPATH)) return 0;
+    HANDLE h = CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    FILE_BASIC_INFO b;
+    // FILE_ID_INFO and FileIdInfo (18) by hand: the headers declare them only for a Windows 8 target
+    struct { ULONGLONG VolumeSerialNumber; BYTE FileId[16]; } fid;
+    BY_HANDLE_FILE_INFORMATION bh;
+    // Only NTFS and ReFS are known to keep a change time and a file id a copy tool can't carry over; FAT and exFAT
+    // (USB sticks, SD cards) may report the last-write time as the change time and an id from the directory entry,
+    // so there a file overwritten in place with its size and dates kept would look the same. A network share reports
+    // the server's name for its file system (Samba says NTFS) and may give the write time as the change time, so a
+    // handle with a remote protocol (FileRemoteProtocolInfo, class 13, answers only for those) is never trusted, nor
+    // one the handle's own NT path puts under the multiple UNC provider (\Device\Mup\, where every network redirector
+    // registers), for third-party redirectors that answer no remote protocol. The handle, not the path string, so a
+    // mods folder linked to a share is caught too.
+    wchar_t fs[16] = L"", nt[WPATH];
+    union { BYTE b[512]; ULONGLONG align; } remote;
+    DWORD ntlen = GetFinalPathNameByHandleW(h, nt, WPATH, VOLUME_NAME_NT);
+    int ok = ntlen > 0 && ntlen < WPATH && _wcsnicmp(nt, L"\\Device\\Mup\\", 12) &&
+             !GetFileInformationByHandleEx(h, (FILE_INFO_BY_HANDLE_CLASS)13, &remote, sizeof remote) &&
+             GetVolumeInformationByHandleW(h, NULL, 0, NULL, NULL, NULL, fs, 16) &&
+             (!_wcsicmp(fs, L"NTFS") || !_wcsicmp(fs, L"ReFS")) &&
+             GetFileInformationByHandleEx(h, FileBasicInfo, &b, sizeof b) && b.ChangeTime.QuadPart != 0;
+    if (ok) {
+        id[0] = (uint64_t)b.ChangeTime.QuadPart;
+        if (GetFileInformationByHandleEx(h, (FILE_INFO_BY_HANDLE_CLASS)18, &fid, sizeof fid)) {   // 128-bit ids (ReFS)
+            memcpy(&id[1], fid.FileId, 16);
+            id[3] = fid.VolumeSerialNumber;
+        } else if (GetFileInformationByHandle(h, &bh)) {
+            id[1] = ((uint64_t)bh.nFileIndexHigh << 32) | bh.nFileIndexLow;
+            id[2] = 0;
+            id[3] = bh.dwVolumeSerialNumber;
+        } else {
+            ok = 0;
+        }
+    }
+    CloseHandle(h);
+    return ok && (id[1] || id[2]);
+}
+
 int plat_file_set_readonly(const char *path, int on) {
     wchar_t w[WPATH];
     if (!widen(path, w, WPATH)) return 0;
@@ -891,6 +944,71 @@ void plat_reexec(void) {
     DWORD code = 70;
     GetExitCodeProcess(pi.hProcess, &code);
     ExitProcess(code);
+}
+
+// Whether environment entry e ("NAME=value") is named name (ASCII, case-insensitive as Windows compares them).
+static int env_named(const wchar_t *e, const char *name) {
+    size_t i = 0;
+    for (; name[i]; i++)
+        if (towupper(e[i]) != (wchar_t)toupper((unsigned char)name[i])) return 0;
+    return e[i] == L'=';
+}
+
+int plat_start_copy(const char *set, const char *const *drop) {
+    // the exe by its own path: the command line's first word may be relative or unquoted
+    wchar_t exe[32768];
+    DWORD n = GetModuleFileNameW(NULL, exe, (DWORD)(sizeof exe / sizeof *exe));
+    if (!n || n >= sizeof exe / sizeof *exe) return 0;
+    // the copy's environment block: this process's, less drop and set's name, plus set
+    wchar_t *cur = GetEnvironmentStringsW();
+    if (!cur) return 0;
+    wchar_t wset[4096] = L"";
+    if (set && !MultiByteToWideChar(CP_UTF8, 0, set, -1, wset, (int)(sizeof wset / sizeof *wset))) {
+        FreeEnvironmentStringsW(cur);
+        return 0;
+    }
+    char setname[256] = "";
+    const char *eq = set ? strchr(set, '=') : NULL;
+    if (eq && (size_t)(eq - set) < sizeof setname) memcpy(setname, set, (size_t)(eq - set));
+    size_t total = 0;
+    for (const wchar_t *e = cur; *e; e += wcslen(e) + 1) total += wcslen(e) + 1;
+    wchar_t *block = malloc((total + wcslen(wset) + 2) * sizeof *block), *w = block;
+    for (const wchar_t *e = cur; block && *e; e += wcslen(e) + 1) {
+        int skip = setname[0] && env_named(e, setname);
+        for (const char *const *d = drop; d && *d && !skip; d++) skip = env_named(e, *d);
+        if (skip) continue;
+        size_t len = wcslen(e) + 1;
+        memcpy(w, e, len * sizeof *w);
+        w += len;
+    }
+    FreeEnvironmentStringsW(cur);
+    if (!block) return 0;
+    if (wset[0]) {
+        size_t len = wcslen(wset) + 1;
+        memcpy(w, wset, len * sizeof *w);
+        w += len;
+    }
+    *w++ = 0;
+    if (w == block + 1) *w = 0;   // an empty block still needs its two terminators
+    STARTUPINFOW si = {.cb = sizeof si};
+    PROCESS_INFORMATION pi;
+    wchar_t *cmd = _wcsdup(GetCommandLineW());   // CreateProcessW may write its command line
+    int ok = cmd && CreateProcessW(exe, cmd, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT, block, NULL, &si, &pi);
+    free(cmd);
+    free(block);
+    if (ok) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    return ok;
+}
+
+int plat_wait_process_exit(uint32_t pid, uint32_t ms) {
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!h) return 1;   // gone already
+    DWORD r = WaitForSingleObject(h, ms);
+    CloseHandle(h);
+    return r == WAIT_OBJECT_0;
 }
 
 int plat_mem_read(uint64_t addr, void *out, size_t n) {

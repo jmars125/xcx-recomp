@@ -19,6 +19,27 @@ const char *mod_zip_unpack_romfs(const uint8_t *zip, size_t n, const char *dir) 
     (void)zip; (void)n; (void)dir;
     return "not in this test";
 }
+// No game archive here: data tables two mods have are served from the top mod, as when they can't be merged.
+#include "../runtime/bdat_merge.h"
+int bdat_merge_serve(const char *mount, const char *key, const BdatModFiles *mods, int n, char *out, size_t cap) {
+    (void)mount; (void)key; (void)mods; (void)n; (void)out; (void)cap;
+    return 0;
+}
+
+// nor a merge made ahead for the next start
+int bdat_merge_prepare(const char *mount, const char *key, const BdatModFiles *mods, int n) {
+    (void)mount; (void)key; (void)mods; (void)n;
+    return 0;
+}
+void bdat_merge_next_clear(void) {}
+
+// no xcx.ini: merging automatically stays off
+#include "../runtime/cfg.h"
+int cfg_bool(const char *name) { (void)name; return 0; }
+void cfg_set(const char *name, const char *value) { (void)name; (void)value; }
+int cfg_save(void) { return 1; }
+
+const char *romfs_mount_name(void) { return "rom"; }
 
 int main(int argc, char **argv) {
     normalise();

@@ -10,7 +10,8 @@ Two kinds of mod, as the library's index.json lists them:
          ones are also listed in mods/catalog.txt so the game's Mods page shows them while off. Read at start-up.
   romfs  mods/<id>/romfs/<game path>, files in place of the game's own (runtime/romfs_mods.c). On when listed in
          mods/romfs-enabled.txt, which the game reads again twice a second, so they switch while it runs. Earlier
-         lines win when two mods have the same file; a mod turned on goes first.
+         lines win when two mods have the same file (the game merges data tables, bdat/*.bdat, instead:
+         runtime/bdat_merge.c); a mod turned on goes first.
 A game-file mod comes from its author's page as a zip in the Switch layout: romfs/<path>, or romfs/mod/<path> for mods
 made for the XCXDE mod loader, possibly inside top folders (atmosphere/contents/<title id>/romfs). exefs/ (Switch code)
 is not used. The zip must match the library's size and SHA-256 before anything is unpacked. A mod unpacked into mods/

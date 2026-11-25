@@ -507,6 +507,8 @@ int romfs_owns(const char *path) {
     return n && path && !strncmp(path, mount_name, n) && path[n] == ':';
 }
 
+const char *romfs_mount_name(void) { return mount_name; }
+
 int romfs_handle(uint64_t h) { return h > ROMFS_HANDLE_BASE && h < ROMFS_HANDLE_BASE + NH; }
 
 uint32_t romfs_mount(const char *name) {

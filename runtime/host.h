@@ -322,6 +322,12 @@ int frame_step_realtime(void);                             // the real-time step
 int frame_rate_paced(void);                                // XCX: the game runs at the frame limit (frame_rate.c)
 uint64_t frame_step_cap_ns(void);                          // with the real-time step: the shortest frame in ns
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
+// Restarts the game (the F1 Mods tab's Restart now): starts a copy that waits for this process to end, then closes
+// the window as Quit game does. 0 when the copy could not be started (nothing is closed then). Runs once: later
+// calls do nothing and return 1.
+int rt_restart_game(void);
+// 1 once rt_restart_game has started the copy (the Restart buttons are disabled from then on).
+int rt_restart_started(void);
 int64_t frame_step_world_us(void);                         // game time since the loaded save's first frame, -1 before
                                                            // (XCX_FPS_LIMIT, live)
 uint64_t frame_step_ticks(void);                           // game time since the first present in 60 Hz ticks (input scripts)

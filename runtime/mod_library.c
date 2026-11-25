@@ -309,18 +309,51 @@ static int read_list(const char *file, char (*ids)[65], int cap) {
     return n;
 }
 
-// Writes a list with id first (on) or without it (off), through a rename so the game never reads half a list.
+// Writes a list with id last (on) or without it (off), through a rename so the game never reads half a list. Other
+// lines stay as they are, comments included; id's own line goes. Last, as romfs_mods_set puts a game-file mod turned
+// on (docs/bdat-merge.md, "The report"): one rule for every list. Only romfs-enabled.txt's order decides anything
+// (which mod wins), and that list goes through romfs_mods_set; the Lua lists here are sets.
 static int write_list(const char *file, const char *id, int on) {
-    char ids[64][65];
-    int n = read_list(file, ids, 64);
-    char text[64 * 66 + 66];
-    size_t len = 0;
-    if (on) len += (size_t)snprintf(text, sizeof text, "%s\n", id);
-    for (int i = 0; i < n; i++)
-        if (strcmp(ids[i], id)) len += (size_t)snprintf(text + len, sizeof text - len, "%s\n", ids[i]);
     char path[4200];
-    plat_file_mkdir_p(root());
     join(path, sizeof path, root(), file);
+    // The most its reader takes: romfs_mods.c's maybe_reload reads LIST_CAP (4096) bytes of romfs-enabled.txt, and
+    // mod_package.c refuses an enabled.txt or catalog.txt over 2048. A mod turned on that would make the list longer
+    // is refused and the list left as it is; taking one out only shortens it, so that is refused only when the list
+    // doesn't fit here at all.
+    char text[4096];
+    size_t cap = !on ? sizeof text : !strcmp(file, "romfs-enabled.txt") ? 4096 : 2048;
+    uint64_t size = 0;
+    char *old = (char *)plat_file_read(path, &size);
+    size_t len = 0;
+    int fits = 1;
+    for (char *p = old, *e; fits && p && *p; p = e ? e + 1 : NULL) {
+        e = strchr(p, '\n');
+        if (e) *e = 0;
+        size_t n = strlen(p);
+        while (n && (p[n - 1] == '\r' || p[n - 1] == ' ')) p[--n] = 0;
+        if (!n || !strcmp(p, id)) continue;
+        if (len + n + 1 > cap) fits = 0;
+        else {
+            memcpy(text + len, p, n);
+            text[len + n] = '\n';
+            len += n + 1;
+        }
+    }
+    free(old);
+    size_t il = strlen(id);
+    if (fits && on) {
+        if (len + il + 1 > cap) fits = 0;
+        else {
+            memcpy(text + len, id, il);
+            text[len + il] = '\n';
+            len += il + 1;
+        }
+    }
+    if (!fits) {   // the whole list or nothing, as romfs_mods.c's write_lines
+        rt_log("mod library: %s would be longer than its reader takes (%zu bytes); left as it is", file, cap);
+        return 0;
+    }
+    plat_file_mkdir_p(root());
     return plat_file_write_atomic(path, text, len);
 }
 
@@ -1025,6 +1058,16 @@ void modlib_remove(const char *id) {
     if (id && valid_id(id)) start(JOB_REMOVE, id);
 }
 
+void modlib_reread_enabled(void) {
+    plat_mutex_lock(&lock);
+    for (int i = 0; i < view.count; i++)
+        if (view.rows[i].installed)
+            view.rows[i].enabled = in_list(!strcmp(view.rows[i].kind, "romfs") ? "romfs-enabled.txt" : "enabled.txt",
+                                           view.rows[i].id);
+    publish_locked();
+    plat_mutex_unlock(&lock);
+}
+
 void modlib_set_enabled(const char *id, int on) {
     if (id && valid_id(id) && root()) set_enabled_now(id, on);
 }
@@ -1037,6 +1080,9 @@ static void set_enabled_now(const char *id, int on) {
     plat_mutex_unlock(&lock);
     if (!kind[0]) return;
     int ok = !strcmp(kind, "romfs") ? romfs_mods_set(id, on) : write_list("enabled.txt", id, on);
+    if (!ok)
+        set_message(1, "%s could not be turned %s: its list of mods could not be written (the log says why).", id,
+                    on ? "on" : "off");
     plat_mutex_lock(&lock);
     for (int i = 0; i < view.count; i++)
         if (!strcmp(view.rows[i].id, id) && ok) view.rows[i].enabled = on;
