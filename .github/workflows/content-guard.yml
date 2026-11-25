@@ -13,3 +13,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tools/check_content.py
+      # Day length's clock arithmetic on a simulated game clock (runtime/day_length.h through tests/day_length_check.c)
+      # and every settings description in every menu language fitting the menu's description pane. The runner's clang;
+      # a skip for want of it fails (it would be a pass that tested nothing). No game files.
+      - name: Day length and menu text tests
+        env:
+          XCX_CLANG: clang
+          XCX_REQUIRE_CLANG: "1"
+        run: |
+          clang --version
+          python tests/day_length_test.py -v
+          python tests/menu_text_test.py -v
+      # The game side of Day length and of Dawn and dusk / Night darkness, which only the whole game build links.
+      # -Wno-bitwise-instead-of-logical: Ubuntu's clang warns on runtime/simd_fp.h (macro FOK, through host.h).
+      - name: Compile the Day and night runtime files
+        run: clang -std=gnu11 -fsyntax-only -Wall -Wextra -Werror -Wno-bitwise-instead-of-logical -Iruntime runtime/day_length.c runtime/dawn_dusk.c

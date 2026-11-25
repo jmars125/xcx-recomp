@@ -47,6 +47,8 @@ Requirements: Windows 10 or later, an x86-64 CPU with AVX2, a GPU with Vulkan 1.
 
 To update, run a newer `XCX-Setup.exe` on the same folder; saves and settings are kept. Settings are in the in-game menu and in `xcx.ini` ([xcx.ini.example](xcx.ini.example) lists every key). Controls: [docs/controls.md](docs/controls.md). Started from [RecompLauncher](https://recomplauncher.com), the game reports Recomp Achievements ([docs/achievements.md](docs/achievements.md)).
 
+Game settings explained: [Day and night](docs/day-and-night.md) (day length, dawn and dusk, night darkness).
+
 ## Credits
 
 XCX Recomp builds on the projects below. What was taken from each, with its license, is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

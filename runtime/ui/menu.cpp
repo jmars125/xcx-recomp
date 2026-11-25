@@ -49,6 +49,7 @@ void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
 double frame_step_limit_hz(void);
+int rt_day_length_state(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
 extern const char rt_port_version[];
@@ -644,8 +645,9 @@ static void row_object_lod() {
     }
     opt_choice_list("XCX_OBJECT_LOD_RANGE", UI_MENU_OBJECT_LOD, values, names, n, UI_MENU_OBJECT_LOD_DESC);
     // Adjust range to frame rate (objlod.c): Auto or Fixed, a sub-row of the range shown only above Original; under
-    // Auto the value shows the range in effect
-    if (cfg_double("XCX_OBJECT_LOD_RANGE") > 0) {
+    // Auto the value shows the range in effect. Not on a build where the range itself is greyed out (rt_objlod_available):
+    // a sub-row only means something under its parent.
+    if (rt_objlod_available() && cfg_double("XCX_OBJECT_LOD_RANGE") > 0) {
         static const UiTextId mode[] = {UI_MENU_OBJECT_LOD_AUTO, UI_MENU_OBJECT_LOD_FIXED};
         float now = 0, max = 0, busy = 0, budget = 0;
         static char note[32];
@@ -673,6 +675,71 @@ static void row_crowd() {
     opt_choice_list("XCX_CROWD_DISTANCE", UI_MENU_CROWD, values, names, N, UI_MENU_CROWD_DESC);
 }
 
+// Day length (day_length.c): real minutes a game day lasts, from the shortest day to the longest, Original (the game's
+// 24) in the middle so the player steps from it either way, and Stopped at the end. Each shows the clock's speed. A
+// value set by hand in xcx.ini between two steps (day_length.c takes any 1..1440) joins the list in its place while it
+// is set, so the row shows it with its speed and left / right step to the steps on either side of it.
+static void day_length_name(char *out, size_t n, double len) {
+    double x = 24.0 / len;
+    char sp[16], mins[16];
+    if (fabs(x * 100 - floor(x * 100 + 0.5)) < 1e-9) snprintf(sp, sizeof sp, "%g", x);   // 24, 0.5, 0.25
+    else snprintf(sp, sizeof sp, "%.2f", x);
+    snprintf(mins, sizeof mins, "%g", len);
+    snprintf(out, n, menu_text(UI_MENU_DAY_STEP), mins, sp);
+}
+
+// The Day and night rows (Day length, Dawn and dusk, Night darkness) are greyed out with a note off the game build the
+// clock's addresses are from, or when the clock didn't read as one this session (day_length.c rt_day_length_state).
+static void day_night_disable_if_off(void) {
+    int state = rt_day_length_state();
+    if (state != 1) opt_disable_next(state ? UI_MENU_DAY_NO_CLOCK : UI_MENU_NEEDS_GAME_200);
+}
+
+static void row_day_length(void) {
+    static const double steps[] = {1, 2, 3, 6, 12, 24, 48, 96, 144, 0};   // 0 = Stopped, last
+    enum { N = sizeof steps / sizeof *steps };
+    static char vals[N + 1][16], text[N + 1][48];
+    const char *values[N + 1], *names[N + 1];
+    const char *now = cfg_value("XCX_DAY_LENGTH");
+    char *end = NULL;
+    double v = now && *now ? strtod(now, &end) : 24;
+    bool own = end && !*end && v >= 1 && v <= 1440;   // a number the steps don't have (checked below)
+    for (int i = 0; own && i < N; i++)
+        if (steps[i] == v) own = false;
+    int n = 0, cur = -1;
+    for (int i = 0; i < N; i++) {
+        if (own && (steps[i] == 0 || steps[i] > v)) {   // the own value, in its place
+            snprintf(vals[n], sizeof vals[n], "%s", now);
+            day_length_name(text[n], sizeof text[n], v);
+            values[n] = vals[n], names[n] = text[n], cur = n++;
+            own = false;
+        }
+        snprintf(vals[n], sizeof vals[n], "%g", steps[i]);
+        if (steps[i] == 24) snprintf(text[n], sizeof text[n], "%s", menu_text(UI_MENU_DAY_ORIGINAL));
+        else if (steps[i] == 0) snprintf(text[n], sizeof text[n], "%s", menu_text(UI_MENU_DAY_STOPPED));
+        else day_length_name(text[n], sizeof text[n], steps[i]);
+        if (end && !*end && steps[i] == v) cur = n;   // "24.0" is Original
+        values[n] = vals[n], names[n] = text[n], n++;
+    }
+    day_night_disable_if_off();
+    opt_choice_list("XCX_DAY_LENGTH", UI_MENU_DAY_LENGTH, values, names, n, UI_MENU_DAY_LENGTH_DESC, cur);
+}
+
+// Dawn and dusk and Night darkness (dawn_dusk.c), under Day length; like it, greyed out with its note off the game
+// build the addresses are from or when the clock didn't read as one (dawn_dusk.c then gives everything back).
+static void row_dawn_dusk(void) {
+    static const char *const dd_values[] = {"original", "smoothed", "extended"};
+    const char *dd_names[] = {menu_text(UI_MENU_DAY_ORIGINAL), menu_text(UI_MENU_DAWN_DUSK_SMOOTHED),
+                              menu_text(UI_MENU_DAWN_DUSK_EXTENDED)};
+    day_night_disable_if_off();
+    opt_choice_list("XCX_DAWN_DUSK", UI_MENU_DAWN_DUSK, dd_values, dd_names, 3, UI_MENU_DAWN_DUSK_DESC);
+    static const char *const dn_values[] = {"original", "darker", "darkest"};
+    const char *dn_names[] = {menu_text(UI_MENU_DAY_ORIGINAL), menu_text(UI_MENU_DARK_NIGHTS_DARKER),
+                              menu_text(UI_MENU_DARK_NIGHTS_DARKEST)};
+    day_night_disable_if_off();
+    opt_choice_list("XCX_DARK_NIGHTS", UI_MENU_DARK_NIGHTS, dn_values, dn_names, 3, UI_MENU_DARK_NIGHTS_DESC);
+}
+
 static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
@@ -684,14 +751,22 @@ static void tab_game(float scale) {
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("XCX_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
     opt_toggle("XCX_CHEATS", UI_MENU_CHEATS, UI_MENU_CHEATS_DESC);
+    opt_group(UI_MENU_DAY_NIGHT_GROUP);   // the in-game clock and its light: Day length, Dawn and dusk, Night darkness
+    row_day_length();
+    row_dawn_dusk();
     int grass_ok = rt_grass_available(), crowd_ok = rt_crowd_available(), objlod_ok = rt_objlod_available();   // the 2.0.0 update's (grass.c, crowd.c, objlod.c)
-    if (grass_ok || crowd_ok || objlod_ok) opt_group(UI_MENU_WORLD_GROUP);
-    if (grass_ok) {
-        static const UiTextId grass[] = {UI_MENU_GRASS_ORIGINAL, UI_MENU_GRASS_15, UI_MENU_GRASS_2, UI_MENU_GRASS_3};
-        opt_choice("XCX_GRASS_DISTANCE", UI_MENU_GRASS, grass, 4, UI_MENU_GRASS_DESC);
-    }
-    if (objlod_ok) row_object_lod();
-    if (crowd_ok) row_crowd();
+    // A setting that can't apply on this game build stays in the menu, greyed out with its note, like the Day and night
+    // rows: the player sees it exists and why it is off; Object detail range's Auto/Fixed sub-row only shows under it
+    // (row_object_lod). Each row's own file decides: grass.c and crowd.c by their patch set, objlod.c by the game
+    // version and the code at its sites (one that differs on 2.0.0 shows the same note).
+    opt_group(UI_MENU_WORLD_GROUP);
+    static const UiTextId grass[] = {UI_MENU_GRASS_ORIGINAL, UI_MENU_GRASS_15, UI_MENU_GRASS_2, UI_MENU_GRASS_3};
+    if (!grass_ok) opt_disable_next(UI_MENU_NEEDS_GAME_200);
+    opt_choice("XCX_GRASS_DISTANCE", UI_MENU_GRASS, grass, 4, UI_MENU_GRASS_DESC);
+    if (!objlod_ok) opt_disable_next(UI_MENU_NEEDS_GAME_200);
+    row_object_lod();
+    if (!crowd_ok) opt_disable_next(UI_MENU_NEEDS_GAME_200);
+    row_crowd();
     opt_end();
 }
 
