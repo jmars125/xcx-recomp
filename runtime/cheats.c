@@ -57,12 +57,23 @@ typedef struct {
     uint64_t *addr;
     uint32_t *init, *shadow, *want, *any;   // want / any: nsets rows of nwords
     int *sets;
+    char key[9];   // the name hash, as the status file has it
 } CodeCheat;
+
+// A combination set of tools/cheats.py (combine): two or more code cheats of one file that replace the same instruction,
+// each with its own words, of which the game can run only one. The combination's words do what all of them do; it is
+// on while all of them are, and comes first among the site's alternatives, so it runs in their place.
+typedef struct {
+    int set, n;
+    int *members;   // cheat indexes in the source
+} Combo;
 
 typedef struct {
     char *name;   // the mod folder, or CHEATS_BUILTIN
     CheatFile cheats;
     CodeCheat *code;   // per cheat
+    Combo *combos;
+    int ncombos;
 } Source;
 
 typedef struct { char key[9], content[9], kind[16]; uint32_t buttons; char *note; } StatusLine;
@@ -339,6 +350,7 @@ static void match_status(Source *s) {
                           : snprintf(id, sizeof id, "%s/%s#%d", s->name, c->name, seen);
         uint32_t h = fnv(id, (size_t)(n < (int)sizeof id ? n : (int)sizeof id - 1));
         snprintf(key, sizeof key, "%08X", h);
+        memcpy(cc->key, key, sizeof cc->key);
         size_t cap = (size_t)c->nwords * 9 + 1, m = 0;
         char *words = malloc(cap);
         if (!words) rt_fatal("cheats: out of memory");
@@ -375,6 +387,33 @@ static void match_status(Source *s) {
                 rt_log("cheats: %s: %s changes code and is not among the %d cheats the setup saw; run the setup "
                        "again to build it in", s->name, c->name, nstatus);
         }
+    }
+    // the combinations of this file's cheats: "<key> <key> combo 0 <member key> ..."
+    for (int i = 0; i < nstatus; i++) {
+        if (strcmp(status[i].kind, "combo")) continue;
+        int members[16], n = 0, ok = 1;
+        for (const char *t = status[i].note; *t && ok;) {
+            while (*t == ' ') t++;
+            if (!*t) break;
+            int k = 0;
+            for (; k < s->cheats.count; k++)
+                if (!strncmp(s->code[k].key, t, 8) && (t[8] == ' ' || !t[8])) break;
+            ok = k < s->cheats.count && n < 16;
+            if (ok) members[n++] = k;
+            t += strlen(t) >= 8 ? 8 : strlen(t);
+        }
+        if (!ok || n < 2) continue;   // another file's combination
+        char set[32];
+        snprintf(set, sizeof set, "cheat_%.8s", status[i].key);
+        for (char *p = set; *p; p++) *p = (char)tolower((unsigned char)*p);
+        int id = rt_patch_set(set);
+        if (id < 0) continue;
+        Combo *grown = realloc(s->combos, (size_t)(s->ncombos + 1) * sizeof *grown);
+        int *m = malloc((size_t)n * sizeof *m);
+        if (!grown || !m) rt_fatal("cheats: out of memory");
+        memcpy(m, members, (size_t)n * sizeof *m);
+        s->combos = grown;
+        s->combos[s->ncombos++] = (Combo){id, n, m};
     }
 }
 
@@ -428,6 +467,14 @@ static void apply_sets(Source *s) {
         if (c->state != CHEAT_PATCHED || c->master) continue;
         rt_patch_switch(cc->set, allowed && c->enabled && (!cc->buttons || (held & cc->buttons) == cc->buttons));
     }
+    for (int i = 0; i < s->ncombos; i++) {
+        int on = allowed;
+        for (int j = 0; j < s->combos[i].n && on; j++) {
+            const Cheat *c = &s->cheats.cheats[s->combos[i].members[j]];
+            on = c->state == CHEAT_PATCHED && c->enabled;
+        }
+        rt_patch_switch(s->combos[i].set, on);
+    }
 }
 
 static void add_source(const char *name, const char *text, size_t n) {
@@ -447,6 +494,7 @@ static void add_source(const char *name, const char *text, size_t n) {
     }
     match_status(s);
     apply_sets(s);
+    if (s->ncombos) rt_log("cheats: %s: %d combination sets for cheats that change the same instruction", s->name, s->ncombos);
     for (int k = 0; k < s->cheats.count; k++) {
         const Cheat *c = &s->cheats.cheats[k];
         if (c->state == CHEAT_PATCHED && ((allowed && c->enabled) || c->master))
@@ -500,6 +548,11 @@ static void load_all(void) {
                 rt_patch_switch(sources[i].code[k].sets[sources[i].code[k].on], 0);
             code_free(&sources[i].code[k]);
         }
+        for (int j = 0; j < sources[i].ncombos; j++) {
+            rt_patch_switch(sources[i].combos[j].set, 0);
+            free(sources[i].combos[j].members);
+        }
+        free(sources[i].combos);
         cheat_free(&sources[i].cheats);
         free(sources[i].code);
         free(sources[i].name);

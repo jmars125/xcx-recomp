@@ -68,8 +68,10 @@ instead: `tools/cheats.py` turns each one into a patch set that the Cheats tab s
   code they can write is a patch set, and the one that matches what the cheat last wrote is on.
 - A cheat the setup can't build in shows as unavailable, with the reason: a call in the middle of a cave, or code
   changes with too many states.
-- Two cheats that change the same instruction (such as hp inf and tp inf) can't both act: the first one in the file
-  wins.
+- Two cheats of one file that change the same instruction, each with its own words (Infinite HP and Infinite TP both
+  branch into one code cave and fill in their own store there), get a combination set too: while both are on, it runs
+  the cave with both changes. Cheats whose changes disagree on a word (Damage Dealt x4 and x16) don't combine: the
+  first one in the file wins. Cheats of two different files never combine.
 - The setup lists what it built in `build-cache/cheats.status` next to `xcx.exe`.
 
 The 1.0.2 cheats work on 2.0.0: their addresses are the same. Rename the file to `EC4ED46BBC4A9EBB.txt`.

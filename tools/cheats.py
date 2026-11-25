@@ -36,6 +36,8 @@ hash: the same over the cheat's words, so the runtime sees an edited cheat that 
              `<offset>:<initial>` (offsets in main, hex), then per set `#<n>:<value>,<value>...` in the words' order, `*`
              for a word whose value does not decide the set
   unsupported <note> says why
+  combo      not a cheat: a combination set of code cheats of one file that replace the same instruction (combine()),
+             on while all of them are; its name hash is the set's, <note> the members' name hashes
 A code cheat that calls or jumps into a code cave it writes (words where main has zeros) gets the cave's body inlined
 at the call site (an adrp in it encoded again for the site); a conditional skip of one store in the body (cbz wN, +8; str wN, ...) is dropped. Branches inside
 the cave stay branches inside the inlined body (`<word>@<index>` words, recomp/patches.py), and a b or bl out of the
@@ -44,6 +46,7 @@ cave as its last word is encoded again for the site.
 Standard library and recomp/ only.
 """
 import argparse
+import itertools
 import struct
 import sys
 from pathlib import Path
@@ -81,6 +84,7 @@ class Cheat:
         self.buttons = 0
         self.sites = {}   # {offset: [words]}
         self.states = []   # a mixed cheat's patch sets: [{offset: [words]}], its note says when each is on
+        self.writes = {}   # a code cheat's instruction writes {offset: word}, for combine()
 
 
 def parse(text, mod):
@@ -489,6 +493,7 @@ def classify(main, c, shared=None):
                 c.kind, c.note = 'restore', 'left out, as not the original here: ' + ', '.join(f'main+{a:X}' for a in stray)
                 return
             c.sites, c.kind = convert(main, writes, shared), 'master' if c.master else 'code'
+            c.writes = writes
             return
         # 8 mask, writes, 21000000, the original words, 20000000
         t = [o[0] for o in os_]
@@ -566,6 +571,51 @@ def mixed(main, c, os_, cw, shared):
         f'#{k + 1}:' + ','.join(f'{st[a]:X}' if a in st else '*' for a in words) for k, st in table)
 
 
+MAX_SHARERS = 8   # code cheats of one file at one site that combine() tries every subset of
+
+
+def combine(main, cheats, shared):
+    """[(key, [member cheats], offset, words)]: the combination sets of code cheats of one file that replace the same
+    instruction. Only one alternative of a site runs (the first switched-on one in the patch file), so of two cheats
+    that branch into one code cave there, such as Infinite HP and Infinite TP (each fills in its own store of the cave),
+    only the first would act. A combination is the cave with the writes of all its members, on while they all are; the
+    runtime switches it (runtime/cheats.c apply_sets). Members whose writes disagree on a word don't combine (Damage
+    Dealt x4 and x16), and a combination is left out where the alternative that runs without it has the same words.
+    The list is in the order the sites need: larger combinations first."""
+    at = {}
+    for c in cheats:
+        if c.kind == 'code':
+            for a in c.sites:
+                at.setdefault(a, []).append(c)
+    out = []
+    for a, users in sorted(at.items()):
+        users = users[:MAX_SHARERS]
+        made = []   # (members, words), by size
+        for size in range(2, len(users) + 1):
+            for group in itertools.combinations(users, size):
+                writes = {}
+                if any(writes.setdefault(o, w) != w for c in group for o, w in c.writes.items()):
+                    continue
+                try:
+                    words = convert(main, writes, shared).get(a)
+                except ValueError:
+                    continue
+                if words is None:
+                    continue
+                inner = [m for m in made if set(m[0]) < set(group)]
+                runs = max(inner, key=lambda m: len(m[0]))[1] if inner else group[0].sites[a]
+                if words != runs:
+                    made.append((group, words))
+        for group, words in sorted(made, key=lambda m: -len(m[0])):
+            out.append((fnv(('+'.join(c.key for c in group) + f'@{a:X}').encode()), list(group), a, words))
+    return out
+
+
+def site_line(name, main, a, repl):
+    words = ' '.join(f'{w[1]:08x}@{w[2]}' if isinstance(w, tuple) else f'{w:08x}' for w in repl)
+    return f'site {name} main {a:x} {main.word(a):08x} {words}'
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--exefs', type=Path, required=True)
@@ -581,7 +631,8 @@ def main():
     bid = build_id(args.exefs / 'main')
     own = args.builtin / f'{bid}.txt' if args.builtin else None
     files = ([(BUILTIN, own)] if own and own.is_file() else []) + cheat_files(args.mods, bid)
-    cheats = [c for mod, f in files for c in parse(f.read_text(encoding='utf-8-sig', errors='replace'), mod)]
+    per_file = [parse(f.read_text(encoding='utf-8-sig', errors='replace'), mod) for mod, f in files]
+    cheats = [c for file in per_file for c in file]
     shared = cave_words(m, cheats)
     sets, sites, status = [], [], []
     for c in cheats:
@@ -592,12 +643,21 @@ def main():
             name = f'cheat_{c.key.lower()}{suffix}'
             sets.append(f'set {name} XCX_CHEAT_{c.key}{suffix.upper()} {1 if c.kind == "master" else 0}   # {label}')
             for a, repl in sorted(group.items()):
-                words = ' '.join(f'{w[1]:08x}@{w[2]}' if isinstance(w, tuple) else f'{w:08x}' for w in repl)
-                sites.append(f'site {name} main {a:x} {m.word(a):08x} {words}')
+                sites.append(site_line(name, m, a, repl))
         content = fnv(' '.join(f'{w:08X}' for w in c.words).encode())
         note = c.note.replace('\t', ' ')
         status.append(f'{c.key}\t{content}\t{c.kind}\t{c.buttons:X}\t{note}')
         print(f'cheats: {c.kind:11} {c.name}' + (f' ({note})' if note else ''))
+    # combinations go first: a site runs its first switched-on alternative
+    combos = [x for file in per_file for x in combine(m, file, shared)]
+    for key, members, a, repl in combos:
+        name = f'cheat_{key.lower()}'
+        sets.append(f'set {name} XCX_CHEAT_{key} 0   # combination at main+{a:X}: '
+                    + ', '.join(c.name.encode('ascii', 'replace').decode() for c in members))
+        status.append(f'{key}\t{key}\tcombo\t0\t' + ' '.join(c.key for c in members))
+    sites[:0] = [site_line(f'cheat_{key.lower()}', m, a, repl) for key, _, a, repl in combos]
+    if combos:
+        print(f'cheats: {len(combos)} combinations of cheats that replace the same instruction')
     if sets:
         text += ('\n# Cheats of the mods folder (tools/cheats.py)\n' + '\n'.join(sets) + '\n' + '\n'.join(sites) + '\n')
     args.out.write_text(text)
