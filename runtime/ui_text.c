@@ -351,13 +351,37 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PIPE_SKIP_STRICT] = "Strict", [UI_MENU_PIPE_SKIP_ANY] = "Any",
     [UI_MENU_PIPE_SKIP_FULLSCREEN] = "Fullscreen passes",
     [UI_MENU_LIB_PREBUILD] = "Stage library prebuild",
-    [UI_MENU_LIB_PREBUILD_DESC] = "Builds shader stage libraries ahead of time in the background.",
+    [UI_MENU_LIB_PREBUILD_DESC] = "At each start, builds the compute shaders this install has met or prepared, in the "
+                                "background.",
     [UI_MENU_LIB_PREBUILD_THREADS] = "Stage library prebuild threads",
     [UI_MENU_LIB_PREBUILD_THREADS_DESC] = "Threads used for the prebuild; Automatic picks a number from your CPU.",
     [UI_MENU_PIPE_PREBUILD] = "Pipeline prebuild",
-    [UI_MENU_PIPE_PREBUILD_DESC] = "Builds known pipelines ahead of time.",
+    [UI_MENU_PIPE_PREBUILD_DESC] = "At each start, builds again the pipelines this install has drawn before, so places you "
+                                 "have been draw at once.",
     [UI_MENU_PREWARM_XLATE] = "Translator prewarm",
-    [UI_MENU_PREWARM_XLATE_DESC] = "Threads that translate known shaders at start; Automatic takes half the CPU threads, at most 16.",
+    [UI_MENU_PREWARM_XLATE_DESC] = "Threads that, at each start, translate again the shaders met before that are missing from "
+                                 "the shader cache (after a translator update); Automatic takes half the CPU threads, at "
+                                 "most 16.",
+    [UI_MENU_SHADER_PREPARE] = "Prepare shaders in the background",
+    [UI_MENU_SHADER_PREPARE_DESC] = "Prepares the whole game's shaders, also those you have not met yet, while you play when "
+                                  "the setup did not do it, so objects stop appearing late. Shows its progress in a corner.",
+    [UI_MENU_SHADER_PREPARE_THREADS] = "Background shader threads",
+    [UI_MENU_SHADER_PREPARE_THREADS_DESC] = "Threads for that; Automatic takes an eighth of the CPU threads, 1 to 4.",
+    [UI_MENU_SHADER_PREPARE_NOW] = "Prepare shaders now",
+    [UI_MENU_SHADER_PREPARE_NOW_DESC] = "Starts preparing the whole game's shaders now, in the background while you play, from the "
+                                      "list the setup wrote. Nothing to do when they are prepared already.",
+    [UI_MENU_SHADER_PREPARE_STATE_RUNNING] = "Running, %d%%",
+    [UI_MENU_SHADER_PREPARE_STATE_DONE] = "Already prepared",
+    [UI_MENU_SHADER_PREPARE_STATE_NO_SEED] = "No shader list: run the setup",
+    [UI_MENU_SHADER_PREPARE_STATE_UNAVAILABLE] = "Not available now (see xcx.log)",
+    [UI_MENU_SHADER_CLEAR_FAILED] = "Could not change the mark beside xcx.exe",
+    [UI_MENU_SHADER_CLEAR] = "Clear shader cache",
+    [UI_MENU_SHADER_CLEAR_DESC] = "At the next start, deletes the translated shaders, the pipeline cache and the record of "
+                                "what play met. For graphics that look wrong after an update. When the setup left a shader list and "
+                                "background preparation is on, the shaders are then prepared again.",
+    [UI_MENU_SHADER_CLEAR_PENDING] = "At next start (press to cancel)",
+    [UI_MENU_SHADER_CLEAR_CONFIRM] = "Clear the shader cache when the game next starts?",
+    [UI_MENU_SHADER_CLEAR_YES] = "Clear",
     [UI_MENU_GPL] = "Graphics pipeline library",
     [UI_MENU_GPL_DESC] = "Uses the Vulkan pipeline library extension; turn off if your driver misbehaves with it.",
     [UI_MENU_ASTC] = "ASTC texture decoding", [UI_MENU_ASTC_DESC] = "Where compressed ASTC textures are decoded.",
@@ -424,6 +448,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OV_PRESENT_TIME] = "GPU present per frame", [UI_MENU_OV_GPU_GAME] = "GPU use by the game",
     [UI_MENU_OV_PIPE_WAIT] = "Pipeline waits",
     [UI_MENU_OV_SHADER_WAIT] = "Shader waits", [UI_MENU_OV_TEX_UPLOADS] = "Texture uploads",
+    [UI_MENU_OV_SHADER_PREPARE] = "Preparing shaders: %d%%",
     [UI_MENU_OV_FMT_PCT] = "%.0f%%", [UI_MENU_OV_FMT_TEMP] = "%.0f °C", [UI_MENU_OV_FMT_POWER] = "%.0f W",
     [UI_MENU_OV_FMT_MHZ] = "%.0f MHz", [UI_MENU_OV_FMT_GB] = "%.1f GB", [UI_MENU_OV_FMT_GB_OF] = "/ %.1f GB",
     [UI_MENU_OV_GAME_GB] = "game %.1f GB", [UI_MENU_OV_FMT_MS] = "%.2f ms", [UI_MENU_OV_PER_FRAME] = "%.1f per frame",
@@ -754,13 +779,36 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PIPE_SKIP_STRICT] = "Строго", [UI_MENU_PIPE_SKIP_ANY] = "Любые",
     [UI_MENU_PIPE_SKIP_FULLSCREEN] = "Полноэкранные проходы",
     [UI_MENU_LIB_PREBUILD] = "Предсборка библиотек стадий",
-    [UI_MENU_LIB_PREBUILD_DESC] = "Заранее собирает библиотеки стадий шейдеров в фоне.",
+    [UI_MENU_LIB_PREBUILD_DESC] = "При каждом запуске собирает в фоне вычислительные шейдеры, которые уже встречались или "
+                                "подготовлены.",
     [UI_MENU_LIB_PREBUILD_THREADS] = "Потоки предсборки библиотек",
     [UI_MENU_LIB_PREBUILD_THREADS_DESC] = "Сколько потоков занято предсборкой; «Автоматически» — по числу ядер процессора.",
     [UI_MENU_PIPE_PREBUILD] = "Предсборка конвейеров",
-    [UI_MENU_PIPE_PREBUILD_DESC] = "Заранее собирает известные конвейеры.",
+    [UI_MENU_PIPE_PREBUILD_DESC] = "При каждом запуске заново собирает конвейеры, которые уже рисовались, чтобы знакомые места "
+                                 "рисовались сразу.",
     [UI_MENU_PREWARM_XLATE] = "Прогрев транслятора",
-    [UI_MENU_PREWARM_XLATE_DESC] = "Потоки, которые при запуске переводят известные шейдеры; «Автоматически» — половина потоков процессора, не больше 16.",
+    [UI_MENU_PREWARM_XLATE_DESC] = "Потоки, которые при запуске переводят заново встреченные шейдеры, которых нет в кэше "
+                                 "(после обновления транслятора); «Автоматически» — половина потоков, не больше 16.",
+    [UI_MENU_SHADER_PREPARE] = "Подготовка шейдеров в фоне",
+    [UI_MENU_SHADER_PREPARE_DESC] = "Если установка не подготовила шейдеры, готовит шейдеры всей игры, в том числе ещё не "
+                                  "встреченные, во время игры, чтобы объекты не появлялись с опозданием. Ход виден в углу.",
+    [UI_MENU_SHADER_PREPARE_THREADS] = "Потоки фоновой подготовки",
+    [UI_MENU_SHADER_PREPARE_THREADS_DESC] = "Сколько потоков на это; «Автоматически» — восьмая часть потоков процессора, от 1 до 4.",
+    [UI_MENU_SHADER_PREPARE_NOW] = "Подготовить шейдеры сейчас",
+    [UI_MENU_SHADER_PREPARE_NOW_DESC] = "Начинает готовить шейдеры всей игры в фоне по списку от установки. Если они уже готовы, "
+                                      "ничего не делает.",
+    [UI_MENU_SHADER_PREPARE_STATE_RUNNING] = "Идёт, %d%%",
+    [UI_MENU_SHADER_PREPARE_STATE_DONE] = "Уже готовы",
+    [UI_MENU_SHADER_PREPARE_STATE_NO_SEED] = "Нет списка: запустите установку",
+    [UI_MENU_SHADER_PREPARE_STATE_UNAVAILABLE] = "Сейчас недоступно (см. xcx.log)",
+    [UI_MENU_SHADER_CLEAR_FAILED] = "Не удалось изменить отметку рядом с xcx.exe",
+    [UI_MENU_SHADER_CLEAR] = "Очистить кэш шейдеров",
+    [UI_MENU_SHADER_CLEAR_DESC] = "При следующем запуске удаляет готовые шейдеры, кэш конвейеров и записи о встреченном. "
+                                "Помогает при ошибках графики после обновления. Если установка оставила список, а фоновая "
+                                "подготовка включена, шейдеры затем готовятся заново.",
+    [UI_MENU_SHADER_CLEAR_PENDING] = "При следующем запуске (нажмите для отмены)",
+    [UI_MENU_SHADER_CLEAR_CONFIRM] = "Очистить кэш шейдеров при следующем запуске игры?",
+    [UI_MENU_SHADER_CLEAR_YES] = "Очистить",
     [UI_MENU_GPL] = "Библиотека графических конвейеров",
     [UI_MENU_GPL_DESC] = "Использует расширение Vulkan для библиотек конвейеров; выключите, если драйвер с ним сбоит.",
     [UI_MENU_ASTC] = "Распаковка текстур ASTC", [UI_MENU_ASTC_DESC] = "Где распаковываются сжатые текстуры ASTC.",
@@ -830,6 +878,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OV_GPU_GAME] = "Загрузка GPU игрой",
     [UI_MENU_OV_PIPE_WAIT] = "Ожидания конвейеров",
     [UI_MENU_OV_SHADER_WAIT] = "Ожидания шейдеров", [UI_MENU_OV_TEX_UPLOADS] = "Загрузки текстур",
+    [UI_MENU_OV_SHADER_PREPARE] = "Подготовка шейдеров: %d%%",
     [UI_MENU_OV_FMT_PCT] = "%.0f%%", [UI_MENU_OV_FMT_TEMP] = "%.0f °C", [UI_MENU_OV_FMT_POWER] = "%.0f Вт",
     [UI_MENU_OV_FMT_MHZ] = "%.0f МГц", [UI_MENU_OV_FMT_GB] = "%.1f ГБ", [UI_MENU_OV_FMT_GB_OF] = "/ %.1f ГБ",
     [UI_MENU_OV_GAME_GB] = "игра %.1f ГБ", [UI_MENU_OV_FMT_MS] = "%.2f мс", [UI_MENU_OV_PER_FRAME] = "%.1f за кадр",

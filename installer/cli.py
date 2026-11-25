@@ -22,6 +22,7 @@ from . import recent
 from . import state as statefile
 from .events import Reporter
 from .runner import Context, InstallError, run_steps
+from .shaders import CHOICES
 from .steps import all_steps
 
 EXIT = {'ok': 0, 'failed': 1, 'cancelled': 3}
@@ -74,6 +75,12 @@ def main(argv=None):
     ap.add_argument('--verify', action='store_true', help='hash every kept file, also those this release made')
     ap.add_argument('--dlss', action='store_true', help="download NVIDIA's nvngx_dlss.dll (NVIDIA RTX SDK license) next "
                                                       'to the game, for upscaler = dlss')
+    ap.add_argument('--prepare-shaders', nargs='?', const='now', default='background',
+                    choices=CHOICES,
+                    help="the game's shaders: now (a minute or two; the flag alone), background (while the game runs, "
+                         'from its next start; the default) or off (each shader when the game first meets it)')
+    ap.add_argument('--prepare-again', action='store_true',
+                    help='with now or background: delete the translated shaders and prepare them all again')
     ap.add_argument('--dlss-file', type=Path, help="an nvngx_dlss.dll to copy next to the game instead of downloading "
                                                     "NVIDIA's (a launcher passes the one it fetched)")
     ap.add_argument('--progress-lines', action='store_true',

@@ -1702,6 +1702,11 @@ void plat_child_stop(PlatChild *c) {
     free(c);
 }
 
+// Nothing on Windows: its priority classes are strict, so a below-normal translator gets almost no CPU while the game
+// and anything else keep the cores busy (the background pass ran about ten times slower on a loaded PC), and a game
+// draw that needs the shader it holds would wait with it. The pass's own threads already run below the game's.
+void plat_child_lower(PlatChild *c) { (void)c; }
+
 int plat_child_write(PlatChild *c, const void *data, size_t n) {
     DWORD put = 0;
     return WriteFile(c->in, data, (DWORD)n, &put, NULL) && put == n;

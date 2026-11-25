@@ -2905,15 +2905,13 @@ static void lb_warm_prepared(const char *dir) {
 // cache key), the seed next to xcx.exe is translated on every core, then every prepared variant's stage library or
 // compute pipeline is built once into the driver's disk cache (lb_warm_prepared). No game runs.
 int vk_pipeline_prepare_shaders(void) {
+    gfx_shader_cache_clear_at_start();   // a Clear pressed in the menu, before the setup prepares again
     if (!ensure_init()) {
         fprintf(stderr, "prepare-shaders: no Vulkan device\n");
         return 1;
     }
-    char dir[PLAT_PATH_MAX * 2];
-    snprintf(dir, sizeof dir, "%s", P.cache_path);
-    char *cut = plat_last_sep(dir);
-    if (!cut) return 1;
-    *cut = 0;
+    char dir[PLAT_PATH_MAX * 2];   // the seed and the prepared list: beside xcx.exe (gfx_shader_seed_dir)
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return 1;
     int cpus = (int)plat_cpu_count();
     const char *pe = cfg_get("XCX_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
     int procs = pe && *pe ? atoi(pe) : cpus / 2 > 16 ? 16 : cpus / 2;
@@ -2927,20 +2925,22 @@ int vk_pipeline_prepare_shaders(void) {
 // 1.8 s) and holds a limited amount: preparing another build dir evicted this one's libraries, and a library a draw
 // needed then took 40-220 ms in play instead of 0.2 ms. Seconds when the libraries are still there.
 int vk_pipeline_warm_shaders(void) {
+    gfx_shader_cache_clear_at_start();
     if (!ensure_init()) {
         fprintf(stderr, "warm-shaders: no Vulkan device\n");
         return 1;
     }
-    char dir[PLAT_PATH_MAX * 2];
-    snprintf(dir, sizeof dir, "%s", P.cache_path);
-    char *cut = plat_last_sep(dir);
-    if (!cut) return 1;
-    *cut = 0;
+    char dir[PLAT_PATH_MAX * 2];   // the seed and the prepared list: beside xcx.exe (gfx_shader_seed_dir)
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return 1;
     char prp[PLAT_PATH_MAX * 2 + 32];
     snprintf(prp, sizeof prp, "%s/shader-prepared.bin", dir);
     if (!plat_file_exists(prp)) {
         fprintf(stderr, "warm-shaders: no %s (tools/prepare_shaders.py writes it)\n", prp);
         return 1;
+    }
+    if (!gfx_shader_prepared_current(dir)) {   // another card or translator, or its translations gone: the setup then
+        fprintf(stderr, "warm-shaders: %s is not current; run --prepare-shaders\n", prp);   // runs --prepare-shaders
+        return 2;
     }
     lb_warm_prepared(dir);
     return 0;

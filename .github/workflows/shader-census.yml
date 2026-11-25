@@ -1,0 +1,31 @@
+name: Shader census tests
+
+# tools/shader_census.py's archive and container readers and tools/prepare_shaders.py's seed format, on data the
+# test builds itself (no game files), on both systems the setup runs on. Pull requests that touch them; pushes only
+# for ci/* tags (a fork's check of a commit before it goes to a pull request), so a PR commit runs once.
+on:
+  push:
+    tags:
+      - 'ci/**'
+  pull_request:
+    paths:
+      - 'tools/shader_census.py'
+      - 'tools/prepare_shaders.py'
+      - 'tests/shader_census_test.py'
+      - '.github/workflows/shader-census.yml'
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"   # compression.zstd, as the release's bundled Python
+      - run: python --version
+      - run: python -m pip install lz4==4.4.5   # tools/requirements-installer.txt
+      - run: python tests/shader_census_test.py -v

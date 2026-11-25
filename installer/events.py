@@ -118,8 +118,9 @@ class Reporter:
     def step(self, step, state, **fields):
         return self.emit('step', step=step, state=state, **fields)
 
-    def progress(self, step, phase, done=None, total=None, unit=None, force=False):
-        """A progress event, at most one per PROGRESS_EVERY per phase unless it is the first or the last."""
+    def progress(self, step, phase, done=None, total=None, unit=None, force=False, left=None):
+        """A progress event, at most one per PROGRESS_EVERY per phase unless it is the first or the last. left: the
+        seconds the phase is expected to take still, when it can be told from the rate so far."""
         now = time.monotonic()
         key = (step, phase)
         last = self.last_progress.get(key)
@@ -134,6 +135,8 @@ class Reporter:
             fields['total'] = total
         if unit:
             fields['unit'] = unit
+        if left is not None:
+            fields['left'] = int(left)
         return self.emit('progress', **fields)
 
     def warning(self, id, **params):

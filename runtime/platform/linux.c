@@ -1732,6 +1732,11 @@ void plat_child_stop(PlatChild *c) {
     free(c);
 }
 
+// Raising a process's nice value needs no privilege; lowering it again would, so this is for good.
+void plat_child_lower(PlatChild *c) {
+    if (c && c->pid > 0) setpriority(PRIO_PROCESS, (id_t)c->pid, nice_of(PLAT_PRIO_LOWEST));
+}
+
 // A child that died makes the write fail with EPIPE; SIGPIPE is ignored for the process (main.c), as Windows has none.
 int plat_child_write(PlatChild *c, const void *data, size_t n) { return write_all(c->in, data, n); }
 

@@ -43,6 +43,7 @@ extern "C" {
 #include "bug_report.h"
 #include "ui/menu.h"
 #include "ui_text.h"
+#include "shader_prepare.h"
 // host.h and vk.h pull in cpu.h, which is C only: the functions the menu needs from them, as declared there.
 void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void vk_queue_lock(void);
@@ -1119,6 +1120,82 @@ static void report_rows(void) {
     }
 }
 
+// The shader group's buttons (gfx_shader.c): "Prepare shaders now" shows the pass's progress, or for a few seconds what
+// a press found; "Clear shader cache" asks first (shader_clear_confirm), and while its mark is set a press takes it back.
+static int g_prep_note = -1;            // the last press's GFX_PREPARE_*; -1 none
+static uint64_t g_prep_note_until;
+static int g_clear_pending = -1;        // the clear mark (a file check once, then kept with the presses); -1 not read yet
+static int g_clear_failed;              // the last press could not write or delete the mark
+static uint64_t g_clear_failed_until;
+
+static bool shader_buttons(void) {      // true: the clear button wants its confirmation
+    char state[96] = "";
+    int64_t done = 0, total = 0;
+    if (gfx_shader_prepare_progress(&done, &total)) {
+        int pct = total > 0 ? (int)(done * 100 / total) : 0;   // 100 only once the list is written (as the corner)
+        snprintf(state, sizeof state, menu_text(UI_MENU_SHADER_PREPARE_STATE_RUNNING), pct > 99 ? 99 : pct);
+    } else if (g_prep_note >= 0 && plat_now_ns() < g_prep_note_until) {
+        if (g_prep_note == GFX_PREPARE_DONE) snprintf(state, sizeof state, "%s", menu_text(UI_MENU_SHADER_PREPARE_STATE_DONE));
+        if (g_prep_note == GFX_PREPARE_NO_SEED)
+            snprintf(state, sizeof state, "%s", menu_text(UI_MENU_SHADER_PREPARE_STATE_NO_SEED));
+        if (g_prep_note == GFX_PREPARE_UNAVAILABLE)
+            snprintf(state, sizeof state, "%s", menu_text(UI_MENU_SHADER_PREPARE_STATE_UNAVAILABLE));
+    }
+    if (opt_button("shader_prepare_now", UI_MENU_SHADER_PREPARE_NOW, UI_MENU_SHADER_PREPARE_NOW_DESC, state)) {
+        g_prep_note = gfx_shader_prepare_now();
+        g_prep_note_until = plat_now_ns() + 4000000000ull;
+        rt_log("menu: Prepare shaders now: %s", g_prep_note == GFX_PREPARE_STARTED ? "started"
+                                                : g_prep_note == GFX_PREPARE_RUNNING ? "already running"
+                                                : g_prep_note == GFX_PREPARE_DONE    ? "already prepared"
+                                                : g_prep_note == GFX_PREPARE_NO_SEED ? "no shader list"
+                                                                                     : "not available");
+    }
+    if (g_clear_pending < 0) g_clear_pending = gfx_shader_cache_clear_pending();
+    if (opt_button("shader_clear", UI_MENU_SHADER_CLEAR, UI_MENU_SHADER_CLEAR_DESC,
+                   g_clear_failed && plat_now_ns() < g_clear_failed_until ? menu_text(UI_MENU_SHADER_CLEAR_FAILED)
+                   : g_clear_pending                                     ? menu_text(UI_MENU_SHADER_CLEAR_PENDING)
+                                                                         : "")) {
+        if (!g_clear_pending) return true;
+        int ok = gfx_shader_cache_clear_request(0);
+        if (ok) g_clear_pending = 0;
+        g_clear_failed = !ok, g_clear_failed_until = plat_now_ns() + 4000000000ull;
+        rt_log("menu: Clear shader cache: %s", ok ? "taken back" : "the mark cannot be deleted");
+    }
+    return false;
+}
+
+// The clear button's confirmation, over the menu, like the reset's; Cancel has the cursor first.
+static void shader_clear_confirm(bool ask) {
+    if (ask) ImGui::OpenPopup("##shader_clear_confirm");
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("##shader_clear_confirm", nullptr,
+                                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    g_modal = true;
+    ImGui::TextUnformatted(menu_text(UI_MENU_SHADER_CLEAR_CONFIRM));
+    ImGui::Spacing();
+    const char *yes = menu_text(UI_MENU_SHADER_CLEAR_YES), *no = menu_text(UI_MENU_RESET_NO);
+    const ImGuiStyle &st = ImGui::GetStyle();
+    float bw = fmaxf(ImGui::CalcTextSize(yes).x, ImGui::CalcTextSize(no).x) + st.FramePadding.x * 4;
+    bool close = false;
+    if (ImGui::Button(no, ImVec2(bw, 0))) close = true;
+    if (ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+    ImGui::SameLine();
+    if (ImGui::Button(yes, ImVec2(bw, 0))) {
+        int ok = gfx_shader_cache_clear_request(1);
+        if (ok) g_clear_pending = 1;
+        g_clear_failed = !ok, g_clear_failed_until = plat_now_ns() + 4000000000ull;
+        rt_log("menu: Clear shader cache: %s", ok ? "marked for the next start" : "the mark cannot be written beside xcx.exe");
+        close = true;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) close = true;
+    if (close) {
+        ImGui::CloseCurrentPopup();
+        opt_focus_key("shader_clear");
+    }
+    ImGui::EndPopup();
+}
+
 static void tab_advanced(float scale) {
     static ActionNote copy_note, log_note;
     opt_begin("##advanced", scale);
@@ -1146,6 +1223,16 @@ static void tab_advanced(float scale) {
     opt_toggle("XCX_PIPE_PREBUILD", UI_MENU_PIPE_PREBUILD, UI_MENU_PIPE_PREBUILD_DESC);
     row_threads("XCX_PREWARM_XLATE", UI_MENU_PREWARM_XLATE, UI_MENU_PREWARM_XLATE_DESC);
     opt_toggle("XCX_GPL", UI_MENU_GPL, UI_MENU_GPL_DESC);
+    opt_toggle("XCX_SHADER_PREPARE", UI_MENU_SHADER_PREPARE, UI_MENU_SHADER_PREPARE_DESC);
+    {
+        static const char *const vals[] = {"", "1", "2", "4", "8", "16"};   // cfg.c: 1..16
+        enum { N = sizeof vals / sizeof *vals };
+        const char *names[N] = {menu_text(UI_MENU_AUTO)};
+        for (int i = 1; i < N; i++) names[i] = vals[i];
+        opt_choice_list("XCX_SHADER_PREPARE_THREADS", UI_MENU_SHADER_PREPARE_THREADS, vals, names, N,
+                        UI_MENU_SHADER_PREPARE_THREADS_DESC);
+    }
+    bool ask_clear = shader_buttons();
 
     opt_group(UI_MENU_GROUP_TEXMEM);
     static const UiTextId astc[] = {UI_MENU_ASTC_AUTO, UI_MENU_ASTC_GPU, UI_MENU_ASTC_NATIVE, UI_MENU_ASTC_CPU};
@@ -1227,6 +1314,7 @@ static void tab_advanced(float scale) {
         }
         ImGui::EndPopup();
     }
+    shader_clear_confirm(ask_clear);
 }
 
 static const UiTextId kTabNames[TAB_COUNT] = {UI_MENU_TAB_SCREEN, UI_MENU_TAB_GAME, UI_MENU_TAB_SOUND,
@@ -1914,6 +2002,27 @@ static void perf_draw(const MenuTarget *t, float scale) {
     dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
 }
 
+// While the setup's shader seed is prepared in the background (gfx_shader_prepare_start): a small line in the top
+// left corner, so a player who sees objects appear late knows why and that it ends. Nothing once it is done.
+static bool prep_active(int *pct) {
+    int64_t done = 0, total = 0;
+    if (!gfx_shader_prepare_progress(&done, &total)) return false;
+    *pct = total > 0 ? (int)(done * 100 / total) : 0;
+    return true;
+}
+
+static void prep_draw(float scale, int pct) {   // pct < 0: not running
+    if (pct < 0) return;
+    char b[160];
+    snprintf(b, sizeof b, menu_text(UI_MENU_OV_SHADER_PREPARE), pct > 99 ? 99 : pct);
+    ImDrawList *dl = g_open.load(std::memory_order_relaxed) ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+    float fs = ImGui::GetFontSize() * 0.8f, pad = 5 * scale;
+    ImVec2 sz = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, b);
+    ImVec2 p(12 * scale, 12 * scale);
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 130), 4 * scale);
+    dl->AddText(ImGui::GetFont(), fs, ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 210), b);
+}
+
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
     *shot = NULL;
     if (!g_test.parsed) test_parse();
@@ -1929,6 +2038,8 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     bool open = g_open.load(std::memory_order_relaxed);
     bool text = g_text.load(std::memory_order_acquire);
+    int prep_pct = -1;
+    if (!prep_active(&prep_pct)) prep_pct = -1;
     registered_route(open,text);
 
     if(!open || text || g_failed_flag())mod_ui_interaction(0);
@@ -1940,8 +2051,8 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
             g_tab_request = 0;
             set_open(1);
             open = true;
-        } else if (!g_perf_mode) {
-            return 0;
+        } else if (!g_perf_mode && prep_pct < 0) {
+            return 0;   // the overlay alone costs nothing when it has nothing to show
         }
     }
     if (g_failed_flag()) {
@@ -2015,6 +2126,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
         layout_menu(t->width, t->height, scale);
     }
     perf_draw(t, scale);
+    prep_draw(scale, prep_pct);
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
     g_cost_ns += plat_now_ns() - t0;

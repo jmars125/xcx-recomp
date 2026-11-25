@@ -20,6 +20,7 @@ import threading
 from pathlib import Path
 
 from . import state as statefile
+from .shaders import CHOICES
 
 FORMAT = 1
 ENV = 'XCX_SETUP_RECENT'
@@ -81,6 +82,18 @@ def recorded_paths(dest):
 def source(name, value):
     """A recorded source path that still names a file, else None (dlc: the first such entry of a list)."""
     return first_file(value) if name == 'dlc' else usable(name, value)
+
+
+def recorded_shaders(dest):
+    """The shader choice (now, background or off) dest's last setup recorded (installer/steps.py Prepare), or None.
+    Never raises."""
+    try:
+        state = statefile.load(Path(dest))
+    except (statefile.StateError, OSError, ValueError):
+        return None
+    step = ((state or {}).get('steps') or {}).get('prepare')
+    value = step.get('shaders') if isinstance(step, dict) else None
+    return value if value in CHOICES else None
 
 
 def from_folder(dest):

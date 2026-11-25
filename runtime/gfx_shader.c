@@ -92,9 +92,16 @@ static volatile int64_t n_requests, n_hits, n_failures, n_keys, n_xlated;   // n
 typedef struct {                                           // one translator child
     PlatChild *child;                                      // NULL: not started
     int busy;                                              // a request owns it (under S.lock)
-    size_t in_len;
+    int low;                                               // the background preparation's (tl_private) only: lowered
+    size_t in_len;                                         // on Linux (plat_child_lower), never used for the game's
     char inbuf[LINE_MAX_LEN * 2];
 } Svc;
+
+// The background preparation's translations stay on disk only: with tl_private set, translate_one hands back the
+// shader it made or loaded without entering it in the memory cache, and sets tl_owned (the caller frees it). Kept in
+// memory, the ~25,000 seed variants would stay resident for the whole run though play draws few of them. Its requests
+// also go to translator children of their own (svc_get), lowered on Linux, where the threads stay at nice 0.
+static _Thread_local int tl_private, tl_owned;
 
 static struct {
     PlatMutex lock;
@@ -193,6 +200,33 @@ static void xlate_identity(void) {
 // next to xcx.exe, so every build dir has its own (as the pipeline cache, vk_pipeline.c cache_path_init).
 static void use_preload_start(void);
 
+// The shader cache folder: XCX_SHADER_CACHE (a relative path from the exe's folder, as the setup reads it:
+// installer/shaders.py shader_cache), else <exe folder>/shader-cache; "" when it does not fit PATH_CAP. One rule for
+// init_paths and the clear (gfx_shader_cache_clear_at_start), so the clear empties the folder the game uses.
+static void cache_folder(const char *exe_dir, char out[PATH_CAP]) {
+    const char *cfg = cfg_get("XCX_SHADER_CACHE");
+    out[0] = 0;
+    if (cfg && *cfg && strlen(cfg) < PATH_CAP) {
+        int absolute = cfg[0] == '/' || cfg[0] == '\\' || (cfg[0] && cfg[1] == ':');
+        if (absolute || !exe_dir[0]) strcpy(out, cfg);
+        else if (snprintf(out, PATH_CAP, "%s/%s", exe_dir, cfg) >= PATH_CAP) out[0] = 0;
+    } else if (exe_dir[0] && snprintf(out, PATH_CAP, "%s/shader-cache", exe_dir) >= PATH_CAP) {
+        out[0] = 0;
+    }
+}
+
+// The folder of the setup's seed and of the prepared list made from it: beside xcx.exe, where installer/steps.py
+// Prepare writes the seed (also when XCX_PIPELINE_CACHE puts the pipeline cache elsewhere). 0 when the path does not
+// fit.
+int gfx_shader_seed_dir(char *out, size_t cap) {
+    int n = plat_exe_path(out, cap);
+    if (!n || (size_t)n >= cap) return 0;
+    char *cut = plat_last_sep(out);
+    if (!cut) return 0;
+    *cut = 0;
+    return 1;
+}
+
 static void init_paths(void *param) {
     (void)param;
     char exe[PATH_CAP], root[PATH_CAP] = "", exe_dir[PATH_CAP] = "";
@@ -209,14 +243,13 @@ static void init_paths(void *param) {
             }
         }
     }
-    const char *xlate_cfg = cfg_get("XCX_XLATE"), *cache_cfg = cfg_get("XCX_SHADER_CACHE");
+    const char *xlate_cfg = cfg_get("XCX_XLATE");
     char beside[PATH_CAP + 32];   // a packaged folder (tools/package_build.py) keeps the translator next to xcx.exe
     if (exe_dir[0]) snprintf(beside, sizeof beside, "%s/xcx_xlate" PLAT_EXE_SUFFIX, exe_dir);
     if (xlate_cfg && *xlate_cfg && strlen(xlate_cfg) < sizeof xlate_exe) strcpy(xlate_exe, xlate_cfg);
     else if (exe_dir[0] && file_exists(beside)) strcpy(xlate_exe, beside);
     else if (root[0]) snprintf(xlate_exe, sizeof xlate_exe, "%s/build/xlate/xcx_xlate" PLAT_EXE_SUFFIX, root);
-    if (cache_cfg && *cache_cfg && strlen(cache_cfg) < sizeof cache_dir) strcpy(cache_dir, cache_cfg);
-    else if (exe_dir[0]) snprintf(cache_dir, sizeof cache_dir, "%s/shader-cache", exe_dir);
+    cache_folder(exe_dir, cache_dir);
     xlate_identity();
     use_preload_start();
     return;
@@ -262,6 +295,8 @@ static int child_start(Svc *v) {
         rt_log("gfx_shader: cannot start %s (error %lu)", xlate_exe, (unsigned long)err);
         return 0;
     }
+    // for good: an unprivileged process can lower a priority but not raise it again (Linux; nothing on Windows)
+    if (v->low) plat_child_lower(v->child);
     v->in_len = 0;
     return 1;
 }
@@ -315,25 +350,32 @@ static int svc_used(void) {                                // caller holds S.loc
     return used;
 }
 
-// A child for one request: an idle running one, else a new slot while fewer than S.limit are in use, else waits.
-static Svc *svc_get(void) {
+// A child for one request of the given kind (low: the background preparation's, tl_private): an idle running one of
+// that kind, else a new slot while fewer than S.limit are in use, else an idle one of the other kind, stopped and
+// started again as this kind, else waits.
+static Svc *svc_get(int low) {
     plat_mutex_lock(&S.lock);
     if (!S.limit) S.limit = svc_runtime_limit();
     Svc *v;
+    int restart = 0;
     for (;;) {
-        Svc *empty = NULL;
+        Svc *empty = NULL, *other = NULL;
         v = NULL;
         for (int i = 0; i < MAX_SVC && !v; i++) {
             Svc *c = &S.s[i];
-            if (!c->busy && c->child) v = c;
+            if (!c->busy && c->child && c->low == low) v = c;
+            else if (!c->busy && c->child) other = other ? other : c;
             else if (!c->busy && !empty) empty = c;
         }
         if (!v && empty && svc_used() < S.limit) v = empty;
+        if (!v && other) v = other, restart = 1;
         if (v) break;
         plat_cond_wait(&S.freed, &S.lock);
     }
     v->busy = 1;
     plat_mutex_unlock(&S.lock);
+    if (restart) child_stop(v);
+    v->low = low;   // busy: only this request touches it now
     return v;
 }
 
@@ -371,7 +413,7 @@ static void svc_set_limit(int n) {
 // One request on a child; a dead child is restarted once. 0 when the translator is unavailable. The caller has given
 // up its virtual core (kern_core_away): the wait for a child and the translation are host time.
 static int svc_request(const char *line, char *reply, size_t reply_size) {
-    Svc *v = svc_get();
+    Svc *v = svc_get(tl_private);
     int ok = 0;
     for (int attempt = 0; attempt < 2 && !ok; attempt++)
         if (!(ok = child_exchange(v, line, reply, reply_size))) child_stop(v);
@@ -1011,7 +1053,7 @@ static size_t build_request(char *o0, const char *hex, const char *stage, const 
 // Raw line exchange for the probe: one line to the service, its reply in `reply`. Starts the service if needed.
 int gfx_shader_raw_request(const char *line, char *reply, size_t reply_size) {
     int away = kern_core_away();
-    Svc *v = svc_get();
+    Svc *v = svc_get(0);
     int ok = child_exchange(v, line, reply, reply_size);
     if (!ok) child_stop(v);
     svc_put(v);
@@ -1108,6 +1150,39 @@ const GfxShader *gfx_shader_get(int stage, const uint8_t *control, const uint8_t
     return s;
 }
 
+// One seed variant into the disk cache, for the background preparation: its input id in iid, 1 on success. Unlike
+// gfx_shader_get it neither records the pair as met in play (the seed would fill shader-answers.bin and
+// shader-programs.bin, which every boot reads whole, and rank first in the boot prebuild's warm list) nor keeps the
+// shader in memory.
+static void in_store(const uint8_t iid[32], int stage, const uint8_t *control, const uint8_t *code, const Req *r,
+                     const GfxShaderAnswers *a);
+
+static int prepare_private(int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size, const uint8_t *c1,
+                           const GfxShaderAnswers *a, uint8_t iid[32]) {
+    Req r;
+    if (!req_init(&r, stage, control, code, code_size, c1, a)) return 0;
+    const GfxShader *s = mem_find(r.key);
+    if (s) return memcpy(iid, s->iid, 32), 1;
+    paths();
+    if (!cache_dir[0]) return fail("no cache directory", NULL), 0;
+    GfxShader *d = r.final ? disk_load(r.key, r.iid) : NULL;   // translated before (an earlier, unfinished run)
+    if (d) {   // its stored inputs too, which the prepared list's checks look for (prepared_current, prepared_intact)
+        in_store(d->iid, stage, control, code, &r, a);
+        return memcpy(iid, d->iid, 32), shader_free(d), 1;
+    }
+    // normal priority while the translation is in flight: a game draw that needs the same shader waits on this one
+    // (translate's flight entry, held for the child's round trip), so it must not wait for CPU behind the game
+    plat_thread_priority(PLAT_PRIO_NORMAL);
+    tl_private = 1, tl_owned = 0;
+    s = translate(&r, stage, control, code, a);
+    tl_private = 0;
+    plat_thread_priority(PLAT_PRIO_BELOW_NORMAL);
+    if (!s) return 0;
+    memcpy(iid, s->iid, 32);
+    if (tl_owned) shader_free((GfxShader *)s);
+    return 1;
+}
+
 // ---- stored inputs (<cache>/in/<input id>.in, see the top)
 
 typedef struct {
@@ -1173,6 +1248,13 @@ static int in_load(const uint8_t iid[32], Inputs *in) {
 
 // ---- translation
 
+// translate_one's result: into the memory cache, or to the caller of prepare_private (tl_private), who frees it.
+static GfxShader *hand_back(GfxShader *s) {
+    if (!tl_private) return mem_insert(s);
+    tl_owned = 1;
+    return s;
+}
+
 static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *control, const uint8_t *code,
                                       const GfxShaderAnswers *a) {
     const uint8_t *key = r->key;
@@ -1183,7 +1265,12 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     const uint8_t *look = r->final ? key : NULL, *look_iid = r->iid;
     if (!r->final && use_find(r->code_hash, &m)) build_key(r->code_hash, a, &m, mk, miid), look = mk, look_iid = miid;
     if (look && (s = mem_find(look))) return plat_inc64(&n_hits), s;
-    if (look && (s = disk_load(look, look_iid))) return plat_inc64(&n_hits), mem_insert(s);
+    if (look && (s = disk_load(look, look_iid))) {
+        // translated before (a pass stopped halfway): the preparation's checks look for the stored inputs too
+        // (prepared_current, installer/shaders.py prepared_intact); play keeps its old path
+        if (tl_private) in_store(s->iid, stage, control, code, r, a);
+        return plat_inc64(&n_hits), hand_back(s);
+    }
 
     uint64_t skip = stage == GFX_STAGE_CS ? 0 : CODE_SKIP;
     char hex[65], code_path[PATH_CAP + 80], spv_path[PATH_CAP + 80], res_path[PATH_CAP + 80];
@@ -1238,7 +1325,7 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     }
     in_store(s->iid, stage, control, code, r, a);
     plat_inc64(&n_xlated);
-    return mem_insert(s);
+    return hand_back(s);
 }
 
 // The service round trip for a request that is in neither cache. One translation per cache key (per code hash while
@@ -1475,6 +1562,8 @@ typedef struct {
     const uint8_t (*named)[32];
     size_t n_named, n, cap;
     uint8_t (*v)[32];
+    const uint8_t (*skip)[32];   // sorted: the prepared list's ids (other_inputs)
+    size_t n_skip;
 } InList;
 
 static int in_collect(const char *file, void *ctx) {
@@ -1485,6 +1574,7 @@ static int in_collect(const char *file, void *ctx) {
     memcpy(name, file, 64);
     name[64] = 0;
     if (!hex32(name, iid) || (l->n_named && bsearch(iid, l->named, l->n_named, 32, iid_cmp))) return 1;
+    if (l->n_skip && bsearch(iid, l->skip, l->n_skip, 32, iid_cmp)) return 1;
     if (l->n == l->cap) {
         size_t c = l->cap ? l->cap * 2 : 1024;
         uint8_t (*t)[32] = realloc(l->v, c * 32);
@@ -1495,12 +1585,19 @@ static int in_collect(const char *file, void *ctx) {
     return 1;
 }
 
-// The stored inputs not in named (sorted): ids parsed from the in/ file names.
+// The stored inputs (ids parsed from the in/ file names) not named and not in the prepared list: the seed's ~25,000 variants are the background pass's,
+// which handles a new translator identity privately and off the start; the prewarm, which the guest waits for,
+// translates in the foreground and records what it makes as met in play.
+static size_t prepared_ids(uint8_t (**out)[32]);   // the prepared list's input ids, sorted (after the list's format)
+
 static size_t other_inputs(const uint8_t (*named)[32], size_t n_named, uint8_t (**out)[32]) {
     char dir[PATH_CAP + 80];
     snprintf(dir, sizeof dir, "%s/in", cache_dir);
     InList l = {.named = named, .n_named = n_named};
+    uint8_t (*skip)[32] = NULL;
+    l.n_skip = prepared_ids(&skip), l.skip = (const uint8_t (*)[32])skip;
     plat_file_list(dir, ".in", in_collect, &l);
+    free(skip);
     return *out = l.v, l.n;
 }
 
@@ -1652,7 +1749,9 @@ static void unpack_answers(const uint8_t *p, GfxShaderAnswers *a) {
 }
 
 // Reads a record file's body (after its header) into *body; 0 when absent, and a file with another header is removed.
-static int rec_read(const char *path, const char *magic, uint32_t version, uint32_t rec_size, uint8_t **body, size_t *n) {
+// keep: a file this code never writes (the setup's seed): one of another format or version is ignored, not deleted.
+static int rec_read_as(const char *path, const char *magic, uint32_t version, uint32_t rec_size, uint8_t **body,
+                       size_t *n, int keep) {
     *body = NULL, *n = 0;
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
@@ -1669,9 +1768,14 @@ static int rec_read(const char *path, const char *magic, uint32_t version, uint3
     fclose(f);
     if (!ok) {
         free(*body), *body = NULL, *n = 0;
-        if (len > 0) rt_log("gfx_shader: %s has another format or version; it is rewritten", path), remove(path);
+        if (len > 0 && keep) rt_log("gfx_shader: %s has another format or version; ignored", path);
+        else if (len > 0) rt_log("gfx_shader: %s has another format or version; it is rewritten", path), remove(path);
     }
     return ok;
+}
+
+static int rec_read(const char *path, const char *magic, uint32_t version, uint32_t rec_size, uint8_t **body, size_t *n) {
+    return rec_read_as(path, magic, version, rec_size, body, n, 0);
 }
 
 // Walks shader-programs.bin records; returns the byte length of the whole records. fn may be NULL.
@@ -1791,8 +1895,14 @@ typedef struct {
     const uint8_t *ans;
     size_t n_ans;
     uint8_t (*iid)[32];                                    // per answers record: the resolved input id, zero on failure
-    volatile int64_t next, done, missing, failed;
+    volatile int64_t next, done, missing, failed, succeeded;
+    volatile int32_t stopped;                              // gave up: PREP_GIVE_UP failures before any success
+    int background;                                        // while the game runs (gfx_shader_prepare_start)
 } Prep;
+
+// The background preparation's progress for the overlay (gfx_shader_prepare_progress): records done and in all.
+static volatile int64_t bg_done, bg_total;
+static volatile int32_t bg_running;
 
 static int prg_cmp(const void *x, const void *y) { return memcmp(((const PrgIdx *)x)->rec + 12, ((const PrgIdx *)y)->rec + 12, 32); }
 
@@ -1801,8 +1911,16 @@ static void prg_collect(const uint8_t *rec, void *ctx) {
     l->idx[l->n++].rec = rec;
 }
 
+enum { PREP_GIVE_UP = 64,     // failures before the first success: no translator (missing, blocked); stop, log once
+       PREP_SAMPLE = 64 };     // prepared_current: records sampled for their stored inputs
+static volatile int32_t prep_gave_up;   // the last prepare_files stopped that way (prepare_seed's summary line)
+
 static void prep_worker(void *arg) {
     Prep *p = arg;
+    // Below the game's threads, not idle: prepare_private goes back to normal priority while a translation is in
+    // flight, which a game draw may wait for. Windows only in effect: on Linux plat_thread_priority renices only where
+    // the process may raise its nice again (platform/linux.c may_renice), so there the threads stay at nice 0.
+    if (p->background) plat_thread_priority(PLAT_PRIO_BELOW_NORMAL);
     for (;;) {
         size_t i = (size_t)plat_inc64(&p->next) - 1;
         if (i >= p->n_ans) return;
@@ -1812,52 +1930,88 @@ static void prep_worker(void *arg) {
         PrgIdx k = {key_rec}, *e = bsearch(&k, p->progs.idx, p->progs.n, sizeof k, prg_cmp);
         if (!e) {
             plat_inc64(&p->missing), plat_inc64(&p->done);
+            if (p->background) plat_inc64(&bg_done);
             continue;
         }
         uint32_t st, len;
         memcpy(&st, e->rec, 4), memcpy(&len, e->rec + 4, 4);
         const uint8_t *control = e->rec + 44, *code = control + CONTROL_SIZE, *c1 = code + len;
+        uint32_t c1_rec, c1_off, length;   // req_init reads length - c1_off bytes at c1: the record must hold them
+        memcpy(&c1_rec, e->rec + 8, 4), memcpy(&c1_off, control + 0x700, 4), memcpy(&length, control + 0x704, 4);
+        if (c1_off > length || length - c1_off != c1_rec) {
+            plat_inc64(&p->failed), plat_inc64(&p->done);   // a damaged or hand-edited seed record
+            if (p->background) plat_inc64(&bg_done);
+            continue;
+        }
         GfxShaderAnswers a;
         unpack_answers(r + 68, &a);
-        const GfxShader *s = gfx_shader_get((int)st, control, code, len, c1, &a);
-        if (!s) plat_inc64(&p->failed);
-        else if (p->iid) memcpy(p->iid[i], s->iid, 32);
+        uint8_t iid[32];
+        const GfxShader *s = NULL;
+        int ok = p->background ? prepare_private((int)st, control, code, len, c1, &a, iid)
+                               : (s = gfx_shader_get((int)st, control, code, len, c1, &a)) != NULL;
+        if (s) memcpy(iid, s->iid, 32);
+        if (!ok) {
+            if (plat_inc64(&p->failed) >= PREP_GIVE_UP && !p->succeeded && !plat_xchg32(&p->stopped, 1)) {
+                plat_xchg64(&p->next, (int64_t)p->n_ans);   // the other threads stop at their next record
+                rt_log("gfx_shader: prepare: gave up after %d failures with none translated: no working translator "
+                       "(xcx_xlate missing, or blocked)?", PREP_GIVE_UP);
+            }
+        } else {
+            plat_inc64(&p->succeeded);
+            if (p->iid) memcpy(p->iid[i], iid, 32);
+        }
         plat_inc64(&p->done);
+        if (p->background) plat_inc64(&bg_done);
     }
 }
 
+// xcx.exe --prepare-shaders (gfx_shader_prepare_seed): prepare_files also prints "prepare-shaders: progress <done> of
+// <total>" once a second on the console, which the setup reads for its progress bar and time left (installer/steps.py
+// Prepare.prepare_shaders). The game's own foreground pass (boot.c) prints nothing.
+static int prep_console;
+
 // Translates every record of ans_path whose program is in prg_path on `threads` threads with up to `procs` translators.
+// background: while the game runs; the translator limit is the run-time one plus `threads` (procs is not used), so the
+// game's own translations (gfx_shader_get_async, svc_runtime_limit children) never queue behind the preparation.
 // *ans_out, *iid_out (optional; free them): the answers records and the input id each resolved to (zero: failed).
 // Returns the record count, -1 without the files.
-static long long prepare_files(const char *ans_path, const char *prg_path, int threads, int procs, const char *what,
-                               uint8_t **ans_out, uint8_t (**iid_out)[32]) {
+static long long prepare_files(const char *ans_path, const char *prg_path, int threads, int procs, int background,
+                               const char *what, uint8_t **ans_out, uint8_t (**iid_out)[32]) {
     paths();
     double t0 = (double)plat_now_ms();
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
-    if (!rec_read(ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ab, &an) ||
-        !rec_read(prg_path, "XCXSPRG", PRG_VERSION, 0, &pb, &pn)) {
+    // read only: a seed the setup shipped stays even when this build can't read it (the setup writes it again)
+    if (!rec_read_as(ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ab, &an, 1) ||
+        !rec_read_as(prg_path, "XCXSPRG", PRG_VERSION, 0, &pb, &pn, 1)) {
         rt_log("gfx_shader: prepare: no %s (%s)", what, ans_path);
         free(ab), free(pb);
         return -1;
     }
-    Prep p = {.progs = {calloc(pn / PRG_HEAD + 1, sizeof(PrgIdx)), 0}, .ans = ab, .n_ans = an / ANS_REC};
+    Prep p = {.progs = {calloc(pn / PRG_HEAD + 1, sizeof(PrgIdx)), 0}, .ans = ab, .n_ans = an / ANS_REC,
+              .background = background};
     if (iid_out) p.iid = calloc(p.n_ans + 1, 32);
     if (!p.progs.idx || (iid_out && !p.iid)) return free(p.progs.idx), free(p.iid), free(ab), free(pb), -1;
     prg_walk(pb, pn, prg_collect, &p.progs);
     qsort(p.progs.idx, p.progs.n, sizeof *p.progs.idx, prg_cmp);
     uint64_t xl0 = (uint64_t)n_xlated;
     threads = threads < 1 ? 1 : threads > 64 ? 64 : threads;
-    svc_set_limit(procs);
+    if (background) plat_xchg64(&bg_total, (int64_t)p.n_ans);
+    svc_set_limit(background ? svc_runtime_limit() + threads : procs);
     PlatThread *t[64];
     int k = 0;
     for (int i = 0; i < threads; i++)
         if ((t[k] = plat_thread_new(prep_worker, &p, "shader prepare"))) k++;
     if (!k) prep_worker(&p);
-    for (int m = 0; m < k; m++)
-        while (!plat_thread_join_ns(t[m], 5000000000u))
-            rt_log("gfx_shader: prepare: %lld of %zu pairs, %llu translated, %.0f ms", (long long)p.done, p.n_ans,
-                   (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
+    if (prep_console) printf("prepare-shaders: progress 0 of %zu\n", p.n_ans), fflush(stdout);
+    for (int m = 0, ticks = 0; m < k; m++)
+        while (!plat_thread_join_ns(t[m], prep_console ? 1000000000u : 5000000000u)) {
+            if (prep_console) printf("prepare-shaders: progress %lld of %zu\n", (long long)p.done, p.n_ans), fflush(stdout);
+            if (!prep_console || ++ticks % 5 == 0)
+                rt_log("gfx_shader: prepare: %lld of %zu pairs, %llu translated, %.0f ms", (long long)p.done, p.n_ans,
+                       (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
+        }
+    if (prep_console) printf("prepare-shaders: progress %zu of %zu\n", p.n_ans, p.n_ans), fflush(stdout);
     svc_set_limit(svc_runtime_limit());
     rt_log("gfx_shader: prepare: %zu %s of %zu programs: %llu translated, %lld failed, %lld without a program, the rest "
            "cached; %.0f ms", p.n_ans, what, p.progs.n, (unsigned long long)((uint64_t)n_xlated - xl0), (long long)p.failed,
@@ -1866,6 +2020,7 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
     if (ans_out) *ans_out = ab;
     else free(ab);
     if (iid_out) *iid_out = p.iid;
+    plat_xchg32(&prep_gave_up, p.stopped);
     return (long long)p.n_ans;
 }
 
@@ -1874,32 +2029,53 @@ void gfx_shader_prepare_recorded(int threads, int procs) {
         rt_log("gfx_shader: prepare: no recorded answers (not recording)");
         return;
     }
-    prepare_files(RC.ans_path, RC.prg_path, threads, procs, "recorded pairs", NULL, NULL);
+    prepare_files(RC.ans_path, RC.prg_path, threads, procs, 0, "recorded pairs", NULL, NULL);
 }
 
-// ---- prepared variants (shader-prepared.bin next to pipeline-keys.bin)
+// ---- prepared variants (shader-prepared.bin beside xcx.exe, gfx_shader_seed_dir)
 // "XCXSPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
 // them in priority order, one per input id; gfx_shader_warm_list reads them at boot.
 #define PRP_MAGIC "XCXSPRP"   // 8 bytes with its NUL: the writer and the reader use this one spelling
 #define PRP_VERSION 1
 #define PRP_REC 36
 
-int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
+static size_t prepared_ids(uint8_t (**out)[32]) {
+    char dir[PATH_CAP], prp[PATH_CAP + 32];
+    uint8_t *b = NULL;
+    size_t len = 0, n = 0;
+    *out = NULL;
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return 0;
+    snprintf(prp, sizeof prp, "%s/shader-prepared.bin", dir);
+    if (!plat_file_exists(prp) || !rec_read(prp, PRP_MAGIC, PRP_VERSION, PRP_REC, &b, &len)) return 0;
+    if ((n = len / PRP_REC) && (*out = malloc(n * 32))) {
+        for (size_t i = 0; i < n; i++) memcpy((*out)[i], b + i * PRP_REC + 4, 32);
+        qsort(*out, n, 32, iid_cmp);
+    } else {
+        n = 0;
+    }
+    free(b);
+    return n;
+}
+
+static int prepare_seed(const char *dir, int threads, int procs, int background) {
     char ans[PATH_CAP + 32], prg[PATH_CAP + 32], out[PATH_CAP + 32];
     snprintf(ans, sizeof ans, "%s/seed-answers.bin", dir);
     snprintf(prg, sizeof prg, "%s/seed-programs.bin", dir);
     snprintf(out, sizeof out, "%s/shader-prepared.bin", dir);
     double t0 = (double)plat_now_ms();
-    uint64_t fail0 = (uint64_t)n_failures;
     uint8_t *ab = NULL, (*iid)[32] = NULL;
-    long long n = prepare_files(ans, prg, threads, procs, "seed variants", &ab, &iid);
+    long long n = prepare_files(ans, prg, threads, procs, background, "seed variants", &ab, &iid);
     if (n < 0) return 1;
     uint8_t *recs = calloc((size_t)n + 1, PRP_REC);
     static const uint8_t zero[32];
-    size_t u = 0, by[3] = {0}, stages[6] = {0};
+    size_t u = 0, failed = 0, by[3] = {0}, stages[6] = {0};   // failed: this seed's, not the game's own meanwhile
     Set64 seen = {0};
     for (long long i = 0; recs && i < n; i++) {           // seed records come in priority order: the first id wins
-        if (!memcmp(iid[i], zero, 32) || !set_add(&seen, hash8(iid[i]))) continue;
+        if (!memcmp(iid[i], zero, 32)) {
+            failed++;
+            continue;
+        }
+        if (!set_add(&seen, hash8(iid[i]))) continue;
         uint8_t *r = recs + u * PRP_REC;
         const uint8_t *a = ab + (size_t)i * ANS_REC;
         r[0] = a[0] < 6 ? a[0] : 0, r[1] = a[ANS_REC - 1] > 2 ? 2 : a[ANS_REC - 1];
@@ -1908,22 +2084,303 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
     }
     free(seen.v);
     RecHeader h = {PRP_MAGIC, PRP_VERSION, PRP_REC};
-    uint8_t *file = recs ? malloc(sizeof h + u * PRP_REC + 1) : NULL;
+    // the list names what was prepared; the variants that failed are translated in play when met, as without a seed.
+    // Writing no list for them would start the pass again at every start for the same failures. Nothing prepared (no
+    // working translator, say): no list, so the setup warns and the next start tries again.
+    uint8_t *file = recs && u && !prep_gave_up ? malloc(sizeof h + u * PRP_REC + 1) : NULL;
     int ok = file != NULL;
     if (ok) {
         memcpy(file, &h, sizeof h), memcpy(file + sizeof h, recs, u * PRP_REC);
         ok = plat_file_write_atomic(out, file, sizeof h + u * PRP_REC);
     }
+    if (ok) {   // the translator identity it was made under (prepared_current)
+        char id[PATH_CAP + 32], hex[65];
+        snprintf(id, sizeof id, "%s/shader-prepared.id", dir);
+        key_hex(xlate_id, hex);
+        if (!plat_file_write_atomic(id, hex, 64)) ok = 0, plat_file_delete(out);   // a list without its id: every
+    }                                                                                // start would prepare again
     char msg[640];
     snprintf(msg, sizeof msg, "gfx_shader: prepared %zu shader variants (vertex %zu, fragment %zu, compute %zu; title %zu, "
              "warm-up %zu, other %zu) from %lld seed records, %llu translations failed, in %.0f ms; %s %s", u,
              stages[GFX_STAGE_VS], stages[GFX_STAGE_FS], stages[GFX_STAGE_CS], by[0], by[1], by[2], n,
-             (unsigned long long)((uint64_t)n_failures - fail0), (double)plat_now_ms() - t0,
-             ok ? "wrote" : "cannot write", out);
+             (unsigned long long)failed, (double)plat_now_ms() - t0,
+             ok ? "wrote" : prep_gave_up || !u ? "gave up (no working translator), not writing" : "cannot write", out);
     rt_log("%s", msg);
-    printf("%s\n", msg);
+    if (!background) printf("%s\n", msg);   // xcx.exe --prepare-shaders reports on the console
     free(file), free(recs), free(iid), free(ab);
     return ok ? 0 : 1;
+}
+
+int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
+    prep_console = 1;
+    int rc = prepare_seed(dir, threads, procs, 0);
+    prep_console = 0;
+    return rc;
+}
+
+// ---- the seed, prepared while the game runs
+// The setup writes the seed beside xcx.exe (tools/prepare_shaders.py) and, with the choice "Prepare now", also runs
+// xcx.exe --prepare-shaders, which leaves shader-prepared.bin and shader-prepared.id there. Otherwise, or when the id
+// names another translator identity, the seed is translated here while the game runs, by a few threads below the
+// game's on Windows (prep_worker; at normal priority while a translation is in flight); the translator processes run
+// at normal priority, like the game's own. The overlay shows the progress.
+// The setup deletes shader-prepared.bin whenever it writes a new seed. Translation goes around the record of answers
+// met in play and the memory cache (prepare_private). The thread is not joined: quitting mid-run (accepted) stops it
+// with the process, the translator children see their input close, and the translations made so far stay in the
+// disk cache, so the next start passes over them quickly; shader-prepared.bin is only written, atomically, at the end.
+static char bg_dir[PATH_CAP];
+static int bg_threads, bg_asked;   // bg_asked: the pass came from the menu's button
+
+// 1 when prp is there and shader-prepared.id beside it names the translator identity in use. The identity includes the
+// host answers (gfx_shader_set_host), so another translator or another graphics card that the setup did not see (a
+// dev install, XCX_XLATE, a GPU swap) prepares the seed again instead of leaving it to be translated in play.
+static int prepared_current(const char *dir) {
+    char prp[PATH_CAP + 32], id[PATH_CAP + 32], hex[65];
+    snprintf(prp, sizeof prp, "%s/shader-prepared.bin", dir);
+    if (!plat_file_exists(prp)) return 0;
+    snprintf(id, sizeof id, "%s/shader-prepared.id", dir);
+    uint64_t n = 0;
+    uint8_t *f = plat_file_read(id, &n);
+    key_hex(xlate_id, hex);
+    int same = f && n == 64 && !memcmp(f, hex, 64);
+    free(f);
+    if (same) {   // the translations too: a shader cache deleted by hand leaves the list behind. Of up to 64 records
+        // spread over the list (first and last included), half or more must have their stored inputs, the setup's
+        // rule (installer/shaders.py prepared_intact) on a sample: this check runs at every start
+        uint8_t *b = NULL;
+        size_t len = 0;
+        int ok = rec_read(prp, PRP_MAGIC, PRP_VERSION, PRP_REC, &b, &len) && len >= PRP_REC;
+        size_t k = len / PRP_REC, picks = k < PREP_SAMPLE ? k : PREP_SAMPLE, have = 0;
+        for (size_t i = 0; ok && i < picks; i++) {
+            char p[PATH_CAP + 80];
+            in_path(b + (picks > 1 ? i * (k - 1) / (picks - 1) : 0) * PRP_REC + 4, p);
+            have += file_exists(p);
+        }
+        same = ok && have * 2 >= picks;
+        free(b);
+        if (!same) rt_log("gfx_shader: %s names translations the shader cache no longer has; preparing again", prp);
+    }
+    return same;
+}
+
+int gfx_shader_prepared_current(const char *dir) {
+    paths();   // the translator identity and the cache folder
+    return prepared_current(dir);
+}
+
+static void bg_main(void *arg) {
+    (void)arg;
+    plat_thread_priority(PLAT_PRIO_BELOW_NORMAL);
+    if (bg_asked) rt_log("gfx_shader: preparing the setup's shader seed in the background on %d thread(s) (asked in the "
+                         "menu)", bg_threads);
+    else rt_log("gfx_shader: preparing the setup's shader seed in the background on %d thread(s) (shader_prepare = 0 "
+                "turns this off)", bg_threads);
+    prepare_seed(bg_dir, bg_threads, 0, 1);
+    plat_xchg64(&bg_total, 0);   // a later press shows no stale percentage
+    plat_xchg32(&bg_running, 0);
+}
+
+// Starts the background pass. asked: from the menu's "Prepare shaders now" (shader_prepare = 0 does not stop it, and
+// a current prepared list is reported rather than redone). Returns GFX_PREPARE_*.
+static int prepare_begin(int asked) {
+    if (!RC.on) {   // no recording: the boot's prewarm has not set up the caches (XCX_PIPE_SYNC, a --shot run)
+        rt_log("gfx_shader: shader preparation is not available: the pipeline record is off");
+        return GFX_PREPARE_UNAVAILABLE;
+    }
+    if (bg_running) return GFX_PREPARE_RUNNING;
+    char dir[PATH_CAP], seed[PATH_CAP + 32];
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) {
+        rt_log("gfx_shader: shader preparation is not available: xcx.exe's folder does not fit a path");
+        return GFX_PREPARE_UNAVAILABLE;
+    }
+    paths();   // the translator identity prepared_current compares, and the cache folder
+    if (!cache_dir[0]) {
+        rt_log("gfx_shader: shader preparation is not available: the shader cache folder's path does not fit");
+        return GFX_PREPARE_UNAVAILABLE;
+    }
+    snprintf(seed, sizeof seed, "%s/seed-answers.bin", dir);
+    if (!plat_file_exists(seed)) return GFX_PREPARE_NO_SEED;
+    if (prepared_current(dir)) return GFX_PREPARE_DONE;
+    // a few threads, one translator child each on top of the run-time ones: about 40 ms of a core per shader
+    const char *te = cfg_get("XCX_SHADER_PREPARE_THREADS");   // no fixed default: an eighth of the CPUs, 1 to 4
+    int cpus = (int)plat_cpu_count(), t = te && *te ? atoi(te) : 0;
+    int threads = t > 0 ? (t > 16 ? 16 : t) : cpus / 8 < 1 ? 1 : cpus / 8 > 4 ? 4 : cpus / 8;
+    int free_slots = MAX_SVC - svc_runtime_limit();   // each thread's child on top of the run-time ones
+    if (threads > free_slots) {
+        rt_log("gfx_shader: %d background shader thread(s) asked for, but only %d translator processes are free beside "
+               "xlate_procs %d (at most %d in all): using %d", threads, free_slots, svc_runtime_limit(), MAX_SVC,
+               free_slots);
+        threads = free_slots;
+    }
+    if (threads < 1) {
+        rt_log("gfx_shader: shader preparation is not available: no translator process is free (xlate_procs %d)",
+               svc_runtime_limit());
+        return GFX_PREPARE_UNAVAILABLE;
+    }
+    if (plat_xchg32(&bg_running, 1)) return GFX_PREPARE_RUNNING;   // the boot's start and a menu press, at once
+    snprintf(bg_dir, sizeof bg_dir, "%s", dir);   // after the claim: one writer
+    bg_threads = threads, bg_asked = asked;
+    plat_xchg64(&bg_done, 0), plat_xchg64(&bg_total, 0);
+    if (!plat_thread_new(bg_main, NULL, "shader prepare bg")) {
+        plat_xchg32(&bg_running, 0);
+        rt_log("gfx_shader: shader preparation is not available: its thread could not start");
+        return GFX_PREPARE_UNAVAILABLE;
+    }
+    return GFX_PREPARE_STARTED;
+}
+
+void gfx_shader_prepare_start(void) {
+    // XCX_TEST_PREPARE_SHADERS (boot.c prewarm_main) sets the translator limit for its own run and back after it
+    const char *test = cfg_get("XCX_TEST_PREPARE_SHADERS");
+    // a --shot image must not depend on background work (rt_boot leaves the pipeline builds synchronous for it too)
+    if (!cfg_bool("XCX_SHADER_PREPARE") || (test && !strcmp(test, "1")) || rt_config()->shot) return;
+    prepare_begin(0);
+}
+
+int gfx_shader_prepare_now(void) { return prepare_begin(1); }
+
+// ---- clearing the caches (the menu's "Clear shader cache"): the files are open and the memory cache is in use while
+// the game runs, so the press leaves a mark beside xcx.exe and the next start deletes them before anything reads them
+// (rt_boot, before the prewarm). What goes: the shader cache folder, the pipeline cache and keys, the record of what
+// play met, and the prepared list with its id. The setup's seed stays, so with shader_prepare on the next start
+// prepares the game's shaders again. The GPU driver's own cache is the driver's to keep.
+#define CLEAR_MARK "shader-cache.clear"
+
+static int gone(const char *path) {   // deleted, read-only too, or not there
+    int rc = plat_fs_unlink(path);
+    return rc == PLAT_FS_OK || rc == PLAT_FS_NOT_FOUND;
+}
+
+int gfx_shader_cache_clear_request(int on) {
+    char dir[PATH_CAP], mark[PATH_CAP + 32];
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return 0;
+    snprintf(mark, sizeof mark, "%s/%s", dir, CLEAR_MARK);
+    if (!on) return gone(mark);
+    return plat_file_write(mark, "1", 1);
+}
+
+int gfx_shader_cache_clear_pending(void) {
+    char dir[PATH_CAP], mark[PATH_CAP + 32];
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return 0;
+    snprintf(mark, sizeof mark, "%s/%s", dir, CLEAR_MARK);
+    return plat_file_exists(mark);
+}
+
+typedef struct {   // clear_listed's walk
+    const char *dir;
+    int in;            // the in/ folder: <key>.in
+    int failed;
+} ClearWalk;
+
+// Only the names the cache writes, so a XCX_SHADER_CACHE that names a shared folder loses nothing else: <64 hex><kind>
+// (.spv .res.json .use .code .job; in/: .in), or that name's <name>.<pid>.<tid>.tmp of an interrupted
+// plat_file_write_atomic (installer/shaders.py OWN_FILE / OWN_INPUT, the setup's same rule)
+static int own_name(const char *name, int in) {
+    static const char *const cache[] = {".spv", ".res.json", ".use", ".code", ".job"};
+    static const char *const inputs[] = {".in"};
+    for (int i = 0; i < 64; i++)
+        if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) return 0;
+    const char *rest = name + 64, *const *kinds = in ? inputs : cache;
+    size_t n = in ? 1 : sizeof cache / sizeof *cache;
+    for (size_t i = 0; i < n; i++) {
+        size_t k = strlen(kinds[i]);
+        if (strncmp(rest, kinds[i], k)) continue;
+        const char *t = rest + k;
+        if (!*t) return 1;
+        for (int part = 0; part < 2; part++) {   // .<digits>.<digits>, then exactly .tmp
+            if (*t++ != '.') return 0;
+            size_t d = strspn(t, "0123456789");
+            if (!d) return 0;
+            t += d;
+        }
+        return !strcmp(t, ".tmp");
+    }
+    return 0;
+}
+
+static int clear_listed(const char *name, void *ctx) {
+    ClearWalk *w = ctx;
+    if (strlen(name) < 64 || !own_name(name, w->in)) return 1;
+    char p[PATH_CAP * 2 + 8];
+    snprintf(p, sizeof p, "%s/%s", w->dir, name);
+    if (!gone(p)) w->failed++;
+    return 1;
+}
+
+static int clear_folder(const char *dir) {   // the shader cache and its in/; the folders go only when left empty
+    char sub[PATH_CAP + 8];
+    snprintf(sub, sizeof sub, "%s/in", dir);
+    ClearWalk w = {sub, 1, 0};
+    plat_file_list(sub, "", clear_listed, &w);
+    plat_fs_rmdir(sub);
+    w.dir = dir, w.in = 0;
+    plat_file_list(dir, "", clear_listed, &w);
+    plat_fs_rmdir(dir);
+    return w.failed;
+}
+
+static int same_folder(const char *a, const char *b) {   // the same text, either separator, no trailing separator
+    for (;; a++, b++) {
+        int ca = *a == '\\' ? '/' : *a, cb = *b == '\\' ? '/' : *b;
+        if (!ca && cb == '/' && !b[1]) return 1;
+        if (!cb && ca == '/' && !a[1]) return 1;
+        if (ca != cb) return 0;
+        if (!ca) return 1;
+    }
+}
+
+void gfx_shader_cache_clear_at_start(void) {
+    char dir[PATH_CAP], mark[PATH_CAP + 32], keys_dir[PLAT_PATH_MAX * 2], shaders[PATH_CAP];
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) return;
+    snprintf(mark, sizeof mark, "%s/%s", dir, CLEAR_MARK);
+    if (!plat_file_exists(mark)) return;
+    // The folder of the pipeline cache and the records, by vk_pipeline.c cache_path_init (XCX_PIPELINE_CACHE when it
+    // fits, else <exe>/pipeline-cache.bin) and keys_open (the keys and answers beside it; a bare name: the current
+    // folder). File names: vk_pipeline.c (pipeline-cache.bin, pipeline-keys.bin), this file (shader-answers.bin,
+    // shader-programs.bin, the prepared list and its id; installer/steps.py PREPARED).
+    const char *pc = cfg_get("XCX_PIPELINE_CACHE");
+    int own_pc = pc && *pc && strlen(pc) < sizeof keys_dir;   // cache_path_init's own limit
+    if (own_pc) {
+        snprintf(keys_dir, sizeof keys_dir, "%s", pc);
+        char *cut = plat_last_sep(keys_dir);
+        if (cut) *cut = 0;
+        else snprintf(keys_dir, sizeof keys_dir, ".");
+    } else {
+        snprintf(keys_dir, sizeof keys_dir, "%s", dir);
+    }
+    int failed = 0;
+    static const char *const files[] = {"pipeline-keys.bin", "shader-answers.bin", "shader-programs.bin"};
+    for (size_t i = 0; i < sizeof files / sizeof *files; i++) {
+        char p[PLAT_PATH_MAX * 2 + 32];
+        snprintf(p, sizeof p, "%s/%s", keys_dir, files[i]);
+        if (!gone(p)) failed++;
+    }
+    static const char *const prepared[] = {"shader-prepared.bin", "shader-prepared.id"};   // beside xcx.exe
+    for (size_t i = 0; i < 2; i++) {
+        char p[PATH_CAP + 32];
+        snprintf(p, sizeof p, "%s/%s", dir, prepared[i]);
+        if (!gone(p)) failed++;
+    }
+    char pcache[PLAT_PATH_MAX * 2 + 32];
+    if (own_pc) snprintf(pcache, sizeof pcache, "%s", pc);   // the pipeline cache under its own name
+    else snprintf(pcache, sizeof pcache, "%s/pipeline-cache.bin", dir);
+    if (!gone(pcache)) failed++;
+    cache_folder(dir, shaders);
+    if (!shaders[0]) rt_log("gfx_shader: clear: the shader cache folder's path does not fit; it is left as it is");
+    else if (same_folder(shaders, dir)) rt_log("gfx_shader: clear: XCX_SHADER_CACHE names the game's own folder; it is left as it is");
+    else failed += clear_folder(shaders);
+    if (!gone(mark))
+        rt_log("gfx_shader: clear: %s cannot be deleted; the caches are cleared again at the next start", CLEAR_MARK);
+    if (failed) rt_log("gfx_shader: cleared the shader caches (asked in the menu), but %d file(s) could not be deleted "
+                       "(in use or not allowed); they are kept and stay valid", failed);
+    else rt_log("gfx_shader: cleared the shader cache, the pipeline cache and the record of what play met (asked in the "
+                "menu)");
+}
+
+int gfx_shader_prepare_progress(int64_t *done, int64_t *total) {
+    if (!bg_running) return 0;
+    *done = bg_done, *total = bg_total;
+    return 1;
 }
 
 // The variants the boot prebuild warms, most likely first: every input id play recorded (shader-answers.bin, priority
@@ -1931,9 +2388,9 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
 size_t gfx_shader_warm_list(GfxWarmEnt **out) {
     *out = NULL;
     if (!RC.on) return 0;
-    char prp[PATH_CAP + 32];
-    snprintf(prp, sizeof prp, "%.*sshader-prepared.bin", (int)(strlen(RC.ans_path) - strlen("shader-answers.bin")),
-             RC.ans_path);
+    char prp[PATH_CAP + 32], dir[PATH_CAP];
+    if (!gfx_shader_seed_dir(dir, sizeof dir)) dir[0] = 0;
+    snprintf(prp, sizeof prp, "%s%sshader-prepared.bin", dir, dir[0] ? "/" : "");
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
     plat_mutex_lock(&rec_io);                      // no append meanwhile

@@ -399,6 +399,7 @@ static void guest_main(Cpu *c) {
 static void prewarm_main(void *arg) {
     (void)arg;
     vk_pipeline_prewarm();
+    gfx_shader_prepare_start();   // its own thread: the guest does not wait for it
     const char *prep = cfg_get("XCX_TEST_PREPARE_SHADERS");   // Task 2.3 test hook; Task 2.6 builds the preparation
     if (prep && !strcmp(prep, "1")) {
         int cpus = (int)plat_cpu_count();
@@ -410,6 +411,7 @@ static void prewarm_main(void *arg) {
 void rt_boot(void) {
     check_npdm();
     if (!rt_config()->shot) vk_pipeline_async_enable();   // a --shot image must not depend on build timing
+    gfx_shader_cache_clear_at_start();   // the menu's "Clear shader cache", before the prewarm reads any of it
     // Shaders and pipelines recorded in earlier runs are made ready while the modules load; the guest waits for them.
     PlatThread *warm = plat_thread_new(prewarm_main, NULL, "prewarm");
     ldr_load(rt_config()->exefs);

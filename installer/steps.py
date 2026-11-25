@@ -26,6 +26,8 @@ from pathlib import Path
 
 from . import extracted, ini, nsz
 from .layout import APP_ID, BASE, EXE, GAME_EXE, SUPPORTED, version_tag
+from .shaders import (CHOICES, CLEAR_MARK, PREPARED, SEED_FILES, clear_cache, prepared_intact,  # noqa: F401
+                      prepared_missing, shader_cache)
 from .runner import InstallError, Step
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tools'))
@@ -79,6 +81,33 @@ def fingerprint(*parts):
             h.update(str(p).encode())
         h.update(b'\1')
     return h.hexdigest()
+
+
+def translator_identity(xlate):
+    """What runtime/gfx_shader.c puts into every shader cache key for this translator: the sha256 hex in the .id
+    beside it (tools/build_xlate.py hashes the translator's sources into it), else the sha256 of the exe. Every release
+    builds the translator again and its exe is not byte-identical from build to build, so the exe's hash alone would
+    call an unchanged translator another one."""
+    try:
+        text = xlate.with_suffix('.id').read_text(encoding='ascii').strip().lower()
+    except (OSError, UnicodeDecodeError):
+        text = ''
+    if len(text) == 64 and all(c in '0123456789abcdef' for c in text):
+        return text
+    return 'exe ' + file_sha256(xlate) if xlate.is_file() else ''
+
+
+def exe_locked(exe):
+    """A running program's exe can't be opened for writing on Windows; elsewhere (and for a missing exe) False."""
+    if os.name != 'nt' or not exe.is_file():
+        return False
+    try:
+        with open(exe, 'r+b'):
+            return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
 
 def remove(path):
@@ -897,28 +926,117 @@ class Compile(Step):
 
 # ---- 5. prepare
 
+SEED_TOOLS = ('prepare_shaders.py', 'shader_census.py', 'shader_list.py')
+# The vertex shader variants play meets besides the default: the motion-vector translation, and vertex input 1 as an
+# unsigned integer (361 of the 363 integer inputs recorded). Measured 2026-11-21 on 2.0.0, a 2-minute walk in the city
+# met about 2,050 variants; with these in the seed 4 were left to translate in play (425 with the defaults alone).
+SEED_VARIANTS = ('--mvprev', '--attr', '1=uint', '--version', 'upd')
+PREPARE_TIMEOUT = 30 * 60   # s; about a minute on a recent 8- or 16-core desktop, a few minutes on an older laptop
+
+
+class PrepareMeter:
+    """Reads xcx.exe --prepare-shaders' "prepare-shaders: progress <done> of <total>" lines (runtime/gfx_shader.c
+    prepare_files) from its log as they come, and tells the time left from the rate so far on this PC: a fixed figure
+    cannot know the processor. No estimate for the first 10 s or 2 %, or while nothing moves."""
+    LINE = re.compile(rb'prepare-shaders: progress (\d+) of (\d+)')
+
+    def __init__(self, path):
+        self.path, self.pos, self.first, self.last = path, 0, None, None
+
+    def read(self):
+        """(done, total, seconds left or None) after a new progress line, else None."""
+        try:
+            with open(self.path, 'rb') as f:
+                f.seek(self.pos)
+                chunk = f.read()
+        except OSError:
+            return None
+        end = chunk.rfind(b'\n') + 1   # whole lines only; the rest is read next time
+        self.pos += end
+        found = self.LINE.findall(chunk[:end])
+        if not found:
+            return None
+        done, total = (int(v) for v in found[-1])
+        now = time.monotonic()
+        if self.first is None or done < self.first[1]:
+            self.first = (now, done)
+        self.last = (now, done)
+        left = None
+        elapsed, moved = now - self.first[0], done - self.first[1]
+        if total and elapsed >= 10 and moved > 0 and done >= total * 0.02:
+            left = (total - done) * elapsed / moved
+        return done, total, left
+
+
 class Prepare(Step):
-    """Puts the shader translator beside xcx.exe. XCX has no shader list to translate ahead of play yet: shaders are
-    translated on first use and cached in shader-cache/."""
+    """Puts the shader translator beside xcx.exe and writes the shader seed: every shader of the game's data archive
+    in its default variant, and the vertex shaders also in SEED_VARIANTS (tools/prepare_shaders.py, census in
+    tools/shader_census.py; about 15 s). --prepare-shaders picks one of three (the window's choices, now by default;
+    background on the command line without it): now runs xcx.exe --prepare-shaders, which translates the seed into
+    shader-cache/ and builds each variant into the GPU driver's own cache (about a minute on a recent desktop); background
+    leaves the seed for the game to prepare at its next start; off writes no seed and removes an earlier one, so the
+    game translates each shader when it first meets it, as before this step wrote seeds. With a seed, the game
+    prepares it (runtime/gfx_shader.c gfx_shader_prepare_start) when shader-prepared.bin is missing or
+    shader-prepared.id names another translator identity: so a new seed or another translator removes both. The step
+    runs before Cleanup writes xcx.ini, so a first install prepares for the default graphics card; when xcx.ini picks
+    another, the game sees a different identity and prepares again in the background. A failed seed or preparation only
+    warns: the game then translates shaders when it first meets them, as before. A prepared list whose translations
+    are gone from shader-cache/ (deleted by hand) is removed, so it is prepared again; --prepare-again deletes the
+    shader cache and the list on purpose, to prepare everything afresh."""
     id = 'prepare'
 
     def key(self, ctx):
         layout = ctx.layout
-        return fingerprint('prepare-3', ctx.keys['compile'], layout.xlate, layout.xlate.with_suffix('.id'),
+        # dlc: the census reads the add-on content too, so adding some writes the seed again
+        return fingerprint('prepare-4', ctx.keys['compile'], ctx.keys.get('dlc', ''), layout.xlate,
+                           layout.xlate.with_suffix('.id'), *[layout.tools / n for n in SEED_TOOLS], self.mode(ctx),
                            *[src for src, _ in source_files(layout.root, layout.dev)])
+
+    @staticmethod
+    def mode(ctx):
+        """now, background or off (--prepare-shaders; the window's three choices)."""
+        m = getattr(ctx.options, 'prepare_shaders', 'background')
+        return m if m in CHOICES else 'background'
+
+    @staticmethod
+    def again(ctx):
+        """--prepare-again: translate everything afresh (with now or background; off prepares nothing)."""
+        return getattr(ctx.options, 'prepare_again', False) is True and Prepare.mode(ctx) != 'off'
 
     def current(self, ctx, record):
         xlate = ctx.dest / XLATE
-        return (xlate.is_file() and file_sha256(xlate) == record.get('xlate_sha256')
+        return (not self.again(ctx) and xlate.is_file() and translator_identity(xlate) == record.get('xlate_identity')
+                and all((ctx.dest / n).is_file() for n in SEED_FILES) == bool(record.get('seed_sha256'))
+                and (not record.get('prepared') or (ctx.dest / PREPARED[0]).is_file())
+                and prepared_intact(ctx.dest)
+                # a Clear shader cache pressed in the game: "now" prepares into the cleared caches (xcx.exe
+                # --prepare-shaders clears first, gfx_shader_cache_clear_at_start)
+                and not (self.mode(ctx) == 'now' and (ctx.dest / CLEAR_MARK).exists())
                 and all((ctx.dest / relative).is_file() and file_sha256(ctx.dest / relative) == file_sha256(src)
                         for src, relative in source_files(ctx.layout.root, ctx.layout.dev)))
 
     def run(self, ctx):
+        try:
+            return self.prepare(ctx)
+        except PermissionError as e:
+            # the game running (its translator children, open cache files) locks xcx.exe on Windows; otherwise the
+            # folder or a file in it is read-only, or another program holds it
+            if exe_locked(ctx.dest / GAME_EXE):
+                raise InstallError('compile.exe_in_use', path=str(ctx.dest / GAME_EXE)) from None
+            raise InstallError('prepare.no_write', path=str(e.filename or ctx.dest)) from None
+
+    def prepare(self, ctx):
         layout, dest = ctx.layout, ctx.dest
         ctx.reporter.progress('prepare', 'translator', force=True)
         xlate = dest / XLATE
-        if xlate.is_file() and file_sha256(xlate) != file_sha256(layout.xlate):
-            remove(dest / 'shader-cache')   # another translator: its cache keys differ, the old ones only take space
+        # Another translator: its cache keys differ, the old ones only take space, and the prepared list names
+        # translations that are gone (a folder xcx.ini names keeps everything that isn't the cache's). Compared by
+        # identity, not by the exe's bytes: a rebuilt translator of the same sources keys the cache the same, and
+        # deleting it would make every update prepare all the shaders again (#223).
+        if xlate.is_file() and translator_identity(xlate) != translator_identity(layout.xlate):
+            clear_cache(dest, ctx.reporter.log)
+            for n in PREPARED:
+                remove(dest / n)
         replace_file(layout.xlate, xlate)
         xlate_id = layout.xlate.with_suffix('.id')
         if xlate_id.is_file():
@@ -929,7 +1047,113 @@ class Prepare(Step):
             destination = dest / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             replace_file(src, destination)
-        return {'xlate_sha256': file_sha256(xlate)}
+        record = {'xlate_identity': translator_identity(xlate), 'shaders': self.mode(ctx)}
+        if self.again(ctx):   # before the seed, so a failed seed still leaves the shaders to be translated afresh
+            ctx.reporter.log(f'prepare again: removing the shader cache ({shader_cache(dest)}) and the prepared list')
+            clear_cache(dest, ctx.reporter.log)
+            for n in PREPARED:
+                remove(dest / n)
+        if self.mode(ctx) == 'off':
+            # as before this step wrote a seed: no seed, so the game prepares nothing; each shader is translated when
+            # play first meets it. Translations already in the cache stay.
+            for n in SEED_FILES + PREPARED:
+                remove(dest / n)
+            return record
+        seed = self.seed(ctx)
+        if not seed:
+            return record
+        record['seed_sha256'] = seed
+        if not self.again(ctx) and not prepared_intact(dest):
+            counts = prepared_missing(dest)
+            ctx.reporter.log(f'the prepared list is unreadable or names translations the shader cache no longer has '
+                             f'({counts[1] if counts else "?"} of {counts[0] if counts else "?"} missing): preparing again')
+            for n in PREPARED:
+                remove(dest / n)
+        if self.mode(ctx) == 'now':
+            if (dest / CLEAR_MARK).exists():   # cleared in the game's menu: prepare into the cleared caches
+                for n in PREPARED:
+                    remove(dest / n)
+            # a list already there (an earlier "now", or the game's background pass, which translates but never fills
+            # the driver's cache) gets the driver's cache filled again: seconds when it still holds them
+            if (dest / PREPARED[0]).is_file() and self.run_game(ctx, '--warm-shaders', 'warm', warn=False):
+                record['prepared'] = True
+            else:
+                for n in PREPARED:
+                    remove(dest / n)
+                record['prepared'] = self.run_game(ctx, '--prepare-shaders', 'shaders')
+        return record
+
+    def seed(self, ctx):
+        """Writes the seed; its SHA-256 (both files), or None after a warning. A changed seed removes the prepared list."""
+        dest, rep = ctx.dest, ctx.reporter
+        rep.progress('prepare', 'seed', force=True)
+
+        def sha():
+            h = hashlib.sha256()
+            for n in SEED_FILES:
+                h.update(file_sha256(dest / n).encode() if (dest / n).is_file() else b'-')
+            return h.hexdigest()
+
+        before = sha()
+        code, log = run_tool(ctx, 'prepare', ctx.layout.tools / 'prepare_shaders.py',
+                             [dest, '--romfs', dest / 'romfs', '--exefs', dest / 'exefs', '--no-run', *SEED_VARIANTS])
+        answers = dest / SEED_FILES[1]
+        # a seed with no records (a game version whose archive the census can't read) prepares nothing at every start
+        if code or not all((dest / n).is_file() for n in SEED_FILES) or answers.stat().st_size <= 16:
+            for n in SEED_FILES:
+                remove(dest / n)
+            rep.warning('warn.shader_seed_failed', log=str(log))
+            return None
+        after = sha()
+        if after != before:
+            for n in PREPARED:
+                remove(dest / n)
+        return after
+
+    def run_game(self, ctx, arg, phase, warn=True):
+        """xcx.exe --prepare-shaders (translate the seed and fill the driver's cache) or --warm-shaders (only the
+        driver's cache, from the translations there) in the install folder; True when the prepared list is there after
+        it. A failure only warns (warn=False: the caller falls back and warns itself)."""
+        dest, rep = ctx.dest, ctx.reporter
+        rep.progress('prepare', phase, force=True)
+        logs = ctx.temp / 'logs'
+        logs.mkdir(parents=True, exist_ok=True)
+        log = logs / f'prepare-{arg.strip("-")}.log'
+        rep.log(f'run {dest / GAME_EXE} {arg}')
+        flags = 0x08000000 if os.name == 'nt' else 0   # CREATE_NO_WINDOW: the game is a console program
+        with open(log, 'w', encoding='utf-8', newline='\n') as out:
+            try:
+                proc = subprocess.Popen([str(dest / GAME_EXE), arg], cwd=dest, stdout=out,
+                                        stderr=subprocess.STDOUT, creationflags=flags,
+                                        start_new_session=os.name != 'nt')
+            except OSError as e:   # blocked by a security program, say: the game prepares in the background instead
+                out.write(f'cannot start: {e}\n')
+                proc = None
+                code = 'not started'
+            # short waits, so a cancel (Ctrl+Break, the window's Cancel) is seen at once and not after the preparation;
+            # a hung graphics driver ends at PREPARE_TIMEOUT
+            deadline = time.monotonic() + PREPARE_TIMEOUT
+            meter = PrepareMeter(log)
+            try:
+                while proc and (code := proc.poll()) is None:
+                    if time.monotonic() > deadline:
+                        kill_tree(proc)
+                        code = 'timeout'
+                        break
+                    time.sleep(0.5)
+                    if (seen := meter.read()):
+                        rep.progress('prepare', phase, seen[0], seen[1], 'shaders', left=seen[2])
+            except BaseException:
+                kill_tree(proc)
+                raise
+        rep.log(f'{GAME_EXE} {arg}: exit code {code}; output in {log}')
+        if code or not (dest / PREPARED[0]).is_file():
+            for n in PREPARED:
+                remove(dest / n)
+            if warn:
+                rep.warning('warn.prepare_shaders_failed', log=str(log))
+            return False
+        return True
 
 
 

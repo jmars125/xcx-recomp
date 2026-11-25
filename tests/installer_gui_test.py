@@ -216,6 +216,40 @@ class FormTest(unittest.TestCase):
         cmd = form.command('py.exe')
         self.assertEqual(cmd, ['py.exe', '-m', 'installer', '--dest', str(out)])
 
+    def test_shader_choice_on_the_command_line(self):   # background is the CLI's default, so it is left out
+        out = self.dir / 'out'
+        statefile.save(self._mkdir(out), statefile.empty('r0'))
+        for value, tail in (('now', ['--prepare-shaders', 'now']), ('off', ['--prepare-shaders', 'off']),
+                            ('background', [])):
+            self.assertEqual(Form(dest=str(out), prepare_shaders=value).command('py.exe'),
+                             ['py.exe', '-m', 'installer', '--dest', str(out)] + tail)
+        for value, tail in (('now', ['--prepare-shaders', 'now', '--prepare-again']), ('background', ['--prepare-again']),
+                            ('off', ['--prepare-shaders', 'off'])):   # again means nothing with off
+            self.assertEqual(Form(dest=str(out), prepare_shaders=value, prepare_again=True).command('py.exe'),
+                             ['py.exe', '-m', 'installer', '--dest', str(out)] + tail)
+
+    def test_has_shaders(self):   # Rebuild is greyed out until there is something to rebuild
+        from installer.guilogic import has_shaders
+        out = self._mkdir(self.dir / 'shaders')
+        self.assertFalse(has_shaders(str(out)))
+        self.assertFalse(has_shaders(''))
+        (out / 'shader-cache').mkdir()
+        self.assertFalse(has_shaders(str(out)))   # an empty cache folder
+        (out / 'shader-cache' / 'x.spv').write_bytes(b'x')
+        self.assertTrue(has_shaders(str(out)))
+        other = self._mkdir(self.dir / 'listed')
+        (other / 'shader-prepared.bin').write_bytes(b'x')
+        self.assertTrue(has_shaders(str(other)))
+
+    def test_time_left(self):
+        from installer.guilogic import Catalog, describe_event, time_left
+        cat = Catalog('en')
+        self.assertEqual(time_left(cat, 20), 'less than a minute left')
+        self.assertEqual(time_left(cat, 250), 'about 4 min left')
+        e = {'type': 'progress', 'step': 'prepare', 'phase': 'shaders', 'done': 10, 'total': 100, 'unit': 'shaders',
+             'left': 125}
+        self.assertTrue(describe_event(cat, e).endswith('10 / 100 shaders, about 2 min left'))
+
     def test_installed_folder_still_checks_given_files(self):
         out = self.dir / 'out'
         statefile.save(self._mkdir(out), statefile.empty('r0'))

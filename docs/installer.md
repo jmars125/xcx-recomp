@@ -97,8 +97,38 @@ Setup's look (`installer/theme.py`) takes the colours of the F1 menu (`runtime/u
 4. **Compile** the generated C, `modules.c`, `romfs.c`, `patches.c` and `ov_zstd.c` (they bake the per-install layout, RomFS
    hashes and the game version's patch page) and link
    them with the prebuilt runtime library into `xcx.exe` (`build_game.py --runtime-lib`; about 3 min on 24 cores).
-5. **Prepare** the RomFS patches and the shaders (`tools/make_romfs_patches.py`, `tools/prepare_shaders.py`,
-   `xcx.exe --prepare-shaders`) in the install folder.
+5. **Prepare** the shaders in the install folder. The translator goes next to `xcx.exe`; then one of the window's
+   three choices (`--prepare-shaders now|background|off`):
+   - **now** (the window's default; the flag alone): `tools/prepare_shaders.py` writes the seed (every shader of the
+     game's data archive and of the add-on content, about 15 s) and `xcx.exe --prepare-shaders` translates it and
+     builds it into the GPU driver's cache (about a minute on a recent desktop, a few minutes on an older laptop;
+     the window shows the time left). A rerun with the list already there only refills the driver's cache
+     (`xcx.exe --warm-shaders`, seconds);
+   - **background** (the command line's default, as for a launcher): only the seed; the game prepares it at its next
+     start while it runs and shows its progress in a corner (`shader_prepare` in `xcx.ini`, default 1; the threads it
+     uses are `shader_prepare_threads`, 1 to 16, default an eighth of the CPU threads, 1 to 4; both apply at the next
+     start);
+   - **off**: no seed (an earlier one is removed); the game translates each shader when it first meets it.
+
+   A new seed or another translator deletes `shader-prepared.bin` and `shader-prepared.id`, and the game also
+   prepares again when the id names another translator or graphics card; a failure only warns. A translator rebuilt
+   from the same sources (every release) is the same translator: the setup compares the identity in `xcx_xlate.id`,
+   not the exe's bytes, so an update keeps the cache. Variants that fail to translate are left out of the list and
+   translated in play when met. In the game, Advanced
+   → Shaders and pipelines has **Prepare shaders now** (the background pass at once) and **Clear shader cache**
+   (deletes the caches at the next start, or at the setup's next run with "now", which then prepares into them; the
+   seed stays, and from a folder `XCX_SHADER_CACHE` names only the cache's own files go). The window keeps the choice
+   a folder was set up with when that folder is chosen again. A prepared list whose translations are no longer in the
+   shader cache's `in/` folder is removed so the shaders are prepared again: by the setup when half or more are gone,
+   and by the game at its start when half or more of up to 64 records sampled across the list are gone. The box
+   "Rebuild" beside the choice (`--prepare-again`; greyed out until the install folder has shaders, and with off)
+   deletes the shader cache and the list on purpose first: the whole default `shader-cache` folder, or only the
+   cache's own files from a folder `xcx.ini` names (never the install folder or one above it). The seed and the
+   prepared list live beside `xcx.exe`; the setup finds the cache folder as the game does, from `shader_cache` in
+   `xcx.ini` or `XCX_SHADER_CACHE` in the environment (which wins, as in the game), or `shader-cache` beside
+   `xcx.exe`. A relative folder is taken from the folder of `xcx.exe`, in the game too: before this, the game took it
+   from the working directory, so a game started from another folder used another cache. Rebuild while the game runs
+   stops with "close the game first" on Windows; a read-only folder says so instead.
 6. **DLSS** (the window's tick box, on by default, or `--dlss`; Windows with an NVIDIA RTX GPU): download
    `nvngx_dlss.dll` from NVIDIA's own DLSS SDK repository (github.com/NVIDIA/DLSS, a pinned tag, NVIDIA RTX SDK
    license) into the install folder and check its size and SHA-256 (`steps.py`, `Dlss`). The release does not ship
@@ -165,7 +195,7 @@ recomp/, tools/       the lifter and the build, extraction and shader scripts th
 llvm/                 llvm-mingw, x86_64-only subset (Apache-2.0 with LLVM exception; mingw-w64 parts permissive)
 runtime/              libxcxrt.a and the headers the generated code and modules.c/romfs.c/patches.c include
 bin/                  xcx_xlate.exe, hactool.exe, SDL3.dll, libopus-0.dll, ninja.exe
-data/                 shader_list.tsv (MacNativeGames, MIT)
+data/                 expected hashes; no shader list (XCX's seed is the census, tools/shader_census.py)
 THIRD_PARTY_NOTICES.md
 xcx.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
 ```

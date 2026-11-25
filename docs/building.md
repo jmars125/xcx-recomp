@@ -90,14 +90,18 @@ From the repository root, in PowerShell. Every step that depends on the game ver
    `--patches` builds in the frame-rate, resolution and other patch sets, switchable at run time. The link copies
    `SDL3.dll`, `libiconv-2.dll` and `libopus-0.dll` next to the exe.
 
-6. Prepare the shaders (once per build folder and translator). It needs `refs\MacNativeGames` (`tools\fetch_refs.sh`)
-   for the shared shader list:
+6. Prepare the shaders (once per build folder and translator). The seed is every shader of the game's data archive
+   in its default variant, and each vertex shader also with the motion-vector translation and with vertex input 1 as
+   an unsigned integer, the variants play meets (`tools/shader_census.py` reads the archive; about 15 s for 12,813
+   shaders, 25,704 seed records, 25,346 distinct variants on 2.0.0); `xcx.exe --prepare-shaders` then translates it
+   (about a minute on a recent 8- or 16-core desktop):
 
    ```powershell
-   .venv-py314\Scripts\python tools\prepare_shaders.py build\<ver> --version <ver>
+   .venv-py314\Scripts\python tools\prepare_shaders.py build\<ver> --version <ver> --mvprev --attr 1=uint
    ```
 
-   Without this step the first launch compiles shaders and pipelines during play and stutters until the caches fill.
+   Without this step objects appear late the first time they come into view, while their shaders are translated in
+   play; with the seed written but not run (`--no-run`), the game translates it in the background at its next start.
    The AMD driver keeps its pipeline cache per exe path and holds a limited amount: preparing another build folder can
    evict this one's. `xcx.exe --warm-shaders` rebuilds it from the shader cache.
 
@@ -164,8 +168,9 @@ Requirements:
 The steps are the Windows ones with POSIX paths: `.venv/bin/python` in place of `.venv\Scripts\python`, and `xcx` in
 place of `xcx.exe`. `build_game.py` takes clang, lld and Ninja from PATH (or the ones in `<dir>/bin` with
 `--toolchain <dir>`) and links against the system libraries, with `libstdc++` static and an `$ORIGIN` rpath;
-`build_hactool.py` builds `hactool` with make. `tools/prepare_shaders.py` reads the shader list from
-`refs/MacNativeGames` at `origin/HEAD`, which must be the pinned commit with its history (the list format changed later).
+`build_hactool.py` builds `hactool` with make. `tools/prepare_shaders.py` needs no shader list for XCX (the census is
+the seed); when `refs/MacNativeGames` is there, it reads that list at `origin/HEAD`, which must then be the pinned
+commit with its history (the list format changed later).
 
 Memory: on Windows the GPU imports guest memory and `GetWriteWatch` tracks the CPU's writes to it. On Linux,
 re-protecting imported memory invalidates the driver's userptr buffer on every submit (about 1.3 ms per 16 MiB on

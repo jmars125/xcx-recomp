@@ -23,6 +23,7 @@ from . import extracted
 from . import ini
 from . import state as statefile
 from .events import render
+from .shaders import has_shaders  # noqa: F401  (the window's Rebuild box)
 
 TEXT = Path(__file__).resolve().parent / 'text'
 UI_LANGUAGES = ('en', 'ru')
@@ -98,6 +99,13 @@ def gib(n):
     return f'{n / 1e9:.1f}'
 
 
+
+def time_left(cat, seconds):
+    """'about 4 min left', 'less than a minute left': the rounded remaining time of a phase."""
+    minutes = round(seconds / 60)
+    return cat('ui.left_minutes', n=minutes) if minutes >= 1 else cat('ui.left_under_minute')
+
+
 def amount(cat, done, total, unit):
     """'6.0 / 16.0 GB', '120 / 4000 files'..., the progress of a phase whose size is known."""
     if unit == 'bytes':
@@ -117,6 +125,8 @@ class Form:
     lang: str = ''
     dest: str = ''
     dlss: bool = False     # download nvngx_dlss.dll (installer/steps.py, Dlss)
+    prepare_shaders: str = 'background'   # now, background or off (installer/steps.py, Prepare)
+    prepare_again: bool = False           # --prepare-again (not with off)
 
     def installed_state(self):
         """The recorded state of the install folder (xcx-install.json), or None. Never raises."""
@@ -187,6 +197,10 @@ class Form:
             cmd.append('--verify')
         if self.dlss:
             cmd.append('--dlss')
+        if self.prepare_shaders != 'background':   # the CLI's default, so a command line without it reads the same
+            cmd += ['--prepare-shaders', self.prepare_shaders]
+        if self.prepare_again and self.prepare_shaders != 'off':
+            cmd.append('--prepare-again')
         return cmd
 
 
@@ -221,6 +235,7 @@ class Model:
         self.phase = None
         self.done = self.total = None
         self.unit = None
+        self.left = None   # seconds the current phase still takes, when the step can tell
         self.space = None            # the space event
         self.warnings = []           # (id, params)
         self.error = None            # (id, params, step)
@@ -247,7 +262,7 @@ class Model:
                 self.steps.append(s)
             if state == 'started':
                 self.states[s], self.current = RUNNING, s
-                self.phase = self.done = self.total = self.unit = None
+                self.phase = self.done = self.total = self.unit = self.left = None
             elif state == 'done':
                 self.states[s] = DONE
                 self.current = None if self.current == s else self.current
@@ -258,7 +273,7 @@ class Model:
                 self.states[e['step']] = RUNNING
             self.current = e.get('step', self.current)
             self.phase = e.get('phase')
-            self.done, self.total, self.unit = e.get('done'), e.get('total'), e.get('unit')
+            self.done, self.total, self.unit, self.left = e.get('done'), e.get('total'), e.get('unit'), e.get('left')
         elif kind == 'space':
             self.space = e
         elif kind == 'warning':
@@ -314,6 +329,8 @@ def describe_event(cat, e):
         text = cat(f'phase.{e["step"]}.{e["phase"]}')
         if e.get('total'):
             text += '  ' + amount(cat, e.get('done'), e['total'], e.get('unit'))
+        if e.get('left') is not None:
+            text += ', ' + time_left(cat, e['left'])
         return text
     if kind in ('warning', 'error'):
         return f'{cat("ui.log_" + kind)}: {cat(e["id"], **(e.get("params") or {}))}'

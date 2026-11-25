@@ -428,5 +428,6 @@ typedef struct PlatChild PlatChild;
 // Children start one at a time so none inherits another pipe ends.
 PlatChild *plat_child_start(const char *exe, const char *arg, uint32_t *err);
 void plat_child_stop(PlatChild *c);                       // kills the child and frees c
+void plat_child_lower(PlatChild *c);                      // Linux: nice 4 for good (background work); Windows: nothing
 int plat_child_write(PlatChild *c, const void *data, size_t n);   // 1 when all n bytes were written
 long plat_child_read(PlatChild *c, void *buf, size_t cap);        // bytes read (at least 1); 0 or negative: pipe broke

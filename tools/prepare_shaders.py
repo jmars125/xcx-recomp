@@ -54,6 +54,9 @@ TYPES = {'float': 0, 'sint': 1, 'uint': 2}
 DEFAULT = {'tex': {str(slot): '2d' for slot in range(32)}}   # answers outside a shader's use mask are dropped
 CONTROL = 0x880
 ANS_REC = 4 + 32 + 32 + 147 + 1
+# gfx_shader.c RecHeader: an 8-byte magic with its NUL, then version and record size. Without the NUL the runtime
+# compares the version's first byte as the magic's last and drops the whole seed.
+RECORD_MAGIC = {'programs': b'XCXSPRG\0', 'answers': b'XCXSANS\0'}
 
 
 BUNDLED_LIST = ROOT / 'tools' / 'data' / 'shader_list.tsv'   # the installer archive carries a copy (no git, no refs/)
@@ -62,11 +65,14 @@ if not BUNDLED_LIST.is_file():
 
 
 def read_list(path):
+    """The shared list's text; empty when there is none (XCX: the default variant of every game shader is the seed)."""
     if path:
         return Path(path).read_text(encoding='utf-8')
     if BUNDLED_LIST.is_file():
         return BUNDLED_LIST.read_text(encoding='utf-8')
-    return shader_list.history(ROOT / 'refs' / 'MacNativeGames')
+    if (ROOT / 'refs' / 'MacNativeGames' / '.git').exists():
+        return shader_list.history(ROOT / 'refs' / 'MacNativeGames')
+    return ''
 
 
 def parse_list(text):
@@ -109,7 +115,9 @@ def answers(deps, stage, control):
     local = [0, 0, 0]   # vk_exec_draw.c answers_for: zero for graphics stages (they are in the input id)
     if stage == 5:      # compute: the control section's local size, 0 read as 1
         local = [v or 1 for v in struct.unpack_from('<III', control, 0x748)]
-    packed = bytes(tex + img + fmt + attr + fout) + struct.pack('<HHHIB', *local, 0, 0)
+    # the last byte: depth_minus_w, and bit 7 mvprev (a vertex shader that also writes last frame's position)
+    flags = 0x80 if deps.get('mvprev') and stage == 0 else 0
+    packed = bytes(tex + img + fmt + attr + fout) + struct.pack('<HHHIB', *local, 0, flags)
     assert len(packed) == 147
     return packed
 
@@ -128,7 +136,19 @@ def main():
     ap.add_argument('--exefs', type=Path, help='ExeFS directory (default build/extracted/<version>/exefs)')
     ap.add_argument('--list', help='a shader_list.tsv instead of tools/data/shader_list.tsv or refs/MacNativeGames')
     ap.add_argument('--no-run', action='store_true', help='write the seed files only')
+    ap.add_argument('--mvprev', action='store_true',
+                    help='also every vertex shader with mvprev, the translation draws with per-object motion use')
+    ap.add_argument('--attr', action='append', default=[], metavar='LOC=TYPE',
+                    help='also every vertex shader with this vertex input type (sint or uint), with and without '
+                         'mvprev; a shader that does not read the input gets the default variant\'s input id, so only '
+                         'the shaders that do are translated again')
     a = ap.parse_args()
+    attrs = {}
+    for spec in a.attr:
+        loc, _, kind = spec.partition('=')
+        if not loc.isdigit() or int(loc) >= 32 or kind not in ('sint', 'uint'):
+            ap.error(f'--attr {spec}: expected LOC=sint or LOC=uint, LOC 0 to 31')
+        attrs[loc] = kind
     t0 = time.monotonic()
     variants, prio = parse_list(read_list(a.list))
     extracted = ROOT / 'build' / 'extracted' / a.version
@@ -136,7 +156,13 @@ def main():
     t1 = time.monotonic()
     progs, recs, seen, skipped = {}, [], set(), {'not in this version': 0, 'stage': 0}
     listed = len(variants)
-    variants += [(key, DEFAULT) for key in sorted(shaders)]
+    keys = sorted(shaders)
+    variants += [(key, DEFAULT) for key in keys]
+    vertex = [key for key in keys if shaders[key]['stage'] == 'vs']
+    extra = [dict(DEFAULT, mvprev=True)] if a.mvprev else []
+    if attrs:
+        extra += [dict(DEFAULT, attr=attrs)] + ([dict(DEFAULT, attr=attrs, mvprev=True)] if a.mvprev else [])
+    variants += [(key, deps) for deps in extra for key in vertex]
     for key, deps in variants:
         s = shaders.get(key)
         if not s:
@@ -162,14 +188,18 @@ def main():
         recs.append((prio.get(key, 2), rec))
     recs.sort(key=lambda r: r[0])   # stable: list order within a priority
     out = a.build.resolve()
-    with open(out / 'seed-programs.bin', 'wb') as f:
-        f.write(b'XCXSPRG' + struct.pack('<II', 1, 0))
-        for _, body in progs.values():
-            f.write(body)
-    with open(out / 'seed-answers.bin', 'wb') as f:
-        f.write(b'XCXSANS' + struct.pack('<II', 1, ANS_REC))
-        for _, rec in recs:
-            f.write(rec)
+    # Both files as temporary files first, then renamed: a run cut off halfway leaves the old pair (or none), never a
+    # torn file or a new programs file beside old answers. The old answers go first and the new ones last: the runtime
+    # reads the pair as a seed only with both there.
+    (out / 'seed-answers.bin').unlink(missing_ok=True)
+    for name, magic, size, bodies in (('seed-programs.bin', RECORD_MAGIC['programs'], 0, (b for _, b in progs.values())),
+                                      ('seed-answers.bin', RECORD_MAGIC['answers'], ANS_REC, (r for _, r in recs))):
+        tmp = out / (name + '.tmp')
+        with open(tmp, 'wb') as f:
+            f.write(magic + struct.pack('<II', 1, size))
+            for body in bodies:
+                f.write(body)
+        os.replace(tmp, out / name)
     by = [sum(1 for p, _ in recs if p == i) for i in range(3)]
     print(f'{listed} listed variants and {len(shaders)} default ones: {len(recs)} of {len(progs)} shaders in {a.version} '
           f'(priority t {by[0]}, warm {by[1]}, rest {by[2]}), skipped {skipped}; inventory {t1 - t0:.1f} s, '

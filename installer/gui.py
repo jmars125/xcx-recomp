@@ -27,8 +27,10 @@ from .events import GAME_EXE
 from .gui_mods import ModsWindow
 from . import layout as layouts
 from . import recent
+from .shaders import CHOICES as SHADER_CHOICES   # the shader box's entries, in order
 from .guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, UI_LANGUAGES, Catalog, Form, Model, Process,
-                       amount, default_game_language, describe_event, parse_line, windows_ui_language)
+                       amount, default_game_language, describe_event, has_shaders, parse_line, time_left,
+                       windows_ui_language)
 
 POLL_MS = 100
 GLYPH = {PENDING: '\u25cb', RUNNING: '\u25b6', DONE: '\u2714', SKIPPED: '\u2013', FAILED: '\u2716'}
@@ -128,6 +130,7 @@ class App:
         for widget, option, id, params in self.bound:
             widget.configure(**{option: self.cat(id, **params)})
         self.fill_languages()
+        self.fill_shaders()
         self.refresh_form()
         self.refresh_run()
         self.refresh_finish()
@@ -147,6 +150,20 @@ class App:
         code = self.selected_lang()
         self.lang_box.configure(values=[self.lang_label(c) for c in ini.PLAYABLE])
         self.vars['lang'].set(self.lang_label(code))
+
+    def fill_shaders(self):
+        """The shader choices in the window language, the box showing prepare_var's. Rebuild is always there, so a
+        player knows it exists, but greyed out (and unticked) until the install folder has shaders, and with off."""
+        if not hasattr(self, 'shader_box'):
+            return
+        self.shader_box.configure(values=[self.cat(f'ui.prepare_shaders_{v}') for v in SHADER_CHOICES])
+        value = self.prepare_var.get()
+        self.shader_shown.set(self.cat(f'ui.prepare_shaders_{value}'))
+        if value != 'off' and has_shaders(self.vars['dest'].get()):
+            self.again_box.state(['!disabled'])
+        else:
+            self.again_var.set(False)
+            self.again_box.state(['disabled'])
 
     def selected_lang(self):
         """The game language code behind the combobox text (kept when it is not one of the labels)."""
@@ -222,6 +239,21 @@ class App:
         self.label(grid, 'ui.dest').grid(row=i + 1, column=0, sticky='w', pady=4)
         ttk.Entry(grid, textvariable=self.vars['dest']).grid(row=i + 1, column=1, sticky='ew', pady=4)
         self.button(grid, 'ui.browse', self.pick_dest).grid(row=i + 1, column=2, padx=(8, 0))
+        # the game's shaders (installer/steps.py Prepare): one row like the game language, so the window stays as low
+        # as it was; now is the default. Rebuild (--prepare-again) beside it, greyed out with off.
+        self.prepare_var = tk.StringVar(value='now')
+        self.shader_shown = tk.StringVar()
+        self.label(grid, 'ui.prepare_shaders').grid(row=i + 2, column=0, sticky='w', pady=4)
+        self.shader_box = ttk.Combobox(grid, textvariable=self.shader_shown, state='readonly')
+        self.shader_box.grid(row=i + 2, column=1, sticky='ew', pady=4)
+        self.shader_box.bind('<<ComboboxSelected>>', lambda _e: self.prepare_var.set(
+            SHADER_CHOICES[self.shader_box.current()]))
+        self.again_var = tk.BooleanVar(value=False)
+        self.again_box = ttk.Checkbutton(grid, variable=self.again_var)
+        self.bind_text(self.again_box, 'text', 'ui.prepare_again')
+        self.again_box.grid(row=i + 2, column=2, columnspan=2, sticky='w', padx=(8, 0))
+        self.prepare_var.trace_add('write', lambda *_: self.fill_shaders())
+        self.fill_shaders()
         self.extracted_hint = ttk.Label(f, wraplength=620, justify='left')
         self.dlss_var = tk.BooleanVar(value=True)
         dlss = ttk.Checkbutton(f, variable=self.dlss_var)
@@ -293,7 +325,8 @@ class App:
     def form(self):
         return Form(base=self.vars['base'].get(), update=self.vars['update'].get(), dlc=self.vars['dlc'].get(),
                     keys=self.vars['keys'].get(), lang=self.selected_lang(), dest=self.vars['dest'].get(),
-                    dlss=self.dlss_var.get())
+                    dlss=self.dlss_var.get(), prepare_shaders=self.prepare_var.get(),
+                    prepare_again=self.again_var.get())
 
     def refresh_form(self):
         form = self.form()
@@ -305,6 +338,7 @@ class App:
         else:
             self.update_hint.configure(text='')
         self.extracted_hint.configure(text=self.cat('ui.extracted_game') if form.extracted_game() else '')
+        self.fill_shaders()   # Rebuild follows the install folder
         self.fit()
 
     def fill_from_folder(self):
@@ -316,6 +350,9 @@ class App:
         for name, value in recent.from_folder(dest).items():
             if not self.vars[name].get().strip():
                 self.vars[name].set(value)
+        shaders = recent.recorded_shaders(dest)   # a rerun keeps the shader choice the folder was set up with
+        if shaders and hasattr(self, 'prepare_var'):
+            self.prepare_var.set(shaders)
 
     def pick_file(self, name, pick_id):
         types = [(self.cat('ui.type_game'), '*.nsp *.xci *.nsz *.xcz'), (self.cat('ui.type_all'), '*.*')]
@@ -351,6 +388,7 @@ class App:
             recent.save(form.dest, {name: getattr(form, name) for name in recent.SOURCES})
         command = form.command(self.layout.python, root=self.layout.root if self.layout.dev else None,
                                temp=self.run_args.get('temp'), verify=self.run_args.get('verify', False))
+        self.again_var.set(False)   # once: a second Start in this window does not delete the shaders again
         self.begin(command, self.layout.root)
 
     def begin(self, command, cwd):
@@ -432,6 +470,8 @@ class App:
             text = self.cat(f'phase.{m.current}.{m.phase}')
             if m.total:
                 text += '  ' + amount(self.cat, m.done, m.total, m.unit)
+            if m.left is not None:
+                text += ', ' + time_left(self.cat, m.left)
         elif m.current:
             text = self.cat('step.' + m.current)
         else:

@@ -442,6 +442,186 @@ class RecentTest(unittest.TestCase):
         self.assertEqual(recent.from_folder(str(self.dest)), {'base': self.src['base']})
         self.assertEqual(recent.from_folder(str(self.tmp / 'nothing')), {})
 
+    def test_recorded_shaders(self):   # a rerun of the window keeps the folder's shader choice (gui fill_from_folder)
+        from installer import recent
+        self.assertIsNone(recent.recorded_shaders(str(self.tmp / 'nothing')))
+        self.installed()
+        self.assertIsNone(recent.recorded_shaders(str(self.dest)))   # a setup from before the choice
+        for value, want in (('off', 'off'), ('now', 'now'), ('later', None), (5, None)):
+            data = state.empty('test')
+            data['steps']['prepare'] = {'key': 'k', 'shaders': value}
+            state.save(self.dest, data)
+            self.assertEqual(recent.recorded_shaders(str(self.dest)), want)
+
+    def test_prepare_mode(self):   # --prepare-shaders: now, background or off; anything else is the default
+        from installer.steps import Prepare
+        for value, want in (('now', 'now'), ('off', 'off'), ('background', 'background'), (None, 'background'),
+                            (True, 'background')):
+            self.assertEqual(Prepare.mode(SimpleNamespace(options=SimpleNamespace(prepare_shaders=value))), want)
+        self.assertEqual(Prepare.mode(SimpleNamespace(options=SimpleNamespace())), 'background')
+
+    def test_prepare_again(self):   # --prepare-again: only with now or background
+        from installer.steps import Prepare
+        for mode, again, want in (('now', True, True), ('background', True, True), ('off', True, False),
+                                  ('now', False, False), ('now', 'yes', False)):
+            ctx = SimpleNamespace(options=SimpleNamespace(prepare_shaders=mode, prepare_again=again))
+            self.assertEqual(Prepare.again(ctx), want)
+
+    def test_prepared_list_against_the_shader_cache(self):   # a cache deleted by hand means: prepare again
+        from installer.steps import PREPARED, prepared_intact, prepared_missing
+        dest = self.tmp / 'prepared'
+        dest.mkdir()
+        self.assertIsNone(prepared_missing(dest))
+        self.assertTrue(prepared_intact(dest))   # no list: nothing to check
+        ids = [bytes([i]) * 32 for i in (1, 2, 3)]
+        recs = b''.join(bytes([1, 1, 0, 0]) + i for i in ids)
+        head = b'XCXSPRP' + bytes(1) + (36).to_bytes(4, 'little')
+        (dest / PREPARED[0]).write_bytes(head[:8] + (1).to_bytes(4, 'little') + head[8:] + recs)
+        self.assertEqual(prepared_missing(dest), (3, 3))   # no shader cache at all
+        self.assertFalse(prepared_intact(dest))
+        cache_in = dest / 'shader-cache' / 'in'
+        cache_in.mkdir(parents=True)
+        (cache_in / (ids[0].hex() + '.in')).write_bytes(b'x')
+        self.assertEqual(prepared_missing(dest), (3, 2))
+        self.assertFalse(prepared_intact(dest))   # most gone
+        (cache_in / (ids[1].hex() + '.in')).write_bytes(b'x')
+        self.assertEqual(prepared_missing(dest), (3, 1))
+        self.assertTrue(prepared_intact(dest))    # one stray missing file: not a reason to prepare everything again
+        (dest / PREPARED[0]).write_bytes(head[:8] + (1).to_bytes(4, 'little') + head[8:])
+        self.assertFalse(prepared_intact(dest))   # a list without records, as the game's own check
+        (dest / PREPARED[0]).write_bytes(head[:8] + (2).to_bytes(4, 'little') + head[8:] + recs)
+        self.assertIsNone(prepared_missing(dest))   # another version: unreadable, so not intact
+        self.assertFalse(prepared_intact(dest))
+
+    def test_clear_cache_keeps_what_is_not_the_cache(self):   # Rebuild / a new translator (installer/shaders.py)
+        from installer import shaders
+        h = 'ab' * 32
+        dest = self.tmp / 'clear'
+        (dest / 'shader-cache' / 'in').mkdir(parents=True)
+        (dest / 'shader-cache' / 'anything.txt').write_text('x', encoding='utf-8')
+        self.assertEqual(shaders.clear_cache(dest), dest / 'shader-cache')
+        self.assertFalse((dest / 'shader-cache').exists())   # the setup's own folder goes whole
+        shared = dest / 'shared'
+        (shared / 'in').mkdir(parents=True)
+        own = [shared / f'{h}.spv', shared / f'{h}.res.json', shared / f'{h}.use', shared / f'{h}.spv.12.34.tmp',
+               shared / 'in' / f'{h}.in']
+        foreign = [shared / 'notes.txt', shared / 'other.tmp', shared / 'short.spv', shared / 'in' / 'x.in',
+                   shared / f'{h}.spv.tmp']
+        for f in own + foreign:
+            f.write_bytes(b'x')
+        (dest / 'xcx.ini').write_text('[performance]\nshader_cache = shared\n', encoding='utf-8')
+        self.assertEqual(shaders.clear_cache(dest), shared)
+        self.assertEqual([f.name for f in own if f.exists()], [])
+        self.assertEqual([f.name for f in foreign if not f.exists()], [])
+        (dest / 'keep.txt').write_bytes(b'x')
+        (dest / f'{h}.spv').write_bytes(b'x')   # a cache-like name in the install folder itself
+        for value in ('.', '..', str(dest), str(dest.parent)):
+            (dest / 'xcx.ini').write_text(f'shader_cache = {value}\n', encoding='utf-8')
+            self.assertIsNone(shaders.clear_cache(dest), value)
+            self.assertTrue((dest / 'keep.txt').exists() and (dest / f'{h}.spv').exists(), value)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'junctions are a Windows thing')
+    def test_clear_cache_through_a_junction(self):   # a default cache moved to another drive with mklink /J
+        import subprocess
+        from installer import shaders
+        h = 'ef' * 32
+        dest, target = self.tmp / 'junc', self.tmp / 'elsewhere'
+        dest.mkdir()
+        (target / 'in').mkdir(parents=True)
+        for f in (target / f'{h}.spv', target / 'in' / f'{h}.in', target / 'notes.txt'):
+            f.write_bytes(b'x')
+        subprocess.run(['cmd', '/c', 'mklink', '/J', str(dest / 'shader-cache'), str(target)], check=True,
+                       capture_output=True)
+        try:
+            self.assertEqual(shaders.clear_cache(dest), dest / 'shader-cache')
+            self.assertFalse((target / f'{h}.spv').exists() or (target / 'in' / f'{h}.in').exists())
+            self.assertTrue((target / 'notes.txt').exists())   # the moved folder keeps what isn't the cache's
+            self.assertTrue((dest / 'shader-cache').exists())  # and the junction stays
+        finally:
+            subprocess.run(['cmd', '/c', 'rmdir', str(dest / 'shader-cache')], capture_output=True)
+
+    def test_ini_value_as_the_game_reads_it(self):
+        from installer import shaders
+        dest = self.tmp / 'ini2'
+        dest.mkdir()
+        (dest / 'xcx.ini').write_text('XCX_SHADER_CACHE = "D:/c"\n', encoding='utf-8-sig')   # a BOM, the prefix
+        self.assertEqual(shaders.ini_value(dest, 'shader_cache'), 'D:/c')
+        (dest / 'xcx.ini').write_text('shader_cache = ' + 'x' * 1100 + '\n', encoding='utf-8')
+        self.assertEqual(shaders.shader_cache(dest), dest / 'shader-cache')   # too long for the game: its default
+
+    def test_prepare_meter(self):   # the setup's progress and time left from xcx.exe --prepare-shaders' lines
+        from unittest import mock
+        from installer import steps
+        log = self.tmp / 'prepare.log'
+        log.write_bytes(b'[host] other line\nprepare-shaders: progress 0 of 1000\n')
+        meter = steps.PrepareMeter(log)
+        clock = [100.0]
+        with mock.patch.object(steps.time, 'monotonic', lambda: clock[0]):
+            self.assertEqual(meter.read(), (0, 1000, None))
+            self.assertIsNone(meter.read())   # nothing new
+            clock[0] = 105.0
+            with open(log, 'ab') as f:
+                f.write(b'prepare-shaders: progress 100 of 1000\nprepare-shaders: progr')   # a half-written line
+            self.assertEqual(meter.read(), (100, 1000, None))   # under 10 s: no estimate yet
+            clock[0] = 120.0
+            with open(log, 'ab') as f:
+                f.write(b'ess 200 of 1000\n')
+            self.assertEqual(meter.read(), (200, 1000, 80.0))   # 200 in 20 s: 800 left take 80 s
+        self.assertIsNone(steps.PrepareMeter(self.tmp / 'missing.log').read())
+
+    def test_shader_cache_folder_from_xcx_ini(self):   # the folder the game uses (runtime/cfg.c rules)
+        from installer.steps import shader_cache
+        dest = self.tmp / 'ini'
+        dest.mkdir()
+        self.assertEqual(shader_cache(dest), dest / 'shader-cache')
+        other = self.tmp / 'elsewhere'
+        (dest / 'xcx.ini').write_text('# shader_cache = commented\n[performance]\nSHADER_CACHE = "' + str(other)
+                                      + '"\n; shader_cache = also commented\n', encoding='utf-8')
+        self.assertEqual(shader_cache(dest), other)
+        (dest / 'xcx.ini').write_text('shader_cache = first\nshader_cache = cache2\n', encoding='utf-8')
+        self.assertEqual(shader_cache(dest), dest / 'cache2')   # the last line wins; relative to the game folder
+
+    def test_shader_cache_folder_from_the_environment(self):   # XCX_SHADER_CACHE there wins, as in the game (cfg.c)
+        import os
+        from unittest import mock
+        from installer.steps import shader_cache
+        dest = self.tmp / 'env'
+        dest.mkdir()
+        (dest / 'xcx.ini').write_text('shader_cache = from-ini' + chr(10), encoding='utf-8')
+        with mock.patch.dict(os.environ, {'XCX_SHADER_CACHE': 'from-env'}):
+            self.assertEqual(shader_cache(dest), dest / 'from-env')
+        with mock.patch.dict(os.environ, {'XCX_SHADER_CACHE': ''}):   # set but empty: the game's default folder
+            self.assertEqual(shader_cache(dest), dest / 'shader-cache')
+        with mock.patch.dict(os.environ):
+            os.environ.pop('XCX_SHADER_CACHE', None)
+            self.assertEqual(shader_cache(dest), dest / 'from-ini')
+
+    def test_translator_identity(self):   # #223: the .id names the translator; a rebuilt exe of it is the same one
+        from installer import steps
+        a, b = self.tmp / 'a' / steps.XLATE, self.tmp / 'b' / steps.XLATE
+        for exe, data in ((a, b'build 1'), (b, b'build 2')):
+            exe.parent.mkdir()
+            exe.write_bytes(data)
+        self.assertNotEqual(steps.translator_identity(a), steps.translator_identity(b))   # no .id: the exe decides
+        a.with_suffix('.id').write_text('ab' * 32 + chr(10), encoding='ascii')
+        b.with_suffix('.id').write_text('AB' * 32, encoding='ascii')
+        self.assertEqual(steps.translator_identity(a), 'ab' * 32)
+        self.assertEqual(steps.translator_identity(a), steps.translator_identity(b))
+        b.with_suffix('.id').write_text('not an id', encoding='ascii')
+        self.assertTrue(steps.translator_identity(b).startswith('exe '))
+        self.assertEqual(steps.translator_identity(self.tmp / 'none' / steps.XLATE), '')
+
+    def test_prepare_permission_error(self):   # the game running, or a folder that can't be written
+        from unittest import mock
+        from installer import steps
+        ctx = SimpleNamespace(dest=self.tmp / 'ro')
+        for locked, want in ((True, 'compile.exe_in_use'), (False, 'prepare.no_write')):
+            with mock.patch.object(steps.Prepare, 'prepare', side_effect=PermissionError(13, 'denied', 'x.bin')),                     mock.patch.object(steps, 'exe_locked', return_value=locked):
+                with self.assertRaises(runner.InstallError) as e:
+                    steps.Prepare().run(ctx)
+            self.assertEqual(e.exception.id, want)
+        self.assertFalse(steps.exe_locked(self.tmp / 'missing.exe'))
+
     def test_bad_values_dropped(self):
         from installer import recent
         self.installed()

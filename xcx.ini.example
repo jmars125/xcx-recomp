@@ -50,6 +50,11 @@
 # pipe_prebuild = 1
 # Threads that translate known shaders at start (1 to 64; default: half the CPU threads, at most 16).
 # prewarm_xlate = 8
+# When the setup wrote the shader seed but nothing prepared it yet (the setup's choice was "Prepare while I play", its
+# preparation failed, another graphics card or translator, or the cache was cleared), prepare it in the background
+# while the game runs, and the threads for it (1 to 16; default: an eighth of the CPU threads, 1 to 4).
+# shader_prepare = 1
+# shader_prepare_threads = 2
 # Vulkan graphics pipeline library, 0 or 1. Default: on, except on AMD's driver for RDNA 1 and 2 (RX 5000 and 6000).
 # gpl = 1
 
