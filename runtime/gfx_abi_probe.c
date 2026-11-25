@@ -94,9 +94,19 @@ static void check_write_watch(void) {
     CHECK(plat_mem_state(a, a + 0x10000, &end) == PLAT_PROT_RW && end == a + 0x4000, "the thawed pages are not read-write");
     CHECK(plat_mem_state(a + 0x4000, a + 0x4001, &end) == PLAT_MEM_RESERVED, "a hole got committed");
     printf("write-watch: region with reserved holes frozen and thawed by a write\n");
+    // The texture write-back's storage check (vk_texture.c write_back) learns of unmaps under a texture (issue 232).
+    uint32_t seen_alias = 0, seen_heap = 0, seen_other = 0;
+    CHECK(mem_unmapped(a, 0x4000, &seen_alias) && mem_unmapped(heap, 0x200000, &seen_heap) &&
+          mem_unmapped(heap + 0x400000, 0x1000, &seen_other), "the first ask of mem_unmapped does not say 1");
+    CHECK(!mem_unmapped(a, 0x4000, &seen_alias), "mem_unmapped says 1 with no unmap since the last ask");
     CHECK(mem_unmap_physical(a, 0x4000) == 0, "UnmapPhysicalMemory");
+    CHECK(mem_unmapped(a + 0x3000, 0x2000, &seen_alias), "UnmapPhysicalMemory under the range is not reported");
+    CHECK(!mem_unmapped(a, 0x4000, &seen_alias), "the unmap is reported twice");
     CHECK(mem_written_pages(RT_KERNEL_BASE, 0x1000, pages, 8) == UINT64_MAX, "kernel region is not write-watched");
     CHECK(mem_set_heap_size(0, &heap) == 0, "SetHeapSize 0");
+    CHECK(mem_unmapped(heap + 0x100000, 0x1000, &seen_heap), "a heap shrink under the range is not reported");
+    CHECK(!mem_unmapped(heap + 0x400000, 0x1000, &seen_other), "an unmap elsewhere is reported");
+    printf("write-watch: UnmapPhysicalMemory and a heap shrink reported to the ranges under them only\n");
     printf("write-watch: alias page written once: reported once, then not\n");
 }
 

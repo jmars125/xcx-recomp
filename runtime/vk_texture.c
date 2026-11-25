@@ -69,6 +69,7 @@ typedef struct Tex {
     uint64_t rb_fence;            // the submission whose end copied the image to rb; rb is its content once it is done
     uint32_t rd_epoch;            // map_epoch when rd_ok was found (write_back)
     uint8_t rd_ok;                // its storage was readable then
+    uint32_t rd_unmap;            // mem_unmapped's mark when rd_ok was found or last confirmed
     uint32_t wt_n;                // WriteTexels into the storage since the last upload
     struct Tex *rel_prev, *rel_next;   // while released: the list of released entries, oldest first
 } Tex;
@@ -1826,8 +1827,11 @@ static int rb_ready(const Tex *e) {
 }
 
 static void write_back(Tex *e) {
-    // Storage the host has stopped mapping since the texture was made (upload skips it the same way) takes no copy
+    // Storage the host has stopped mapping since the texture was made (upload skips it the same way) takes no copy. Asked
+    // again after a pool's end or remap, or when guest pages under the storage were decommitted or made read-only or
+    // no-access (a heap shrink or UnmapPhysicalMemory, issue 232: the copy then faulted on a decommitted page).
     uint32_t ep = __atomic_load_n(&map_epoch, __ATOMIC_ACQUIRE);
+    if (mem_unmapped((uint64_t)(uintptr_t)e->t.mem, e->t.L.size, &e->rd_unmap)) e->rd_epoch = 0;
     if (e->rd_epoch != ep)
         e->rd_ok = (uint8_t)(e->t.L.size && plat_mem_readable((uint64_t)(uintptr_t)e->t.mem, e->t.L.size)), e->rd_epoch = ep;
     if (!e->rd_ok) {
