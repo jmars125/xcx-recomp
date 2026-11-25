@@ -81,6 +81,20 @@ def fingerprint(*parts):
     return h.hexdigest()
 
 
+def translator_identity(xlate):
+    """What runtime/gfx_shader.c puts into every shader cache key for this translator: the sha256 hex in the .id
+    beside it (tools/build_xlate.py hashes the translator's sources into it), else the sha256 of the exe. Every release
+    builds the translator again and its exe is not byte-identical from build to build, so the exe's hash alone would
+    call an unchanged translator another one."""
+    try:
+        text = xlate.with_suffix('.id').read_text(encoding='ascii').strip().lower()
+    except (OSError, UnicodeDecodeError):
+        text = ''
+    if len(text) == 64 and all(c in '0123456789abcdef' for c in text):
+        return text
+    return 'exe ' + file_sha256(xlate) if xlate.is_file() else ''
+
+
 def remove(path):
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
@@ -917,8 +931,11 @@ class Prepare(Step):
         layout, dest = ctx.layout, ctx.dest
         ctx.reporter.progress('prepare', 'translator', force=True)
         xlate = dest / XLATE
-        if xlate.is_file() and file_sha256(xlate) != file_sha256(layout.xlate):
-            remove(dest / 'shader-cache')   # another translator: its cache keys differ, the old ones only take space
+        # Another translator: its cache keys differ, the old ones only take space. Compared by identity, not by the
+        # exe's bytes: a rebuilt translator of the same sources keys the cache the same, and deleting it would make
+        # the game translate every shader again in play after each update (#223).
+        if xlate.is_file() and translator_identity(xlate) != translator_identity(layout.xlate):
+            remove(dest / 'shader-cache')
         replace_file(layout.xlate, xlate)
         xlate_id = layout.xlate.with_suffix('.id')
         if xlate_id.is_file():
