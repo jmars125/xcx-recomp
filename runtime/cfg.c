@@ -165,6 +165,80 @@ static int is_known(const char *key) {
     return 0;
 }
 
+static char *norm_key(char *key);
+
+int cfg_known(const char *name) {
+    char key[64];
+    if (!name || strlen(name) >= sizeof key) return 0;
+    snprintf(key, sizeof key, "%s", name);
+    return is_known(norm_key(key));
+}
+
+// ---- command-line settings: --set KEY=VALUE, --fullscreen, --windowed ----------------------------------------------
+// Each becomes the environment variable XCX_<KEY>, so it has the environment's priority everywhere (over xcx.ini, the
+// device profile and the table; the menu greys it out) and a re-run of the process (memory.c reexec_or_fail) inherits
+// it. Runs before mem_init: no heap use here beyond what setenv itself takes.
+#define CMDLINE_MAX 64
+static char cmdline_names[CMDLINE_MAX][96];   // "XCX_KEY=VALUE" (value cut), for cfg_init's log
+static int n_cmdline;
+
+static int cmdline_set(const char *assignment, const char *flag) {
+    const char *eq = strchr(assignment, '=');
+    char key[64], var[80];
+    size_t kl = eq ? (size_t)(eq - assignment) : 0;
+    if (!eq || !kl || kl >= sizeof key) {
+        fprintf(stderr, "%s: expected KEY=VALUE (a key of xcx.ini, as in xcx.ini.example), not '%s'\n", flag, assignment);
+        return 0;
+    }
+    memcpy(key, assignment, kl);
+    key[kl] = 0;
+    char *k = norm_key(key);
+    if (!is_known(k)) {
+        fprintf(stderr, "%s: unknown setting '%.*s': the keys are those of xcx.ini (xcx.ini.example, docs/controls.md)\n",
+                flag, (int)kl, assignment);
+        return 0;
+    }
+    if (!eq[1]) {   // Windows removes a variable set to "", so an empty value could not mean the same on both
+        fprintf(stderr, "%s: %s needs a value; leave the option out to keep xcx.ini's\n", flag, k);
+        return 0;
+    }
+    snprintf(var, sizeof var, PREFIX "%s", k);
+    if (!plat_setenv(var, eq + 1)) {
+        fprintf(stderr, "%s: cannot set %s\n", flag, var);
+        return 0;
+    }
+    if (n_cmdline < CMDLINE_MAX) snprintf(cmdline_names[n_cmdline++], sizeof *cmdline_names, "%s=%s", var, eq + 1);
+    return 1;
+}
+
+int cfg_args(int *argc, char **argv) {
+    int out = 1;
+    for (int i = 1; i < *argc; i++) {
+        const char *a = argv[i];
+        int ok = 1;
+        if (!strcmp(a, "--set")) {
+            if (i + 1 == *argc) {
+                fprintf(stderr, "--set: expected KEY=VALUE after it\n");
+                return 0;
+            }
+            ok = cmdline_set(argv[++i], "--set");
+        } else if (!strncmp(a, "--set=", 6)) {
+            ok = cmdline_set(a + 6, "--set");
+        } else if (!strcmp(a, "--fullscreen")) {
+            ok = cmdline_set("FULLSCREEN=1", a);
+        } else if (!strcmp(a, "--windowed")) {
+            ok = cmdline_set("FULLSCREEN=0", a);
+        } else {
+            argv[out++] = argv[i];
+            continue;
+        }
+        if (!ok) return 0;
+    }
+    argv[out] = NULL;
+    *argc = out;
+    return 1;
+}
+
 static void clear(void) {
     for (int i = 0; i < n_entries; i++) free(entries[i].key), free(entries[i].value);
     n_entries = 0;
@@ -658,6 +732,7 @@ static void load_ini(void) {
 }
 
 void cfg_init(void) {
+    for (int i = 0; i < n_cmdline; i++) rt_log("cfg: %s from the command line (environment priority)", cmdline_names[i]);
     load_ini();
     if (profile_of())
         rt_log("cfg: device profile Steam Deck: defaults for the keys xcx.ini does not set (XCX_DEVICE_PROFILE=desktop "
