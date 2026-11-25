@@ -2,6 +2,8 @@
 
 Static recompilation of *Xenoblade Chronicles X: Definitive Edition* (Switch, ARM64) into a native Windows x86-64 exe with a Vulkan renderer. Design: [docs/architecture.md](docs/architecture.md). Toolchain, build commands and tests: [docs/building.md](docs/building.md).
 
+In-game menu: the Data row with Save and Load is in [docs/menu-load-game.md](docs/menu-load-game.md); the row tables, handlers and message lookup it relies on are in [docs/menu-rows.md](docs/menu-rows.md).
+
 ## Game content boundary
 
 This repository is public. Game data lives outside it and every derived file stays in ignored folders.
