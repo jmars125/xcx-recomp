@@ -470,6 +470,34 @@ static int spirv_complete(const uint32_t *w, uint64_t n) {
     return i == n;
 }
 
+// Maxwell's FMNMX returns the operand that is not a NaN when the other one is, and the games' shaders lean on it: the
+// hair fragment shader rebuilds a normal's third component as max(0, sqrt(1 - x * x - y * y)), which is a NaN for a
+// normal-map texel outside the unit disc, and the max is what turns it into 0. The translator emits GLSL.std.450 FMin
+// and FMax, whose result with a NaN operand Vulkan leaves undefined, and the AMD driver passes the NaN on. A NaN
+// written into the HDR scene then blooms into the white speckles on the scalp of the buzz-cut hairstyles. NMin and
+// NMax take the same operands and result type with the Maxwell rule, so the instruction keeps its word count and only
+// the extended-instruction number changes. Fragment shaders only: that is the stage the speckles were traced in.
+// XCX_NAN_MINMAX=0 leaves the shaders as translated. docs/maxwell.md, row 3.1.
+enum { SPV_OP_EXT_INST_IMPORT = 11, SPV_OP_EXT_INST = 12, GLSL_FMIN = 37, GLSL_FMAX = 40, GLSL_NMIN = 79, GLSL_NMAX = 80 };
+
+static void spirv_nan_minmax(uint32_t *w, uint64_t n) {
+    static int on = -1;
+    if (on < 0) on = rt_knob("NAN_MINMAX", "1");
+    if (!on) return;
+    uint32_t glsl_id = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (!len || i + len > n) return;
+        if (op == SPV_OP_EXT_INST_IMPORT && len >= 3 && (len - 2) * 4 >= 13 && !memcmp(w + i + 2, "GLSL.std.450", 13))
+            glsl_id = w[i + 1];
+        else if (op == SPV_OP_EXT_INST && len >= 5 && glsl_id && w[i + 3] == glsl_id) {
+            if (w[i + 4] == GLSL_FMIN) w[i + 4] = GLSL_NMIN;
+            else if (w[i + 4] == GLSL_FMAX) w[i + 4] = GLSL_NMAX;
+        }
+        i += len;
+    }
+}
+
 // Reads <key>.spv and <key>.res.json; NULL if either is missing or malformed (the caller translates again and
 // overwrites both). iid: the input id, NULL when the caller sets it.
 static GfxShader *disk_load(const uint8_t key[32], const uint8_t *iid) {
@@ -502,7 +530,10 @@ static GfxShader *disk_load(const uint8_t key[32], const uint8_t *iid) {
     s->reflection = (char *)res;
     s->reflection_size = res_size;
     reflect(s);
-    if (s->stage == GFX_STAGE_FS) vk_hdr_shader_swap(&s->spirv, &s->words);   // the in-memory copy; the cache keeps its own
+    if (s->stage == GFX_STAGE_FS) {   // the in-memory copy; the cache keeps its own
+        spirv_nan_minmax(s->spirv, s->words);
+        vk_hdr_shader_swap(&s->spirv, &s->words);
+    }
     return s;
 }
 
