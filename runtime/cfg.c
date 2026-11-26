@@ -27,7 +27,8 @@ static unsigned version;
 static PlatMutex set_lock = PLAT_MUTEX_INIT;   // cfg_set, cfg_reset, cfg_save
 static int save_ok = 1;                         // the last cfg_save_to wrote (or had nothing to write)
 
-// Every name the runtime reads (and the patch sets in generated/), without the prefix. A file key outside this list is
+// Every name the runtime reads (and the patch sets' keys in generated/; not Dawn and dusk's four, whose sets follow its
+// settings alone from dawn_dusk.c rt_dawn_dusk_init on), without the prefix. A file key outside this list is
 // logged as unknown. A new variable goes here too, or its ini key logs a harmless "unknown key" line.
 static const char *const known[] = {
     "AB", "ANISO", "APP_POOL", "ASSUME_FOCUS", "ASTC", "ASTC_TIME", "ASYNC_PREEMPT", "AUDIO", "AUDIO_OFF", "AUDIO_PREFILL_MS",
@@ -35,7 +36,7 @@ static const char *const known[] = {
     "BIND_LSTICK_RIGHT", "BIND_LSTICK_UP", "BIND_MINUS",
     "BIND_PLUS", "BIND_R", "BIND_RCLICK", "BIND_RIGHT", "BIND_RSTICK_DOWN", "BIND_RSTICK_LEFT", "BIND_RSTICK_RIGHT", "BIND_RSTICK_UP",
     "BIND_SKIP", "BIND_STATS", "BIND_UP", "BIND_X", "BIND_Y",
-    "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "BRIGHTNESS", "BUG_REPORT_TEST", "CHEATS", "CLOTH_REALTIME", "CORE_DIAG", "CRASH_TEST", "CRIT", "CRIT_OUT", "CROWD_DISTANCE", "CROWD_PATCH", "CUTSCENE_30", "DESC_TEMPLATE", "DEVICE_PROFILE", "DLSS_JITTER", "DLSS_MASK", "DLSS_MASK_PX", "DLSS_MIPBIAS", "DLSS_MV", "DLSS_MVDEBUG", "DLSS_OBJMV", "DLSS_PRESET", "DUMP", "DUMP_BUF", "DUMP_DIR", "DUMP_LOG", "DUMP_ONLY",
+    "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "BRIGHTNESS", "BUG_REPORT_TEST", "CHEATS", "CLOTH_REALTIME", "CORE_DIAG", "CRASH_TEST", "CRIT", "CRIT_OUT", "CROWD_DISTANCE", "CROWD_PATCH", "CUTSCENE_30", "DARK_NIGHTS", "DAWN_DUSK", "DAY_LENGTH", "DESC_TEMPLATE", "DEVICE_PROFILE", "DLSS_JITTER", "DLSS_MASK", "DLSS_MASK_PX", "DLSS_MIPBIAS", "DLSS_MV", "DLSS_MVDEBUG", "DLSS_OBJMV", "DLSS_PRESET", "DUMP", "DUMP_BUF", "DUMP_DIR", "DUMP_LOG", "DUMP_ONLY",
     "EXEFS", "FAST_CORES", "FEEDBACK", "FIX_C0", "FIX_ZERO", "FLIGHT", "FLIGHT_AT", "FLIGHT_DIR", "FLIGHT_FRAMES", "FLIGHT_SPIKE_MS",
     "FLIGHT_THUMBS", "FPS60", "FPS_LIMIT", "FREEZE_IDLE", "FREE_CORES", "FULLSCREEN", "GATHER_BIAS", "GPL", "GPL_DRAW_BUILD", "GPU",
     "GPU_INDEX", "GPU_NAME", "GRASS_DISTANCE", "GRASS_PATCH", "GRASS_POOL", "HDR", "HDR_GAME_NITS", "HDR_HUE", "HDR_PEAK_NITS", "HDR_UI_NITS", "HIGHFPS_FIX", "INPUT", "INPUT_RECORD", "INPUT_SCRIPT", "LANG", "LIB_PREBUILD",
@@ -53,20 +54,26 @@ static const char *const known[] = {
     "WINDOW_SIZE", "XLATE", "XLATE_ID", "XLATE_KEEP", "XLATE_PROCS", "ZSTD_CHECK", "ZSTD_NATIVE",
 };
 
-// The xcx.ini section a key cfg_set may write goes to when the file lacks it (xcx.ini.example's sections).
+// The xcx.ini section for a key cfg_set writes that the file lacks (xcx.ini.example's sections, which follow the F1
+// menu's tabs). Files laid out before that (frame rate rows in [frame rate], graphics rows in [display], languages in
+// [language], cheats in [cheats]) need nothing: sections only group, and cfg_save_to puts a missing key after its
+// commented example line wherever the file has it, so such a file grows in its own layout.
 static const struct { const char *key, *section; } sections[] = {
-    {"FPS_LIMIT", "frame rate"}, {"FPS60", "frame rate"}, {"CUTSCENE_30", "frame rate"},
     {"REALTIME", "frame rate"}, {"CLOTH_REALTIME", "frame rate"}, {"HIGHFPS_FIX", "frame rate"},
     {"FULLSCREEN", "display"}, {"WINDOW_SIZE", "display"}, {"PERF_OVERLAY", "display"}, {"VK_PRESENT", "display"},
-    {"GPU_INDEX", "display"}, {"OUTPUT_RES", "display"}, {"RENDER_SCALE", "display"}, {"ANISO", "display"},
-    {"UPSCALER", "display"},
-    {"SHARPNESS", "display"}, {"BRIGHTNESS", "display"}, {"PICTURE_FIT", "display"},
+    {"GPU_INDEX", "display"}, {"OUTPUT_RES", "display"}, {"FPS_LIMIT", "display"}, {"FPS60", "display"},
+    {"CUTSCENE_30", "display"},
+    {"BRIGHTNESS", "display"}, {"PICTURE_FIT", "display"},
     {"HDR", "display"}, {"HDR_PEAK_NITS", "display"}, {"HDR_GAME_NITS", "display"}, {"HDR_UI_NITS", "display"},
     {"HDR_HUE", "display"},
-    {"GRASS_DISTANCE", "display"}, {"CROWD_DISTANCE", "display"}, {"OBJECT_LOD_RANGE", "display"}, {"OBJECT_LOD_MODE", "display"},
     {"DEVICE_PROFILE", "display"},
-    {"MENU_LANG", "language"}, {"LANG", "language"}, {"VOICE_LANG", "language"}, {"OPERATION_MODE", "language"},
-    {"VOLUME", "audio"}, {"PAUSE_IN_BACKGROUND", "audio"}, {"CHEATS", "cheats"},
+    {"OPERATION_MODE", "graphics"}, {"RENDER_SCALE", "graphics"}, {"UPSCALER", "graphics"}, {"SHARPNESS", "graphics"},
+    {"ANISO", "graphics"},
+    {"GRASS_DISTANCE", "graphics"}, {"CROWD_DISTANCE", "graphics"}, {"OBJECT_LOD_RANGE", "graphics"},
+    {"OBJECT_LOD_MODE", "graphics"},
+    {"CHEATS", "game"}, {"LANG", "game"}, {"MENU_LANG", "game"},
+    {"DAY_LENGTH", "game"}, {"DAWN_DUSK", "game"}, {"DARK_NIGHTS", "game"},
+    {"VOLUME", "audio"}, {"VOICE_LANG", "audio"}, {"PAUSE_IN_BACKGROUND", "audio"},
     {"MOTION", "input"}, {"RUMBLE_STRENGTH", "input"}, {"RUMBLE_CURVE", "input"}, {"RUMBLE_TRIGGERS", "input"},
     {"GLYPH_STYLE", "input"}, {"GLYPH_APPEARANCE", "input"}, {"PAD_LAYOUT", "input"}, {"MOUSE_SENS", "input"}, {"INPUT_RECORD", "input"},
     {"STICK_DEADZONE_L", "input"}, {"STICK_DEADZONE_R", "input"}, {"STICK_DEADZONE_SHAPE", "input"}, {"STICK_CENTER_L", "input"}, {"STICK_CENTER_R", "input"},
@@ -80,7 +87,8 @@ static const struct { const char *key, *section; } sections[] = {
     {"TIMER_1MS", "performance"}, {"FAST_CORES", "performance"}, {"PIPE_WAIT", "performance"}, {"PIPE_SKIP", "performance"},
     {"LIB_PREBUILD", "performance"}, {"LIB_PREBUILD_THREADS", "performance"}, {"PIPE_PREBUILD", "performance"},
     {"PREWARM_XLATE", "performance"}, {"GPL", "performance"}, {"ASTC", "performance"}, {"MEMORY", "performance"},
-    {"TEX_ALIAS", "performance"}, {"LOD_GUARD", "performance"}, {"FIX_C0", "performance"}, {"FIX_ZERO", "performance"},
+    {"TEX_ALIAS", "performance"}, {"ZSTD_NATIVE", "performance"}, {"ZSTD_CHECK", "performance"},
+    {"LOD_GUARD", "performance"}, {"FIX_C0", "performance"}, {"FIX_ZERO", "performance"},
     {"BIND_SKIP", "performance"}, {"SHADER_MEMO", "performance"}, {"PIPE_MEMO", "performance"}, {"TEX_MEMO", "performance"}, {"DESC_TEMPLATE", "performance"},
     {"PUSH_SKIP", "performance"}, {"SPLIT_DRAWS", "performance"}, {"SPLIT_US", "performance"}, {"VK_VALIDATION", "performance"},
     {"VK_DYN_VERTEX", "performance"}, {"VK_DYN_A2C", "performance"}, {"VK_SUBGROUP_PIN", "performance"},
@@ -93,7 +101,7 @@ static const struct { const char *key, *section; } sections[] = {
 #define LIVE 1
 #define RESTART 0
 static const CfgMeta metas[] = {
-    // Screen
+    // display and graphics
     {"FULLSCREEN", "0", "0|borderless|1", LIVE}, {"WINDOW_SIZE", "1920x1080", NULL, LIVE},
     {"VK_PRESENT", "mailbox", "mailbox|fifo|immediate", LIVE}, {"GPU_INDEX", "", NULL, RESTART},
     {"PERF_OVERLAY", "off", "off|fps|full", LIVE},
@@ -110,7 +118,7 @@ static const CfgMeta metas[] = {
     {"HDR", "0", "0|1", RESTART}, {"HDR_PEAK_NITS", "1000", "400..10000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
     {"HDR_UI_NITS", "203", "80..500", LIVE}, {"HDR_HUE", "50", "0..100", LIVE},
     {"DEVICE_PROFILE", "auto", "auto|desktop|deck", RESTART},
-    // Game
+    // frame rate, languages, console mode, the clock
     {"FPS_LIMIT", "60", "30|40|45|60|90|120|144|display", LIVE}, {"FPS60", "1", "0|1", LIVE},
     {"CUTSCENE_30", "1", "1|mixed|0", RESTART},
     {"REALTIME", "1", "0|1", RESTART}, {"CLOTH_REALTIME", "1", "0|1", RESTART},
@@ -118,7 +126,10 @@ static const CfgMeta metas[] = {
     {"LANG", "", "ja|en-US|fr|de|it|es|zh-CN|ko|nl|pt|ru|zh-TW|en-GB|fr-CA|es-419|zh-Hans|zh-Hant|pt-BR", RESTART},
     {"VOICE_LANG", "", "ja|en", LIVE},
     {"OPERATION_MODE", "docked", "docked|handheld", RESTART},
-    // Sound, Controls, Menu
+    {"DAY_LENGTH", "24", "0..1440", LIVE},   // real minutes a game day lasts (day_length.c)
+    {"DAWN_DUSK", "original", "original|smoothed|extended", LIVE},   // dawn_dusk.c
+    {"DARK_NIGHTS", "original", "original|darker|darkest", LIVE},    // dawn_dusk.c: Night darkness
+    // sound, controls, the menu's language
     {"VOLUME", "100", "0..100", LIVE}, {"PAUSE_IN_BACKGROUND", "0", "0|1", RESTART},
     {"MOTION", "1", "0|1", LIVE}, {"RUMBLE_STRENGTH", "130", "0..300", LIVE}, {"RUMBLE_CURVE", "0.6", "0.2..1.5", LIVE},
     {"RUMBLE_TRIGGERS", "0", "0|1", LIVE}, {"PAD_LAYOUT", "auto", "auto|nintendo|xbox", LIVE},
@@ -545,20 +556,24 @@ int cfg_save_to(const char *path) {
             replace[last] = e;
             continue;
         }
+        // after the key's commented example line: the one in its section, else one anywhere (a file laid out in an
+        // older version of the example keeps its layout); else at the end of its section; else (-1) a new section
         const char *want = section_of(entries[e].key);
-        int in = 0, example = -1, tail = -1;
-        for (int i = 0; i < nl && want; i++) {
+        int in = 0, example = -1, elsewhere = -1, tail = -1;
+        for (int i = 0; i < nl; i++) {
             line_text(&lines[i], i == 0, t, sizeof t);
             if (line_section(t, sec, sizeof sec)) {
-                in = !strcmp(sec, want);
+                in = want && !strcmp(sec, want);
                 if (in) tail = i;
                 continue;
             }
-            if (!in) continue;
-            if (*t) tail = i;
-            if (line_key(t, 1, k, sizeof k) && !strcmp(k, entries[e].key)) example = i;
+            if (in && *t) tail = i;
+            if (line_key(t, 1, k, sizeof k) && !strcmp(k, entries[e].key)) {
+                if (in) example = i;
+                else if (elsewhere < 0) elsewhere = i;
+            }
         }
-        after_key[e] = example >= 0 ? example : tail;
+        after_key[e] = example >= 0 ? example : elsewhere >= 0 ? elsewhere : tail;
     }
     Out o = {0};
     for (int i = 0; i < nl; i++) {

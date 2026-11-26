@@ -213,9 +213,17 @@ class IniTest(unittest.TestCase):
         self.assertEqual(ini.get_language(out), 'de')
 
     def test_missing_section_is_added(self):
-        self.assertEqual(ini.set_language('fps60 = 0\n', 'fr'), 'fps60 = 0\n\n[language]\nlang = fr\n')
+        self.assertEqual(ini.set_language('fps60 = 0\n', 'fr'), 'fps60 = 0\n\n[game]\nlang = fr\n')
+        self.assertEqual(ini.set_language('[game]\ncheats = 1\n', 'fr'), '[game]\nlang = fr\ncheats = 1\n')
+        # an older layout's [language] without a lang line: [game], where the game's own save puts it too (cfg.c)
         self.assertEqual(ini.set_language('[language]\nlocale = de-DE\n', 'fr'),
-                         '[language]\nlang = fr\nlocale = de-DE\n')
+                         '[language]\nlocale = de-DE\n\n[game]\nlang = fr\n')
+
+    def test_example_has_lang_under_game(self):
+        text = (Path(__file__).resolve().parent.parent / 'xcx.ini.example').read_text(encoding='utf-8')
+        out = ini.set_language(text, 'de')
+        game = out.replace('\r\n', '\n').split('[game]\n', 1)[1].split('\n[', 1)[0]
+        self.assertIn('\nlang = de\n', '\n' + game)
 
     def test_write_keeps_user_lines(self):
         with tempfile.TemporaryDirectory() as d:

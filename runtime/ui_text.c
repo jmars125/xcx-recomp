@@ -96,8 +96,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     SWKBD("Text entry", "Enter a name", "Cross", "OK", "Cancel", "Controller: A = OK, B = Cancel"),
 
     [UI_MENU_TITLE] = "Settings",
-    [UI_MENU_TAB_SCREEN] = "Screen", [UI_MENU_TAB_GAME] = "Game", [UI_MENU_TAB_SOUND] = "Sound",
-    [UI_MENU_TAB_CONTROLS] = "Controls", [UI_MENU_TAB_MENU] = "Menu", [UI_MENU_TAB_ADVANCED] = "Advanced",
+    [UI_MENU_TAB_DISPLAY] = "Display", [UI_MENU_TAB_GRAPHICS] = "Graphics", [UI_MENU_TAB_GAME] = "Game",
+    [UI_MENU_TAB_SOUND] = "Sound", [UI_MENU_TAB_CONTROLS] = "Controls", [UI_MENU_TAB_ADVANCED] = "Advanced",
     [UI_MENU_CONTINUE] = "Continue", [UI_MENU_QUIT] = "Quit game",
     [UI_QUIT_CONFIRM] = "Quit the game? Progress since the last save is lost.", [UI_QUIT_YES] = "Yes", [UI_QUIT_NO] = "No",
     [UI_MENU_ON] = "On", [UI_MENU_OFF] = "Off", [UI_MENU_AUTO] = "Automatic", [UI_MENU_DEFAULT_MARK] = "default",
@@ -124,7 +124,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PERF_OFF] = "Off", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Full",
     // printf format of the overlay line in FPS mode: the frame rate
     [UI_PERF_LINE_FPS] = "%.0f fps",
-    [UI_MENU_GRAPHICS] = "Picture",
+    [UI_MENU_PICTURE_GROUP] = "Picture", [UI_MENU_OVERLAY_GROUP] = "Overlay", [UI_MENU_QUALITY_GROUP] = "Image quality",
     [UI_MENU_OUTPUT_RES] = "Game resolution",
     [UI_MENU_OUTPUT_RES_DESC] = "The size the game draws its picture and interface in. Above 1920 x 1080 the game needs "
                                 "more video memory and GPU time.",
@@ -230,6 +230,25 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OPERATION_MODE] = "Console mode",
     [UI_MENU_OPERATION_MODE_DESC] = "Whether the game thinks it runs docked or handheld.",
     [UI_MENU_MODE_DOCKED] = "Docked", [UI_MENU_MODE_HANDHELD] = "Handheld",
+    [UI_MENU_DAY_NIGHT_GROUP] = "Day and night",
+    [UI_MENU_DAY_LENGTH] = "Day length",
+    [UI_MENU_DAY_LENGTH_DESC] = "How many real minutes a whole day takes on the in-game clock. Original is the game's own 24 "
+                                "minutes, a game minute each second. Shorter days run the clock, the light and the sky "
+                                "faster, longer days slower. Stopped holds the time; a time change in the game's own menu "
+                                "still moves it. Takes effect at once.",
+    [UI_MENU_DAY_ORIGINAL] = "Original", [UI_MENU_DAY_STOPPED] = "Stopped", [UI_MENU_DAY_STEP] = "%s min (%sx)",
+    [UI_MENU_NEEDS_GAME_200] = "Needs game version 2.0.0.",
+    [UI_MENU_DAY_NO_CLOCK] = "Off for this session: the game's clock was not where expected.",
+    [UI_MENU_DAWN_DUSK] = "Dawn and dusk",
+    [UI_MENU_DAWN_DUSK_DESC] = "How the light changes at dawn and dusk. Original is the game's own, with quick steps at "
+                               "05:00 and 18:45. Smoothed keeps its times without the steps. Smoothed & Extended also "
+                               "stretches them: dawn 04:00 to 08:00, dusk 17:00 to 21:00. Takes effect at once.",
+    [UI_MENU_DAWN_DUSK_SMOOTHED] = "Smoothed", [UI_MENU_DAWN_DUSK_EXTENDED] = "Smoothed & Extended",
+    [UI_MENU_DARK_NIGHTS] = "Night darkness",
+    [UI_MENU_DARK_NIGHTS_DESC] = "How bright the night is. Darker and Darkest dim the night light on the ground, people "
+                                 "and things, and keep the night sky as it is. Both fade in at dusk and out at dawn with "
+                                 "the light. Takes effect at once.",
+    [UI_MENU_DARK_NIGHTS_DARKER] = "Darker", [UI_MENU_DARK_NIGHTS_DARKEST] = "Darkest",
 
     [UI_MENU_VOLUME] = "Volume", [UI_MENU_VOLUME_DESC] = "Master volume of the game.",
 
@@ -322,6 +341,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_PAD_DPAD_DOWN] = "D-pad down", [UI_PAD_ZL] = "Left trigger", [UI_PAD_ZR] = "Right trigger",
     [UI_PAD_CROSS] = "Cross", [UI_PAD_CIRCLE] = "Circle", [UI_PAD_SQUARE] = "Square", [UI_PAD_TRIANGLE] = "Triangle",
 
+    [UI_MENU_LANG_GROUP] = "Language",
     [UI_MENU_MENU_LANG] = "Menu language", [UI_MENU_MENU_LANG_DESC] = "Language of this menu and the overlay.",
     [UI_MENU_MENU_LANG_AUTO] = "Automatic (from Windows)",
 
@@ -506,8 +526,8 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     SWKBD("Ввод текста", "Введите имя", "Cross", "ОК", "Отмена", "Контроллер: A — ОК, B — отмена"),
 
     [UI_MENU_TITLE] = "Настройки",
-    [UI_MENU_TAB_SCREEN] = "Экран", [UI_MENU_TAB_GAME] = "Игра", [UI_MENU_TAB_SOUND] = "Звук",
-    [UI_MENU_TAB_CONTROLS] = "Управление", [UI_MENU_TAB_MENU] = "Меню", [UI_MENU_TAB_ADVANCED] = "Дополнительно",
+    [UI_MENU_TAB_DISPLAY] = "Экран", [UI_MENU_TAB_GRAPHICS] = "Графика", [UI_MENU_TAB_GAME] = "Игра",
+    [UI_MENU_TAB_SOUND] = "Звук", [UI_MENU_TAB_CONTROLS] = "Управление", [UI_MENU_TAB_ADVANCED] = "Дополнительно",
     [UI_MENU_CONTINUE] = "Продолжить", [UI_MENU_QUIT] = "Выйти из игры",
     [UI_QUIT_CONFIRM] = "Выйти из игры? Прогресс после последнего сохранения будет потерян.", [UI_QUIT_YES] = "Да",
     [UI_QUIT_NO] = "Нет",
@@ -518,10 +538,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VERSION] = "XCX Recomp %s, игра %s",
 
     [UI_MENU_FULLSCREEN] = "Режим экрана",
-    [UI_MENU_FULLSCREEN_DESC] = "Окно: окно размера ниже. Без рамки: окно без рамки на весь монитор; панель задач и "
-                                "Alt+Tab работают поверх него. Полный экран: игра может занять монитор целиком, в "
-                                "разрешении рабочего стола. F11 переключает между окном и последним полноэкранным "
-                                "режимом.",
+    [UI_MENU_FULLSCREEN_DESC] = "Окно: окно размера ниже. Без рамки: окно на весь монитор, панель задач и Alt+Tab "
+                                "работают поверх. Полный экран: игра может занять монитор целиком, в разрешении "
+                                "рабочего стола. F11 переключает окно и последний полноэкранный режим.",
     [UI_MENU_MODE_WINDOW] = "Окно", [UI_MENU_MODE_BORDERLESS] = "Без рамки", [UI_MENU_MODE_FULLSCREEN] = "Полный экран",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Другой",
@@ -537,15 +556,15 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "режимы.",
     [UI_MENU_PERF_OFF] = "Выкл.", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Полный",
     [UI_PERF_LINE_FPS] = "%.0f к/с",
-    [UI_MENU_GRAPHICS] = "Изображение",
+    [UI_MENU_PICTURE_GROUP] = "Изображение", [UI_MENU_OVERLAY_GROUP] = "Индикатор",
+    [UI_MENU_QUALITY_GROUP] = "Качество изображения",
     [UI_MENU_OUTPUT_RES] = "Разрешение игры",
     [UI_MENU_OUTPUT_RES_DESC] = "Размер, в котором игра рисует картинку и интерфейс. Выше 1920 × 1080 игре нужно больше "
                                 "видеопамяти и времени GPU.",
     [UI_MENU_RENDER_SCALE] = "Масштаб 3D-отрисовки",
-    [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до этого размера. "
-                                  "«Как в игре» оставляет его динамическому разрешению игры; процент фиксирует его. "
-                                  "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
-                                  "перезапуска.",
+    [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до него. «Как в "
+                                  "игре» — динамическое разрешение игры, процент его фиксирует. Для суперсэмплинга "
+                                  "задайте разрешение игры выше окна. Применяется после перезапуска.",
     [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (динамически)",
     [UI_MENU_ANISO] = "Анизотропная фильтрация",
     [UI_MENU_ANISO_DESC] = "Делает чётче текстуры под углом, например землю впереди. «Как в игре» оставляет уровень "
@@ -554,10 +573,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_ANISO_GAME] = "Как в игре", [UI_MENU_ANISO_2X] = "2x", [UI_MENU_ANISO_4X] = "4x",
     [UI_MENU_ANISO_8X] = "8x", [UI_MENU_ANISO_16X] = "16x",
     [UI_MENU_UPSCALER] = "Масштабирование",
-    [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
-                              "детали чётче билинейного. NVIDIA DLSS (видеокарты RTX) также заменяет сглаживание игры: "
-                              "DLAA при масштабе рендеринга «Как в игре» или 100, апскейл DLSS при 75, 67 или 50. "
-                              "Переключение на DLSS применяется после перезапуска.",
+    [UI_MENU_UPSCALER_DESC] = "Как растягивается картинка, когда окно больше разрешения игры. FSR чётче билинейного. "
+                              "NVIDIA DLSS (карты RTX) также заменяет сглаживание игры: DLAA при масштабе «Как в "
+                              "игре» или 100, апскейл DLSS при 75, 67 или 50. Переход на DLSS — после перезапуска.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Билинейное",
     [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
     [UI_MENU_PICTURE_FIT] = "Пропорции картинки",
@@ -583,10 +601,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OBJECT_LOD_AUTO] = "Авто", [UI_MENU_OBJECT_LOD_FIXED] = "Фиксированная",
     [UI_MENU_OBJECT_LOD_NOW] = "сейчас +%.0f м",
     [UI_MENU_CROWD] = "Дальность толпы",
-    [UI_MENU_CROWD_DESC] = "Как далеко от вас появляются и исчезают прохожие (в NLA). «Как в игре» — расстояния "
-                           "игры (около 25 м); большие значения умножают их. Сначала включите «Подготовка кадра "
-                           "для GPU в отдельном потоке» («Дополнительно»): без неё людные места сильно тормозят. "
-                           "Применяется сразу.",
+    [UI_MENU_CROWD_DESC] = "Как далеко появляются и исчезают прохожие в NLA. «Как в игре» — около 25 м; большие "
+                           "значения умножают это. Сначала включите «Подготовка кадра для GPU в отдельном потоке» "
+                           "(«Дополнительно»): без неё людные места тормозят. Действует сразу.",
     [UI_MENU_CROWD_ORIGINAL] = "Как в игре", [UI_MENU_CROWD_STEP] = "%sx",
     [UI_MENU_SHARPNESS] = "Резкость FSR",
     [UI_MENU_SHARPNESS_DESC] = "Повышение резкости после масштабирования FSR; 0 выключает его.",
@@ -629,14 +646,32 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_GAME_LANG_DESC] = "Язык текста игры, а также озвучки, если её не задаёт «Язык озвучки».",
     [UI_MENU_GAME_LANG_AUTO] = "Автоматически",
     [UI_MENU_VOICE_LANG] = "Язык озвучки",
-    [UI_MENU_VOICE_LANG_DESC] = "Японская или английская озвучка с подходящей синхронизацией губ, при любом языке "
-                                "текста. «Автоматически» оставляет выбор игре: японская озвучка при японском или "
-                                "китайском тексте, иначе английская. Изменение вступает в силу, когда игра снова "
-                                "применяет настройки, например при загрузке сохранения.",
+    [UI_MENU_VOICE_LANG_DESC] = "Японская или английская озвучка с синхронизацией губ при любом языке текста. "
+                                "«Автоматически»: японская при японском или китайском тексте, иначе английская. "
+                                "Действует, когда игра снова применит настройки (при загрузке сохранения).",
     [UI_MENU_VOICE_JA] = "Японский", [UI_MENU_VOICE_EN] = "Английский",
     [UI_MENU_OPERATION_MODE] = "Режим консоли",
     [UI_MENU_OPERATION_MODE_DESC] = "Игра считает, что консоль в док-станции или в портативном режиме.",
     [UI_MENU_MODE_DOCKED] = "В док-станции", [UI_MENU_MODE_HANDHELD] = "Портативный",
+    [UI_MENU_DAY_NIGHT_GROUP] = "День и ночь",
+    [UI_MENU_DAY_LENGTH] = "Длина суток",
+    [UI_MENU_DAY_LENGTH_DESC] = "Сколько реальных минут длятся игровые сутки. «Как в игре» — 24 минуты. Короче — часы и "
+                                "свет идут быстрее, длиннее — медленнее. «Время остановлено» держит время, но смена "
+                                "времени в игре работает. Действует сразу.",
+    [UI_MENU_DAY_ORIGINAL] = "Как в игре", [UI_MENU_DAY_STOPPED] = "Время остановлено",
+    [UI_MENU_DAY_STEP] = "%s мин (%sx)",
+    [UI_MENU_NEEDS_GAME_200] = "Нужна версия игры 2.0.0.",
+    [UI_MENU_DAY_NO_CLOCK] = "Выключено до перезапуска: часы игры не найдены.",
+    [UI_MENU_DAWN_DUSK] = "Рассвет и закат",
+    [UI_MENU_DAWN_DUSK_DESC] = "Как меняется свет на рассвете и закате. «Как в игре» — с резкими скачками в 05:00 и "
+                               "18:45. «Плавно» — те же часы без скачков. «Плавно и дольше» — ещё и дольше: рассвет "
+                               "с 04:00 до 08:00, закат с 17:00 до 21:00. Действует сразу.",
+    [UI_MENU_DAWN_DUSK_SMOOTHED] = "Плавно", [UI_MENU_DAWN_DUSK_EXTENDED] = "Плавно и дольше",
+    [UI_MENU_DARK_NIGHTS] = "Темнота ночи",
+    [UI_MENU_DARK_NIGHTS_DESC] = "Насколько светлая ночь. «Темнее» и «Темнее всего» приглушают ночной свет на земле, "
+                                 "людях и предметах, а ночное небо оставляют как есть. Темнота плавно приходит на закате "
+                                 "и уходит на рассвете. Действует сразу.",
+    [UI_MENU_DARK_NIGHTS_DARKER] = "Темнее", [UI_MENU_DARK_NIGHTS_DARKEST] = "Темнее всего",
 
     [UI_MENU_VOLUME] = "Громкость", [UI_MENU_VOLUME_DESC] = "Общая громкость игры.",
 
@@ -725,6 +760,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_PAD_ZR] = "Правый курок",
     [UI_PAD_CROSS] = "Крест", [UI_PAD_CIRCLE] = "Круг", [UI_PAD_SQUARE] = "Квадрат", [UI_PAD_TRIANGLE] = "Треугольник",
 
+    [UI_MENU_LANG_GROUP] = "Язык",
     [UI_MENU_MENU_LANG] = "Язык меню", [UI_MENU_MENU_LANG_DESC] = "Язык этого меню и индикатора.",
     [UI_MENU_MENU_LANG_AUTO] = "Автоматически (из Windows)",
 

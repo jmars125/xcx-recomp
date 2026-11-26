@@ -2,8 +2,9 @@
 
 A new file starts from xcx.ini.example, whose lines are all commented defaults. The language goes into `lang`
 (a Switch language code, runtime/ov_system.c): an active `lang = ...` line is rewritten in place, else the commented
-`# lang = ...` line of the example is activated, else the line is added to [language] (created at the end if
-missing). Other lines, comments and line order stay as they are.
+`# lang = ...` line of the example is activated (every version of the example has one), else the line is added to
+[game], created at the end if missing: the section runtime/cfg.c's sections table gives `lang`, so the Setup and the
+game's own save put it in the same place. Other lines, comments and line order stay as they are.
 """
 import os
 import re
@@ -44,12 +45,12 @@ def set_language(text, lang):
             return '\n'.join(lines) + '\n'
     for i, line in enumerate(lines):
         m = SECTION.match(line)
-        if m and m.group(1).strip().lower() == 'language':
+        if m and m.group(1).strip().lower() == 'game':
             lines.insert(i + 1, f'lang = {lang}')
             return '\n'.join(lines) + '\n'
     if lines and lines[-1].strip():
         lines.append('')
-    lines += ['[language]', f'lang = {lang}']
+    lines += ['[game]', f'lang = {lang}']
     return '\n'.join(lines) + '\n'
 
 

@@ -130,6 +130,51 @@ int probe_cfg(void) {
     CHECK(got && !strcmp((const char *)got, "[audio]\nvolume = 90\n"), "new file: the section and the key");
     free(got);
 
+    // a file laid out in the older example (graphics rows in [display], voices in [language]) keeps its layout: a
+    // missing key goes after its commented example line wherever it is; without one, under its section today
+    static const char old_layout[] =
+        "[display]\n"
+        "# grass_distance = 1\n"
+        "fullscreen = 1\n"
+        "[language]\n"
+        "# voice_lang = ja\n";
+    static const char old_after[] =
+        "[display]\n"
+        "# grass_distance = 1\n"
+        "grass_distance = 2\n"
+        "fullscreen = 1\n"
+        "[language]\n"
+        "# voice_lang = ja\n"
+        "voice_lang = en\n"
+        "\n"
+        "[graphics]\n"
+        "aniso = 16\n";
+    plat_setenv("XCX_GRASS_DISTANCE", NULL);
+    plat_setenv("XCX_VOICE_LANG", NULL);
+    plat_setenv("XCX_ANISO", NULL);
+    CHECK(plat_file_write(path, old_layout, sizeof old_layout - 1) && cfg_load(path) == 1, "load an old-layout ini");
+    cfg_set("XCX_GRASS_DISTANCE", "2");
+    cfg_set("XCX_VOICE_LANG", "en");
+    cfg_set("XCX_ANISO", "16");
+    CHECK(cfg_save_to(path) == 1, "save the old-layout ini");
+    got = plat_file_read(path, &got_n);
+    CHECK(got && got_n == sizeof old_after - 1 && !memcmp(got, old_after, got_n),
+          "old layout: keys after their examples in the old sections, a key without one in its new section");
+    if (got && (got_n != sizeof old_after - 1 || memcmp(got, old_after, got_n)))
+        fprintf(stderr, "---- saved:\n%s\n----\n", got);
+    free(got);
+    // an example line in the key's own section wins over one elsewhere in the file
+    static const char both[] = "[display]\n# aniso = 0\n[graphics]\n# aniso = 0\n";
+    static const char both_after[] = "[display]\n# aniso = 0\n[graphics]\n# aniso = 0\naniso = 8\n";
+    CHECK(plat_file_write(path, both, sizeof both - 1) && cfg_load(path) == 1, "load an ini with two example lines");
+    cfg_set("XCX_ANISO", "8");
+    CHECK(cfg_save_to(path) == 1, "save the ini with two example lines");
+    got = plat_file_read(path, &got_n);
+    CHECK(got && got_n == sizeof both_after - 1 && !memcmp(got, both_after, got_n),
+          "two example lines: the key goes after the one in its own section");
+    free(got);
+    plat_file_delete(path);
+
     // Defaults table: the menu's "default" marks and Reset
     const CfgMeta *m = cfg_meta("FPS60");
     CHECK(m && EQ(m->def, "1") && m->live, "meta: fps60 defaults to 1 and is live");
@@ -162,6 +207,14 @@ int probe_cfg(void) {
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
     m = cfg_meta("VOICE_LANG");
     CHECK(m && EQ(m->def, "") && EQ(m->values, "ja|en") && m->live, "meta: voice_lang is automatic (unset) by default, ja|en, live");
+    m = cfg_meta("DAY_LENGTH");   // day_length.c: 24 real minutes is the game's own day
+    CHECK(m && EQ(m->def, "24") && EQ(m->values, "0..1440") && m->live, "meta: day_length is 24 by default, 0..1440, live");
+    m = cfg_meta("DAWN_DUSK");   // dawn_dusk.c: original is the game's own light
+    CHECK(m && EQ(m->def, "original") && EQ(m->values, "original|smoothed|extended") && m->live,
+          "meta: dawn_dusk is original by default, original|smoothed|extended, live");
+    m = cfg_meta("DARK_NIGHTS");
+    CHECK(m && EQ(m->def, "original") && EQ(m->values, "original|darker|darkest") && m->live,
+          "meta: dark_nights is original by default, original|darker|darkest, live");
     // the display mode: the menu's Window, Borderless and Fullscreen; 0 and 1 of older files keep their meaning
     m = cfg_meta("FULLSCREEN");
     CHECK(m && EQ(m->def, "0") && EQ(m->values, "0|borderless|1") && m->live, "meta: fullscreen takes 0|borderless|1");
