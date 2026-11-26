@@ -366,3 +366,30 @@ site meshguard main a31e54 f941a268 b940d668 b40008e0
 site meshguard main a31e58 f90007e0 f941a268 f90007e0
 site meshguard main a3108c f941de68 b940d668 3657ff28
 site meshguard main a31090 f9000288 f941de68 f9000288
+
+# Dawn and dusk, Night darkness (runtime/dawn_dusk.c, the Game tab's rows under Day length). All four sets are off
+# until one of the two settings leaves Original; dawn_dusk.c fills their patch page slots before it switches them on.
+# - ddlut: the colour-table request main+0x977234 (table manager x0, slot w1, table w2, fade length s0) saves the
+#   table manager at page +0x920, so the colour tables can be crossfaded while a post-effect set blends. x9 is free
+#   here (the function's own first instruction is redone after it).
+set ddlut XCX_DD_TABLES_PATCH 0
+site ddlut main 977234 93407c28 @page:x9 f9049120 93407c28
+# - ddcurve: the post-effect field blend main+0x3fb374 copies its weight t (s0) to s8 at entry; this makes it
+#   t + (t^2 - t) * k with k (float) at page +0x940: squared into night (the exposure no longer rises ahead of the
+#   falling light), front-loaded into day. x9, s1 and s2 are free here (the call below clobbers them, and s1/s2 are
+#   loaded again after it).
+set ddcurve XCX_DD_CURVE_PATCH 0
+site ddcurve main 3fb390 1e204008 @page:x9 bd494121 1e200802 1e203842 1f010048
+# - ddlight: the map light update main+0x982b40 copies the time of day (a day fraction, render object +0x8e8) into the
+#   light and fog key blender at main+0x982b6c; this makes it time * a + b with a, b (floats) at page +0x950/+0x954
+#   (a stays 1; b is 0 for the real time and, inside the dawn window, the eased time's offset from it), so the dawn
+#   light starts slowly and speeds up. The two are loaded one at a time; b is 0 at both edges of the window, so a
+#   read that straddles a write is still right. No condition flags are touched; x9 and s1 are loaded again before
+#   they are next read.
+set ddlight XCX_DD_LIGHT_PATCH 0
+site ddlight main 982b6c bd48e820 bd48e820 @page:x9 bd495121 1e210800 bd495521 1e212800
+# - ddkeys: the light key blend main+0x988c80 saves the key time data it reads (x9, loaded from its object at entry)
+#   at page +0x968, so the key times (Smoothed & Extended) and the night light keys' intensity (Night darkness) can be
+#   rewritten in memory. x10 is loaded again before it is read.
+set ddkeys XCX_DD_KEYS_PATCH 0
+site ddkeys main 988c80 a9402c09 a9402c09 @page:x10 f904b549

@@ -123,6 +123,12 @@ void vk_exec_inline_end(int reopen);
 // vk_exec_draw.c: forget what the command buffer being recorded has bound (pipeline, sets, dynamic state, vertex
 // buffers): the replay continues in a new one (vk_sync_split).
 void vk_exec_draw_new_cb(void);
+// vk_bokeh.c (XCX_BOKEH): far bokeh as the game's scaling pass begins, the projection from the scene draws, per present.
+void vk_bokeh_pass(VkExec *ex);
+void vk_bokeh_draw(VkExec *ex);
+void vk_bokeh_frame(void);
+int vk_bokeh_wants_clouds(void);         // the next cloud draw should be marked (vk_exec_draw.c)
+void vk_bokeh_clouds(VkExec *ex);        // a cloud draw, before its pass begins
 VkBuffer vk_exec_inline_buffer(VkDeviceSize size);
 // vk_exec.c: the stand-in a 3D BC render target is drawn through goes with its image (vk_exec_image_gone).
 void vk_exec_bc_gone(VkImage image);
@@ -158,6 +164,16 @@ extern int vk_dump_armed;
 void vk_dump_init(void);                 // reads the environment; vk_exec_record's first call
 void vk_dump_pass_end(VkExec *ex);       // after vkCmdEndRendering
 void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeInfo *info);   // after a draw's binds
+// vk_ao.c (XCX_AO): the Ambient occlusion row. Pass begins (the scene depth), the game's occlusion draws (kind 1 the
+// occlusion with its projection, 2 and 3 its blurs; 1 = skip the draw), the lighting's descriptor for the game's
+// occlusion target while Strong ran (vk_ao_swap_image), per present.
+extern VkImage vk_ao_swap_image;
+int vk_ao_active(void);
+float vk_ao_floor(void);
+void vk_ao_pass(VkExec *ex);
+int vk_ao_draw(VkExec *ex, int kind, const float proj[4]);
+void vk_ao_swap(VkDescriptorImageInfo *d);
+void vk_ao_frame(void);
 void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPipeInfo *info, const p_dispatch *d);
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload);   // before a copy or texture clear is replayed
 void vk_dump_present(uint64_t frame);    // vk_be_present: waits for the dump frame's copies and closes the logs

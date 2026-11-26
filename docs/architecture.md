@@ -106,6 +106,15 @@ Every guest thread is a host thread. XCX assumes Horizon's scheduler: three appl
   copy taken after the frame's motion pass. A menu's model view (Ground Gear, Fashion Gear) is a G-buffer of its own and
   gets a DLAA feature at its size; its scaling draw writes colour only, so `dlss_rgb.comp` puts DLSS's picture back under
   the target's own alpha.
+- Depth of field (`bokeh`, `vk_bokeh.c`, live, off by default). As the game's scaling pass begins (before DLSS and
+  FXAA read the light target), three compute passes blur what is far away: a half-size copy in linear light with a
+  blur radius from each pixel's distance (the scene depth through the scene camera block's projection), a disc gather
+  that keeps sharp near objects out of the blur and weighs bright taps more (bokeh), and a full-size blend that keeps
+  the game's own pixels where the radius is under half a pixel, blitted back into the light target. Its scene
+  detection follows `vk_dlss_pass`; the interface is drawn later, so it stays sharp. The sky (depth exactly 1) stays
+  sharp unless `bokeh_sky = 1`. The clouds, drawn over it without depth by one program (recognised by its guest code
+  hash in `vk_exec_draw.c`), get their own row (`bokeh_clouds`): at their first draw the open render pass is ended and
+  the light target copied, and copied again when the next pass begins; the difference is a cloud mask.
 - HDR (`hdr = 1`, `vk_hdr.c`, after TotK Recomp's). The game's tonemap pass scales its r11g11b10f scene by the
   exposure gain, clamps it to 0..1 and grades it through a 16x16x16 LUT, writing back into the same image; FXAA draws
   that into the 8-bit window texture, which clips it, and the HUD goes on top. With HDR on, the tonemap's fragment

@@ -1,0 +1,79 @@
+#version 450
+// Far bokeh, pass 3 of 3 (vk_bokeh.c): back to full size. Each pixel keeps its own sharp value where its radius is under
+// half a pixel (so everything near the player is the game's picture bit for bit) and blends to pass 2's blur as the
+// radius grows, then goes back to the gamma-encoded display values the light target holds.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D color_tex;   // the light target
+layout(binding = 1) uniform sampler2D depth_tex;   // the scene depth
+layout(binding = 3) uniform sampler2D blur_tex;    // pass 2's image, linear filter
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+layout(binding = 4) uniform sampler2D before_tex;   // the light target before the clouds (with mask_on)
+layout(binding = 5) uniform sampler2D after_tex;    // and after them
+layout(binding = 7) uniform sampler2D soft_tex;     // pass 2's soft clouds over a sharp sky, linear filter
+layout(push_constant) uniform P {
+    vec4 z;
+    vec4 k;
+    vec2 half_size;
+    float sky_blur;     // 1: the sky blurs like the far land (XCX_BOKEH_SKY); 0: it stays sharp
+    float cloud_blur;   // 1: the clouds blur too (XCX_BOKEH_CLOUDS); 0: they stay sharp
+    float mask_on;      // 1: bindings 4 and 5 hold the light target before and after this frame's clouds
+    float pad;
+} pc;
+
+// How much of a pixel the clouds cover, from the light target just before and just after they were drawn (the game's
+// picture before its tonemap): the largest relative change of a channel, eased in. An estimate of their coverage, not
+// their opacity. The same function is in shaders/bokeh_down.comp and shaders/bokeh_comp.comp: a change belongs in both.
+float cloud_cover(vec3 b, vec3 a) {
+    vec3 d = abs(a - b) / max(max(a, b), vec3(1e-4));
+    return smoothstep(0.03, 0.25, max(d.r, max(d.g, d.b)));
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.k.z) || p.y >= int(pc.k.w)) return;
+    vec4 sharp = texelFetch(color_tex, p, 0);
+    float d = texelFetch(depth_tex, p, 0).r;
+    // the same distance and radius as shaders/bokeh_down.comp radius(): a change belongs in both
+    float dist = pc.z.y / (d * 2.0 - 1.0 + pc.z.x);
+    if (dist <= 0.0) dist = 1e9;
+    float r = pc.k.x * smoothstep(pc.z.z, pc.z.w, dist);
+    vec4 o = sharp;
+    // the clouds' coverage here: with Clouds at Sharp it keeps them out of the blur of what is behind them
+    float cov = pc.mask_on > 0.5 ? cloud_cover(texelFetch(before_tex, p, 0).rgb, texelFetch(after_tex, p, 0).rgb) : 0.0;
+    if (d >= 1.0 && pc.sky_blur < 0.5) {
+        // the sky (shaders/bokeh_blur.comp sky): its own sharp value, except where far terrain spreads its blur over it.
+        // Pass 2 keeps that share in alpha above 25; empty sky has none and comes back bit for bit.
+        // The terrain's share, filtered like the colour: the four half-size texels' alphas, each a sky texel's share
+        // (alpha - 25) or, for a terrain texel, its radius past half a pixel, mixed with the bilinear weights of this pixel's position.
+        vec2 uv = (vec2(p) + 0.5) / pc.k.zw;
+        vec4 a4 = textureGather(blur_tex, uv, 3);   // (0,1) (1,1) (1,0) (0,0)
+        // a terrain texel counts by its own radius: one on a silhouette with radius 0 (a near object) carries no blur
+        vec4 f4 = mix(clamp(a4 - 0.5, 0.0, 1.0), a4 - 25.0, step(vec4(24.75), a4));
+        vec2 fr = fract(uv * pc.half_size - 0.5);
+        float f = mix(mix(f4.w, f4.z, fr.x), mix(f4.x, f4.y, fr.x), fr.y);
+        float g = clamp(f * 4.0, 0.0, 1.0);
+        if (g > 0.0) {
+            vec3 lin = mix(pow(max(sharp.rgb, vec3(0.0)), vec3(2.2)), textureLod(blur_tex, uv, 0.0).rgb, g);
+            o = vec4(pow(lin, vec3(1.0 / 2.2)), sharp.a);
+        }
+        if (pc.cloud_blur > 0.5 && pc.mask_on > 0.5) {   // soft clouds over the sharp sky (shaders/bokeh_blur.comp)
+            vec4 sc = textureLod(soft_tex, uv, 0.0);
+            if (sc.a > 0.0) {
+                vec3 lin = mix(pow(max(o.rgb, vec3(0.0)), vec3(2.2)), sc.rgb, clamp(sc.a * 1.5, 0.0, 1.0));
+                o = vec4(pow(lin, vec3(1.0 / 2.2)), sharp.a);
+            }
+        }
+    } else if (r > 0.5) {
+        // pass 2 keeps each half-size pixel's radius in alpha; next to a near object it is 0 there (the nearest of four
+        // depths), and the bilinear lookup would carry some of that object's colour into the blurred background: the
+        // blend follows the smaller of the two radii, so such an edge stays sharp instead of getting a fringe
+        vec4 bt = textureLod(blur_tex, (vec2(p) + 0.5) / pc.k.zw, 0.0);
+        float t = clamp(min(r, bt.a) - 0.5, 0.0, 1.0);
+        if (pc.cloud_blur < 0.5) t *= 1.0 - cov;   // Clouds at Sharp: a cloud in front keeps its own sharp value
+        if (t > 0.0) {
+            vec3 lin = mix(pow(max(sharp.rgb, vec3(0.0)), vec3(2.2)), bt.rgb, t);
+            o = vec4(pow(lin, vec3(1.0 / 2.2)), sharp.a);
+        }
+    }
+    imageStore(out_img, p, o);
+}

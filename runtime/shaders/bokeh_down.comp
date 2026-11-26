@@ -1,0 +1,56 @@
+#version 450
+// Far bokeh, pass 1 of 3 (vk_bokeh.c): the scene at half size, linear, with each pixel's blur radius. The light target
+// holds the tonemapped picture (display values, gamma encoded) when this runs; its colour is turned back to linear light
+// so the gather in pass 2 mixes light, not code values. The radius comes from the nearest of the four depth texels under
+// the half-size pixel, so a pixel on the edge of a near object counts as near and stays sharp.
+// The game projects with OpenGL clip depth (-w..w), stored as z_ndc * 0.5 + 0.5; its projection's depth row is
+// (0, 0, a, b) and its w row (0, 0, -1, 0), so the distance in front of the camera is b / (z_ndc + a).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D color_tex;   // the light target, linear filter
+layout(binding = 1) uniform sampler2D depth_tex;   // the scene depth
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+layout(binding = 4) uniform sampler2D before_tex;   // the light target before the clouds (with mask_on)
+layout(binding = 5) uniform sampler2D after_tex;    // and after them
+layout(binding = 6) uniform writeonly image2D mask_img;   // the clouds' coverage at half size, in r (R16F, no format here)
+layout(push_constant) uniform P {
+    vec4 z;      // projection a, b; blur start and full distance
+    vec4 k;      // largest radius (half-size pixels), highlight boost, full width, full height
+    vec2 half_size;
+    float sky_blur;     // 1: the sky blurs like the far land (XCX_BOKEH_SKY); 0: it stays sharp
+    float cloud_blur;   // 1: the clouds blur too (XCX_BOKEH_CLOUDS); 0: they stay sharp
+    float mask_on;      // 1: bindings 4 and 5 hold the light target before and after this frame's clouds
+    float pad;
+} pc;
+
+// How much of a pixel the clouds cover, from the light target just before and just after they were drawn (the game's
+// picture before its tonemap): the largest relative change of a channel, eased in. An estimate of their coverage, not
+// their opacity. The same function is in shaders/bokeh_down.comp and shaders/bokeh_comp.comp: a change belongs in both.
+float cloud_cover(vec3 b, vec3 a) {
+    vec3 d = abs(a - b) / max(max(a, b), vec3(1e-4));
+    return smoothstep(0.03, 0.25, max(d.r, max(d.g, d.b)));
+}
+
+// The same distance and radius as shaders/bokeh_comp.comp: a change belongs in both.
+float radius(float d) {
+    float dist = pc.z.y / (d * 2.0 - 1.0 + pc.z.x);
+    if (dist <= 0.0) dist = 1e9;   // behind the far plane's maths: treat as sky
+    return pc.k.x * smoothstep(pc.z.z, pc.z.w, dist);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.half_size.x) || p.y >= int(pc.half_size.y)) return;
+    ivec2 f = min(p * 2, ivec2(pc.k.zw) - 2);
+    // the radius grows with depth, so the nearest texel's radius is the radius of the smallest depth
+    float dmin = min(min(texelFetch(depth_tex, f, 0).r, texelFetch(depth_tex, f + ivec2(1, 0), 0).r),
+                     min(texelFetch(depth_tex, f + ivec2(0, 1), 0).r, texelFetch(depth_tex, f + ivec2(1, 1), 0).r));
+    // The sky (space, the moons, the stars, and the clouds over it) is drawn where nothing wrote depth: all four texels at the far end. Unless
+    // the sky is set to blur too (sky_blur), it is
+    // marked with radius -1: pass 2 never blurs it, and takes it only as the background behind a blurred far edge.
+    float r = dmin >= 1.0 && pc.sky_blur < 0.5 ? -1.0 : radius(dmin);
+    vec3 c = texture(color_tex, (vec2(f) + 1.0) / pc.k.zw).rgb;
+    imageStore(out_img, p, vec4(pow(max(c, vec3(0.0)), vec3(2.2)), r));
+    vec2 uv = (vec2(f) + 1.0) / pc.k.zw;   // the centre of the 2x2 texels: the linear filter averages them
+    // the mask only while it is on: pass 2 and 3 read it only then (without, it may be a 1x1 stand-in)
+    if (pc.mask_on > 0.5) imageStore(mask_img, p, vec4(cloud_cover(texture(before_tex, uv).rgb, texture(after_tex, uv).rgb), 0.0, 0.0, 0.0));
+}

@@ -1,0 +1,84 @@
+#version 450
+// Ambient occlusion, pass 1 of 3 (vk_ao.c): the occlusion of each output pixel from the scene depth, in place of the
+// game's own (six depth taps in three pairs at half size, rotated by a 4x4 tile). Here: 16 taps on a spiral disc around
+// the pixel, rotated per pixel by interleaved gradient noise; a tap occludes by how steeply it rises over the surface
+// (the cosine to the normal), less the further it is, nothing past the radius (normal-oriented obscurance, as in
+// horizon-based AO). The output is the occlusion in r and the distance in g, for the depth-aware blur that follows.
+// The game projects with OpenGL clip depth (-w..w), stored as z_ndc * 0.5 + 0.5; its projection's depth column gives
+// the distance in front of the camera as b / (z_ndc + a).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D depth_tex;   // the scene depth, nearest
+layout(binding = 2) uniform writeonly image2D out_img;   // RG16F (RGBA16F where that is no storage image): written without a format
+layout(push_constant) uniform P {
+    vec4 proj;    // a, b (the depth column), x and y scale of the projection
+    vec4 look;    // radius (metres, the even taps), strength, far fade start, far fade end (metres)
+    vec2 size;    // the output size in pixels
+    float max_px; // the largest disc radius in output pixels
+    float bias;   // the angle (as its cosine) a tap must rise over the surface before it counts
+    float lo;     // the darkest it gets: the result is lo + (1 - lo) * occlusion, so dense foliage keeps its detail
+    float r2;     // the odd taps' radius (metres; 0 = the same as the even ones): broad shade and creases in one pass
+} pc;
+
+const int TAPS = 16;
+const float TURNS = 7.0;   // the spiral's turns over the taps: an odd count spreads them evenly
+
+// Every depth read is snapped to the centre of a depth texel and the position is taken at that centre: at half size a
+// pixel's centre falls exactly between two depth texels, and a nearest read that picks one while the position assumes
+// the other bends flat ground into bands.
+vec2 snap(vec2 uv) {
+    vec2 ds = vec2(textureSize(depth_tex, 0));
+    return (floor(uv * ds) + 0.5) / ds;
+}
+
+float dist_at(vec2 uv) {   // uv: a texel centre (snap)
+    float d = textureLod(depth_tex, uv, 0.0).r;
+    float x = pc.proj.y / (d * 2.0 - 1.0 + pc.proj.x);
+    return x > 0.0 ? x : 1e9;
+}
+
+vec3 pos_at(vec2 uv, float z) {   // view space, the camera looking down -z
+    vec2 ndc = uv * 2.0 - 1.0;
+    return vec3(ndc.x * z / pc.proj.z, ndc.y * z / pc.proj.w, -z);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.size.x) || p.y >= int(pc.size.y)) return;
+    vec2 px = 1.0 / pc.size;
+    vec2 uv = snap((vec2(p) + 0.5) * px);
+    float z = dist_at(uv);
+    if (z >= pc.look.w) { imageStore(out_img, p, vec4(1.0, z, 0.0, 0.0)); return; }
+    vec3 c = pos_at(uv, z);
+    // the normal from the nearer neighbour on each axis, so edges take the surface they belong to
+    vec2 ts = 1.0 / vec2(textureSize(depth_tex, 0));   // the neighbours one depth texel away
+    vec2 dx = vec2(ts.x, 0.0), dy = vec2(0.0, ts.y);
+    float zl = dist_at(uv - dx), zr = dist_at(uv + dx), zd = dist_at(uv - dy), zu = dist_at(uv + dy);
+    vec3 ex = abs(zr - z) < abs(z - zl) ? pos_at(uv + dx, zr) - c : c - pos_at(uv - dx, zl);
+    vec3 ey = abs(zu - z) < abs(z - zd) ? pos_at(uv + dy, zu) - c : c - pos_at(uv - dy, zd);
+    vec3 n = normalize(cross(ex, ey));
+    if (dot(n, c) > 0.0) n = -n;   // facing the camera
+    float R = pc.look.x, Rb = pc.r2 > 0.0 ? pc.r2 : R;
+    // the disc's radius on screen: R metres at this distance, at most max_px pixels
+    float px_per_m = pc.proj.z * 0.5 * pc.size.x / z;
+    float r_px = min(R * px_per_m, pc.max_px), rb_px = min(Rb * px_per_m, pc.max_px);
+    if (max(r_px, rb_px) < 1.0) { imageStore(out_img, p, vec4(1.0, z, 0.0, 0.0)); return; }
+    float noise = fract(52.9829189 * fract(dot(vec2(p), vec2(0.06711056, 0.00583715))));
+    float ang0 = noise * 6.2831853;
+    float sum = 0.0;
+    for (int i = 0; i < TAPS; i++) {
+        float t = (float(i) + 0.5) / float(TAPS);
+        float a = ang0 + t * TURNS * 6.2831853;
+        bool odd = (i & 1) == 1;
+        float Ri = odd ? Rb : R, R2 = Ri * Ri;
+        vec2 o = vec2(cos(a), sin(a)) * (t * (odd ? rb_px : r_px)) * px;
+        vec2 suv = snap(uv + o);
+        if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
+        vec3 v = pos_at(suv, dist_at(suv)) - c;
+        float vv = dot(v, v), vn = dot(v, n);
+        float f = max(R2 - vv, 0.0) / R2;   // taps beyond the radius do not count, near ones count most
+        sum += f * max(vn * inversesqrt(vv + 1e-6) - pc.bias, 0.0);
+    }
+    float ao = pc.lo + (1.0 - pc.lo) * clamp(1.0 - pc.look.y * sum / float(TAPS), 0.0, 1.0);
+    ao = mix(ao, 1.0, smoothstep(pc.look.z, pc.look.w, z));   // fades out with distance, like the game's
+    imageStore(out_img, p, vec4(ao, z, 0.0, 0.0));
+}

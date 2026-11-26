@@ -1,0 +1,153 @@
+#version 450
+// Far bokeh, pass 2 of 3 (vk_bokeh.c): a disc-shaped gather at half size. Each pixel takes taps spread evenly over a disc
+// of its own radius (a golden-angle spiral, so the disc has a hard rim, which is what makes bright points read as
+// bokeh circles rather than a soft glow). A tap counts only where its own radius reaches back to this pixel: a sharp
+// near object (radius 0) is never smeared over the blurred background behind it. Bright taps weigh more, so a far
+// highlight spreads into a visible disc instead of fading into its surroundings.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 3) uniform sampler2D half_tex;   // pass 1's image, linear filter: a lone bright texel spreads over
+                                                  // the taps around it instead of showing the spiral as dots
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+layout(binding = 7) uniform sampler2D mask_tex;    // pass 1's cloud mask, linear filter
+layout(binding = 6, rgba16f) uniform writeonly image2D soft_img;   // soft clouds over a sharp sky (soft_clouds)
+layout(push_constant) uniform P {
+    vec4 z;
+    vec4 k;      // largest radius (half-size pixels), highlight boost, full width, full height
+    vec2 half_size;
+    float sky_blur;     // 1: the sky blurs like the far land (XCX_BOKEH_SKY); 0: it stays sharp
+    float cloud_blur;   // 1: the clouds blur too (XCX_BOKEH_CLOUDS); 0: they stay sharp
+    float mask_on;      // 1: bindings 4 and 5 hold the light target before and after this frame's clouds
+    float pad;
+} pc;
+
+const int MAX_TAPS = 64;
+// Unit directions of a golden-angle spiral (tap i at i x 2.39996323 rad): a table, so the gather does no sin or cos.
+// Any first n of them still spread evenly round the circle, so a smaller disc can take fewer.
+const vec2 DIR[MAX_TAPS] = vec2[](
+    vec2(1.000000, 0.000000), vec2(-0.737369, 0.675490), vec2(0.087426, -0.996171), vec2(0.608439, 0.793601),
+    vec2(-0.984713, -0.174182), vec2(0.843755, -0.536728), vec2(-0.259604, 0.965715), vec2(-0.460907, -0.887448),
+    vec2(0.939321, 0.343039), vec2(-0.924346, 0.381556), vec2(0.423846, -0.905734), vec2(0.299284, 0.954164),
+    vec2(-0.865211, -0.501408), vec2(0.976676, -0.214719), vec2(-0.575129, 0.818062), vec2(-0.128511, -0.991708),
+    vec2(0.764649, 0.644447), vec2(-0.999146, 0.041318), vec2(0.708829, -0.705380), vec2(-0.046191, 0.998933),
+    vec2(-0.640709, -0.767784), vec2(0.991069, 0.133347), vec2(-0.820858, 0.571132), vec2(0.219481, -0.975617),
+    vec2(0.497181, 0.867647), vec2(-0.952693, -0.303935), vec2(0.907791, -0.419423), vec2(-0.386061, 0.922473),
+    vec2(-0.338452, -0.940984), vec2(0.885189, 0.465231), vec2(-0.966970, 0.254890), vec2(0.540838, -0.841127),
+    vec2(0.169376, 0.985551), vec2(-0.790623, -0.612303), vec2(0.996586, -0.082565), vec2(-0.679079, 0.734065),
+    vec2(0.004878, -0.999988), vec2(0.671885, 0.740655), vec2(-0.995733, -0.092284), vec2(0.796559, -0.604560),
+    vec2(-0.178984, 0.983852), vec2(-0.532606, -0.846364), vec2(0.964437, 0.264312), vec2(-0.889686, 0.456572),
+    vec2(0.347617, -0.937637), vec2(0.377043, 0.926196), vec2(-0.903656, -0.428259), vec2(0.955613, -0.294626),
+    vec2(-0.505622, 0.862755), vec2(-0.209952, -0.977712), vec2(0.815247, 0.579113), vec2(-0.992323, 0.123671),
+    vec2(0.648169, -0.761496), vec2(0.036443, 0.999336), vec2(-0.701914, -0.712262), vec2(0.998695, 0.051064),
+    vec2(-0.770900, 0.636956), vec2(0.138180, -0.990407), vec2(0.567121, 0.823635), vec2(-0.974534, -0.224238),
+    vec2(0.870062, -0.492942), vec2(-0.308579, 0.951199), vec2(-0.414989, -0.909826), vec2(0.920579, 0.390557)
+);
+
+float weight(vec3 c) {
+    // capped at the SDR white: with HDR output on, the light target holds highlights above 1, and an uncapped weight
+    // would let one such tap swamp the whole disc
+    float l = min(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1.0);
+    return 1.0 + pc.k.y * l * l * l * l;
+}
+
+// A sky pixel: the taps of a disc of the look's largest radius, counting only terrain whose own radius reaches back here.
+// Their share of the disc (f: about one half right at a silhouette, falling to 0 one radius out) mixes their weighted
+// colour over the sky's own. Out: that colour, and alpha SKY + f. SKY, above any radius, keeps pass 3's min(radius, alpha) on
+// terrain next to the sky at the terrain's own radius; pass 3 reads f back for sky pixels. Empty sky first checks a
+// ring of 16 taps and stops there: most of the sky costs 16 taps, not a disc.
+const float SKY = 25.0;   // above the largest radius (24); low, so the half float keeps f in steps of 1/64
+
+// With a sharp sky but soft clouds: a disc of the look's largest radius over everything, the sky's own taps included
+// (the clouds are in them), and the cloud mask averaged over the same taps. Pass 3 mixes that colour over the sharp sky
+// by the averaged mask, so the clouds and their edges come out soft while the clear sky between them stays sharp.
+void soft_clouds(vec2 at, ivec2 p) {
+    float R = pc.k.x;
+    // clear sky with no cloud within the radius: a ring of 16 mask taps, and nothing more (most of a clear night sky)
+    float near = 0.0;
+    for (int i = 0; i < 16; i++) near += textureLod(mask_tex, (at + DIR[i] * (i < 8 ? 0.5 * R : R)) / pc.half_size, 0.0).r;
+    near += textureLod(mask_tex, at / pc.half_size, 0.0).r;
+    if (near == 0.0) {
+        imageStore(soft_img, p, vec4(0.0));
+        return;
+    }
+    int n = clamp(int(ceil(2.0 * R * R)), 16, MAX_TAPS);
+    float inv_n = 1.0 / float(n);
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0, m = 0.0;
+    for (int i = 0; i < n; i++) {
+        float rad = sqrt((float(i) + 0.5) * inv_n) * R;
+        vec2 uv = (at + rad * DIR[i]) / pc.half_size;
+        vec4 s = textureLod(half_tex, uv, 0.0);
+        float cover = s.a < -0.5 ? 1.0 : clamp(s.a - rad + 1.0, 0.0, 1.0);
+        float w = cover * weight(s.rgb);
+        sum += s.rgb * w;
+        wsum += w;
+        m += textureLod(mask_tex, uv, 0.0).r;
+    }
+    imageStore(soft_img, p, vec4(wsum > 0.0 ? sum / wsum : vec3(0.0), m * inv_n));
+}
+
+void sky(vec2 at, vec3 own) {
+    float R = pc.k.x;
+    ivec2 p = ivec2(at);
+    float hit = 0.0;
+    for (int i = 0; i < 16; i++) {
+        vec2 o = DIR[i] * (i < 8 ? 0.5 * R : R);
+        hit += clamp(textureLod(half_tex, (at + o) / pc.half_size, 0.0).a - length(o) + 1.0, 0.0, 1.0);
+    }
+    if (hit == 0.0) {
+        imageStore(out_img, p, vec4(own, SKY));
+        return;
+    }
+    int n = clamp(int(ceil(2.0 * R * R)), 16, MAX_TAPS);
+    float inv_n = 1.0 / float(n);
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0, cov = 0.0;
+    for (int i = 0; i < n; i++) {
+        float rad = sqrt((float(i) + 0.5) * inv_n) * R;
+        vec4 s = textureLod(half_tex, (at + rad * DIR[i]) / pc.half_size, 0.0);
+        float cover = clamp(s.a - rad + 1.0, 0.0, 1.0);
+        float w = cover * weight(s.rgb);
+        sum += s.rgb * w;
+        wsum += w;
+        cov += cover;
+    }
+    float f = cov * inv_n;
+    imageStore(out_img, p, vec4(wsum > 0.0 ? mix(own, sum / wsum, f) : own, SKY + f));
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.half_size.x) || p.y >= int(pc.half_size.y)) return;
+    vec4 c = texelFetch(half_tex, p, 0);
+    float r = c.a;
+    vec2 at = vec2(p) + 0.5;
+    if (pc.cloud_blur > 0.5 && pc.mask_on > 0.5) imageStore(soft_img, p, vec4(c.rgb, 0.0));   // read by pass 3 only then
+    if (r < 0.0) {   // sky: it stays sharp, but far terrain next to it spreads its blur over it (a soft silhouette)
+        sky(at, c.rgb);
+        if (pc.cloud_blur > 0.5 && pc.mask_on > 0.5) soft_clouds(at, p);
+        return;
+    }
+    if (r < 0.5) {
+        imageStore(out_img, p, c);
+        return;
+    }
+    float w0 = weight(c.rgb);
+    vec3 sum = c.rgb * w0;
+    float wsum = w0;
+    // about two taps per half-size texel of the disc's area (pi r^2), at least 16 for a smooth rim, at most 64: the sky
+    // and the faint start of the ramp take a fraction of the taps a full-size disc needs
+    int n = clamp(int(ceil(2.0 * r * r)), 16, MAX_TAPS);
+    float inv_n = 1.0 / float(n);
+    for (int i = 0; i < n; i++) {
+        float rad = sqrt((float(i) + 0.5) * inv_n) * r;
+        vec2 o = rad * DIR[i];
+        vec4 s = textureLod(half_tex, (at + o) / pc.half_size, 0.0);
+        // a sky tap (radius -1) is the background behind everything: a blurred far object's edge lets it show through,
+        // as a lens does, so the silhouette softens inwards too; the sky's own pixels never blur (sky())
+        float cover = s.a < -0.5 ? 1.0 : clamp(s.a - rad + 1.0, 0.0, 1.0);
+        float w = cover * weight(s.rgb);
+        sum += s.rgb * w;
+        wsum += w;
+    }
+    imageStore(out_img, p, vec4(sum / wsum, r));
+}

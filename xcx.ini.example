@@ -3,12 +3,204 @@
 # environment variable of the same name (XCX_FPS_LIMIT for fps_limit) overrides the file. Keys are case-insensitive;
 # '#' and ';' start a comment; [sections] only group lines.
 
-[frame rate]
+[display]
+# Device profile: auto (the Steam Deck when this is one), desktop or deck. On a Steam Deck the keys this file does not
+# set default to fullscreen = 1, window_size = 1280x800, output_res = 1280x720, render_scale = game, vk_present = fifo
+# and fps_limit = 40 (starting points, not measured yet). Read at start.
+# device_profile = auto
+# Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate.
+# vk_present = mailbox
+# Window client area in pixels (640x360 to 7680x4320), and the display mode: 0 a window, borderless a frameless window
+# over the whole monitor that the taskbar and Alt+Tab still come up over, 1 fullscreen (the driver may take the monitor
+# for the game, at the desktop's resolution). F11 switches between the window and the last full mode and saves it here.
+# Changes while the game runs take effect at once.
+# window_size = 1920x1080
+# fullscreen = 0
+# Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
+# game's texture heap and memory pool grow with it. Read at start.
+# output_res = 1920x1080
 # Frame rate limit: 30, 40, 45, 60, 90, 120, 144, any whole rate from 30 to 360, or display (the refresh rate of the
 # window's monitor). Above 60 is experimental and needs realtime = 1. Changes while the game runs take effect at once.
 # fps_limit = 60
 # Older key, read only while fps_limit is unset: fps60 = 0 means a limit of 30.
 # fps60 = 1
+# Cutscene frame rate: 1 (every cutscene and video at 30 fps, as on the console), mixed (most in-game cutscenes at
+# the frame rate limit, the rest and videos at 30) or 0 (every cutscene at the limit; experimental). Read at start.
+# cutscene_30 = 1
+# Which GPU to use: its index in the log, or part of its name. Default: the first discrete GPU with Vulkan 1.3.
+# gpu_index = 0
+# gpu_name = NVIDIA
+# Picture brightness in percent, from 40 to 120: the gain of the game's final tonemap. Lower it if daylight, water or
+# white armour burn out. Changes take effect at once.
+# brightness = 100
+# Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
+# proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
+# picture_fit = keep
+
+# HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
+# colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
+# display's peak); hdr_game_nits is the picture's white (paper white, 203 is the HDR reference) and hdr_ui_nits the
+# HUD's and the menu's. hdr_hue (0 to 100) is how far bright colours turn towards white as they do in SDR. hdr is read
+# at start, the others at once. brightness above still sets the game's exposure in HDR.
+# hdr = 0
+# hdr_peak_nits = 1000
+# hdr_game_nits = 203
+# hdr_ui_nits = 203
+# hdr_hue = 50
+
+# Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F2
+# (while no button is bound to it) or F10 cycles the modes in game, as do both stick clicks (L3 + R3) on a controller.
+# perf_overlay = off
+
+[graphics]
+# Console mode reported to the game: docked or handheld. Handheld also makes the controller the handheld one. Read at
+# start.
+# operation_mode = docked
+# 3D render scale: the scene's size relative to the game resolution: game (its dynamic resolution) or a fixed
+# percentage from 25 to 100; a higher one counts as 100. For supersampling, set output_res above window_size. Read at
+# start.
+# render_scale = game
+# Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
+# from 0 (off) to 100. Changes while the game runs take effect at once. dlss (NVIDIA RTX cards, nvngx_dlss.dll next to
+# xcx.exe) also runs DLSS on the 3D scene in place of the game's FXAA: DLAA at render_scale game or 100, DLSS upscaling
+# below; the window scaling stays FSR 1. Switching to or from dlss takes effect after a restart.
+# upscaler = fsr
+# sharpness = 80
+# Anisotropic filtering: 0 keeps the game's own level; 2, 4, 8 or 16 force it on mipmapped textures with linear
+# minification. Comparison and min/max reduction samplers keep the game's own values. Menu changes apply immediately.
+# aniso = 0
+# How far from the camera grass loads and is drawn: 1 (the game's ranges, 10 to 90 m per grass layer), 1.5, 2 or 3.
+# Changes take effect at once.
+# grass_distance = 1
+# How many metres further from the camera trees, bushes, rocks and other map objects switch to their detailed models:
+# 0 (the game's distances, under 5 to about 50 m depending on the object), 10, 20, 30, 50, 75, 100, 150, 200, 300,
+# 500, 750 or 1000. Those are the menu's steps; here any value from 0 to 1000 works, and the menu then shows it in
+# its place between the two steps around it. Higher values cost some CPU time per frame. Changes take effect at once.
+# object_lod_range = 0
+# With object_lod_range above 0: auto (the default) treats it as the most to use and lowers the range whenever frames
+# take longer than the frame limit allows (the display's refresh rate without a limit), raising it again when there is
+# time to spare; fixed always uses object_lod_range as set. Changes take effect at once.
+# object_lod_mode = auto
+# How far from you the crowd people (the walkers in NLA) appear and fade out: 1 (the game's distances, about 25 m),
+# 1.5, 2, 3 or 4. Turn on replay_async = 1 before raising it: without it the extra people slow busy places a lot (in
+# the Commercial District at 4x, about 66 instead of 90 fps). Changes take effect at once.
+# crowd_distance = 1
+# Ambient occlusion, the soft shading where surfaces meet: original (the game's, with soft halos), light (sharper, in
+# creases only), medium (also broad shade under bushes and foliage) or strong (deeper, at the full scene size, at some
+# GPU cost). Changes take effect at once.
+# ao = original
+# Bloom, the glow around bright light, by amount: off, soft (half the game's), original, strong (1.5 times) or
+# intense (twice). Changes take effect at once.
+# bloom = original
+# Camera rain droplets: 1 (default) keeps the round droplets the game draws just in front of the camera in rain; 0
+# leaves them out (the falling rain stays). Changes take effect at once.
+# rain_droplets = 1
+# Depth of field during play, softening what is far away: off (default), horizon (from about 800 m), vista (from
+# about 300 m) or portrait (from about 100 m). Changes take effect at once.
+# bokeh = off
+# With bokeh on: bokeh_sky = 1 blurs the sky too, and bokeh_clouds = 1 the clouds; 0 (default) keeps each sharp.
+# bokeh_sky = 0
+# bokeh_clouds = 0
+
+[game]
+# 1 turns cheats on: the F1 menu gets its Cheats tab, and the cheats switched on there run. 0 (default) keeps every
+# cheat off and hides the tab; the cheats chosen in it are kept for the next time. Takes effect at once.
+# cheats = 0
+# Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.
+# The game cannot start in Russian: ru, from either key or the Windows locale, plays in English (en-US).
+# Chinese is zh-Hans or zh-Hant; the older zh-CN and zh-TW, in which the game cannot start either, play as those.
+# locale = en-US
+# lang = en-US
+# Language of the settings menu and the overlay: en or ru. Default: the Windows display language, English if it is
+# neither.
+# menu_lang = en
+# Real minutes a game day lasts on the in-game clock (the F1 menu's Game tab, Day length). 24 (default) is the game's
+# own, a game minute each second; 12 runs the clock twice as fast, 48 half as fast, 0 stops it (a time change in the
+# game's own menu still moves it). 1 to 1440 (shorter counts as 1), or 0; a value between the menu's steps works too and shows in the
+# row in its place. Very short days need a steady frame rate: the clock gains at most a minute a frame on the game's
+# own. Takes effect at once. Game version 2.0.0 only.
+# day_length = 24
+# How the light changes at dawn and dusk (the Game tab's Dawn and dusk). original (default) is the game's own, with
+# quick steps at 05:00 and 18:45; smoothed keeps the game's times without the steps; extended also stretches them:
+# dawn 04:00 to 08:00, dusk 17:00 to 21:00. Takes effect at once. Game version 2.0.0 only.
+# dawn_dusk = original
+# How dark the night is (Night darkness): original (default), darker or darkest dim the night light on the ground,
+# people and things and keep the night sky as it is; it fades in at dusk and out at dawn with the light, with any
+# dawn_dusk. Takes effect at once. Game version 2.0.0 only.
+# dark_nights = original
+
+[audio]
+# none mixes without opening an audio device.
+# audio = default
+# Audio the output queues before it starts, in ms (0 to 500).
+# audio_prefill_ms = 20
+# Volume in percent (0 to 100), on top of the game's own. Changes while the game runs take effect at once.
+# volume = 100
+# Voice language: ja (Japanese) or en (English), with the matching lip sync, whatever the text language. Unset, the
+# game picks: Japanese voices with Japanese or Chinese text, English otherwise. Takes effect when the game next
+# applies its options, as on loading a save.
+# voice_lang = ja
+# 1 pauses the game and its sound while the window is in the background, as a console does under its HOME menu.
+# 0 (default) keeps the game running in the background, so cutscenes and their sound always stay together; pause with
+# the game's own menu (+ / Start).
+# pause_in_background = 0
+
+[input]
+# Gamepad motion controls (0 = off) and vibration (0 = off).
+# motion = 1
+# rumble = 1
+# Rumble strength in percent (0 to 300; 0 = off) and the exponent on the amplitude (0.2 to 1.5; lower = weak pulses
+# stronger, 1 = linear). rumble_triggers = 1 also drives the impulse triggers of an Xbox pad.
+# rumble_strength = 130
+# rumble_curve = 0.6
+# rumble_triggers = 0
+# Controls tab, Confirmation/Cancel (Default is nintendo, Flipped is xbox). Which gamepad button is Switch A: nintendo (by position: east A, south B, west Y, north X), xbox (south A, east B,
+# west X, north Y, as an Xbox pad labels them; cross A on a PlayStation pad) or auto (nintendo for a pad with Nintendo
+# labels, xbox for the others). The bind_ lines below apply on top. Changes while the game runs take effect at once.
+# pad_layout = auto
+# Button icons shown on the game's prompts (Controls tab, Button Icon Type): auto follows the device you used last, original is
+# the Nintendo Switch artwork, then playstation, xbox, steam or keyboard. Changes while the game runs take effect at once.
+# glyph_style = auto
+# Controls tab, Button Appearance: colored uses colored or solid icons where they exist, standard uses colorless ones.
+# glyph_appearance = colored
+# Mouse camera sensitivity (0 to 10; 0 = no mouse camera and no cursor capture).
+# mouse_sens = 1
+# Gamepad stick deadzones in percent of full deflection (Controls tab; 0 to 40; 7.63 = 2500 of 32767, the original).
+# Raise one if the character keeps walking or the camera keeps turning after you let go of a drifting stick.
+# stick_deadzone_l = 7.63
+# stick_deadzone_r = 7.63
+# The deadzone's shape for both sticks: axis (each axis cut on its own, unchanged past it; the original) or round (the
+# distance from center, and the stick starts from 0 past it).
+# stick_deadzone_shape = axis
+# Where each stick rests, "x,y" in raw SDL units (-16384 to 16384; y down), taken off before the deadzone. The Controls
+# tab's Calibrate stick centers writes these; unset = the controller's own center.
+# stick_center_l = 0,0
+# stick_center_r = 0,0
+# Write the input of this run to a file that replays as a script (docs/controls.md, "Scripted input"). Default: off.
+# input_record = input.txt
+# Remap buttons: the Controls tab of the settings menu (F1) writes these lines. One line per Switch button or stick
+# direction: bind_<A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LCLICK RCLICK> or bind_<LSTICK RSTICK>_<LEFT UP RIGHT
+# DOWN> = comma separated pad:<name> and key:<name> entries, key:default / pad:default for that part's defaults, or none.
+# A line replaces that button's defaults (pad and keyboard); buttons without a line keep them. Stick directions take keys
+# only. Invalid entries are logged and skipped. Changes while the game runs take effect at once.
+#   pad names: south east west north l r zl zr start back lstick rstick dpad_left dpad_up dpad_right dpad_down
+#   key names: a-z 0-9 f2-f7 f9 f12 num0-num9 space tab enter backspace lshift rshift lctrl rctrl lalt capslock insert
+#   delete home end pageup pagedown up down left right num_add num_sub num_mul num_div num_decimal minus equals
+#   lbracket rbracket semicolon apostrophe comma period slash backslash grave mouse_l mouse_r mouse_m mouse_x1 mouse_x2
+# Defaults (pad_layout = nintendo): A = pad:east, key:E. B = pad:south, key:lshift. X = pad:north, key:space.
+# Y = pad:west, key:mouse_l. A pad that reports A/B and X/Y swapped (some GuliKit models): set pad_layout = xbox, or
+# swap them back here (keyboard keys stay):
+# bind_A = pad:south, key:E
+# bind_B = pad:east, key:lshift
+# bind_X = pad:west, key:space
+# bind_Y = pad:north, key:mouse_l
+
+[files]
+# Folder with RomFS mod files that replace or add game files. Default: none.
+# romfs_mods =
+
+[frame rate]
+# Frame timing behind the frame rate limit (fps_limit, in [display]).
 # Real-time frame step: game speed follows the clock instead of the frame count.
 # realtime = 1
 # Cloth simulation on the real-time clock. Needs realtime = 1.
@@ -102,162 +294,6 @@
 # vk_dyn_a2c = 1
 # Pin the shader subgroup size to 32 when the GPU allows it.
 # vk_subgroup_pin = 1
-
-[display]
-# Device profile: auto (the Steam Deck when this is one), desktop or deck. On a Steam Deck the keys this file does not
-# set default to fullscreen = 1, window_size = 1280x800, output_res = 1280x720, render_scale = game, vk_present = fifo
-# and fps_limit = 40 (starting points, not measured yet). Read at start.
-# device_profile = auto
-# Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate.
-# vk_present = mailbox
-# Window client area in pixels (640x360 to 7680x4320), and the display mode: 0 a window, borderless a frameless window
-# over the whole monitor that the taskbar and Alt+Tab still come up over, 1 fullscreen (the driver may take the monitor
-# for the game, at the desktop's resolution). F11 switches between the window and the last full mode and saves it here.
-# Changes while the game runs take effect at once.
-# window_size = 1920x1080
-# fullscreen = 0
-# Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F2
-# (while no button is bound to it) or F10 cycles the modes in game, as do both stick clicks (L3 + R3) on a controller.
-# perf_overlay = off
-# Which GPU to use: its index in the log, or part of its name. Default: the first discrete GPU with Vulkan 1.3.
-# gpu_index = 0
-# gpu_name = NVIDIA
-# Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
-# game's texture heap and memory pool grow with it. Read at start.
-# output_res = 1920x1080
-# 3D render scale: the scene's size relative to the game resolution: game (its dynamic resolution) or a fixed
-# percentage from 25 to 100; a higher one counts as 100. For supersampling, set output_res above window_size. Read at
-# start.
-# render_scale = game
-# Anisotropic filtering: 0 keeps the game's own level; 2, 4, 8 or 16 force it on mipmapped textures with linear
-# minification. Comparison and min/max reduction samplers keep the game's own values. Menu changes apply immediately.
-# aniso = 0
-# Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
-# from 0 (off) to 100. Changes while the game runs take effect at once. dlss (NVIDIA RTX cards, nvngx_dlss.dll next to
-# xcx.exe) also runs DLSS on the 3D scene in place of the game's FXAA: DLAA at render_scale game or 100, DLSS upscaling
-# below; the window scaling stays FSR 1. Switching to or from dlss takes effect after a restart.
-# upscaler = fsr
-# sharpness = 80
-# Picture brightness in percent, from 40 to 120: the gain of the game's final tonemap. Lower it if daylight, water or
-# white armour burn out. Changes take effect at once.
-# brightness = 100
-# Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
-# proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
-# picture_fit = keep
-# How far from the camera grass loads and is drawn: 1 (the game's ranges, 10 to 90 m per grass layer), 1.5, 2 or 3.
-# Changes take effect at once.
-# grass_distance = 1
-# How many metres further from the camera trees, bushes, rocks and other map objects switch to their detailed models:
-# 0 (the game's distances, under 5 to about 50 m depending on the object), 10, 20, 30, 50, 75, 100, 150, 200, 300,
-# 500, 750 or 1000. Those are the menu's steps; here any value from 0 to 1000 works, and the menu then shows it in
-# its place between the two steps around it. Higher values cost some CPU time per frame. Changes take effect at once.
-# object_lod_range = 0
-# With object_lod_range above 0: auto (the default) treats it as the most to use and lowers the range whenever frames
-# take longer than the frame limit allows (the display's refresh rate without a limit), raising it again when there is
-# time to spare; fixed always uses object_lod_range as set. Changes take effect at once.
-# object_lod_mode = auto
-# How far from you the crowd people (the walkers in NLA) appear and fade out: 1 (the game's distances, about 25 m),
-# 1.5, 2, 3 or 4. Turn on replay_async = 1 before raising it: without it the extra people slow busy places a lot (in
-# the Commercial District at 4x, about 66 instead of 90 fps). Changes take effect at once.
-# crowd_distance = 1
-
-# HDR output: hdr = 1 sends the picture as HDR10 (needs HDR on in Windows, "Use HDR", or a Wayland compositor with
-# colour management; without it the picture stays SDR). The game's tonemap keeps highlights up to hdr_peak_nits (your
-# display's peak); hdr_game_nits is the picture's white (paper white, 203 is the HDR reference) and hdr_ui_nits the
-# HUD's and the menu's. hdr_hue (0 to 100) is how far bright colours turn towards white as they do in SDR. hdr is read
-# at start, the others at once. brightness above still sets the game's exposure in HDR.
-# hdr = 0
-# hdr_peak_nits = 1000
-# hdr_game_nits = 203
-# hdr_ui_nits = 203
-# hdr_hue = 50
-
-[language]
-# Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.
-# The game cannot start in Russian: ru, from either key or the Windows locale, plays in English (en-US).
-# Chinese is zh-Hans or zh-Hant; the older zh-CN and zh-TW, in which the game cannot start either, play as those.
-# locale = en-US
-# lang = en-US
-# Voice language: ja (Japanese) or en (English), with the matching lip sync, whatever the text language. Unset, the
-# game picks: Japanese voices with Japanese or Chinese text, English otherwise. Takes effect when the game next
-# applies its options, as on loading a save.
-# voice_lang = ja
-# System mode reported to the game: docked or handheld.
-# operation_mode = docked
-# Language of the settings menu and the overlay: en or ru. Default: the Windows display language, English if it is
-# neither.
-# menu_lang = en
-
-[audio]
-# none mixes without opening an audio device.
-# audio = default
-# Audio the output queues before it starts, in ms (0 to 500).
-# audio_prefill_ms = 20
-# Volume in percent (0 to 100), on top of the game's own. Changes while the game runs take effect at once.
-# volume = 100
-# 1 pauses the game and its sound while the window is in the background, as a console does under its HOME menu.
-# 0 (default) keeps the game running in the background, so cutscenes and their sound always stay together; pause with
-# the game's own menu (+ / Start).
-# pause_in_background = 0
-
-[cheats]
-# 1 turns cheats on: the F1 menu gets its Cheats tab, and the cheats switched on there run. 0 (default) keeps every
-# cheat off and hides the tab; the cheats chosen in it are kept for the next time. Takes effect at once.
-# cheats = 0
-
-[input]
-# Gamepad motion controls (0 = off) and vibration (0 = off).
-# motion = 1
-# rumble = 1
-# Rumble strength in percent (0 to 300; 0 = off) and the exponent on the amplitude (0.2 to 1.5; lower = weak pulses
-# stronger, 1 = linear). rumble_triggers = 1 also drives the impulse triggers of an Xbox pad.
-# rumble_strength = 130
-# rumble_curve = 0.6
-# rumble_triggers = 0
-# Controls tab, Confirmation/Cancel (Default is nintendo, Flipped is xbox). Which gamepad button is Switch A: nintendo (by position: east A, south B, west Y, north X), xbox (south A, east B,
-# west X, north Y, as an Xbox pad labels them; cross A on a PlayStation pad) or auto (nintendo for a pad with Nintendo
-# labels, xbox for the others). The bind_ lines below apply on top. Changes while the game runs take effect at once.
-# pad_layout = auto
-# Button icons shown on the game's prompts (Controls tab, Button Icon Type): auto follows the device you used last, original is
-# the Nintendo Switch artwork, then playstation, xbox, steam or keyboard. Changes while the game runs take effect at once.
-# glyph_style = auto
-# Controls tab, Button Appearance: colored uses colored or solid icons where they exist, standard uses colorless ones.
-# glyph_appearance = colored
-# Mouse camera sensitivity (0 to 10; 0 = no mouse camera and no cursor capture).
-# mouse_sens = 1
-# Gamepad stick deadzones in percent of full deflection (Controls tab; 0 to 40; 7.63 = 2500 of 32767, the original).
-# Raise one if the character keeps walking or the camera keeps turning after you let go of a drifting stick.
-# stick_deadzone_l = 7.63
-# stick_deadzone_r = 7.63
-# The deadzone's shape for both sticks: axis (each axis cut on its own, unchanged past it; the original) or round (the
-# distance from center, and the stick starts from 0 past it).
-# stick_deadzone_shape = axis
-# Where each stick rests, "x,y" in raw SDL units (-16384 to 16384; y down), taken off before the deadzone. The Controls
-# tab's Calibrate stick centers writes these; unset = the controller's own center.
-# stick_center_l = 0,0
-# stick_center_r = 0,0
-# Write the input of this run to a file that replays as a script (docs/controls.md, "Scripted input"). Default: off.
-# input_record = input.txt
-# Remap buttons: the Controls tab of the settings menu (F1) writes these lines. One line per Switch button or stick
-# direction: bind_<A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN LCLICK RCLICK> or bind_<LSTICK RSTICK>_<LEFT UP RIGHT
-# DOWN> = comma separated pad:<name> and key:<name> entries, key:default / pad:default for that part's defaults, or none.
-# A line replaces that button's defaults (pad and keyboard); buttons without a line keep them. Stick directions take keys
-# only. Invalid entries are logged and skipped. Changes while the game runs take effect at once.
-#   pad names: south east west north l r zl zr start back lstick rstick dpad_left dpad_up dpad_right dpad_down
-#   key names: a-z 0-9 f2-f7 f9 f12 num0-num9 space tab enter backspace lshift rshift lctrl rctrl lalt capslock insert
-#   delete home end pageup pagedown up down left right num_add num_sub num_mul num_div num_decimal minus equals
-#   lbracket rbracket semicolon apostrophe comma period slash backslash grave mouse_l mouse_r mouse_m mouse_x1 mouse_x2
-# Defaults (pad_layout = nintendo): A = pad:east, key:E. B = pad:south, key:lshift. X = pad:north, key:space.
-# Y = pad:west, key:mouse_l. A pad that reports A/B and X/Y swapped (some GuliKit models): set pad_layout = xbox, or
-# swap them back here (keyboard keys stay):
-# bind_A = pad:south, key:E
-# bind_B = pad:east, key:lshift
-# bind_X = pad:west, key:space
-# bind_Y = pad:north, key:mouse_l
-
-[files]
-# Folder with RomFS mod files that replace or add game files. Default: none.
-# romfs_mods =
 
 [diagnostics]
 # Extra lines in the log, comma separated: svc, host, ipc, fs, gfx, perf, sched, audio, present or all. The menu's

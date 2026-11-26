@@ -930,7 +930,8 @@ void vk_dlss_pass(VkExec *ex) {
     if (!dl_active() || D.done) return;
     const VkExecTarget *c = &ex->color[0], *z = &ex->depth;
     // The G-buffer: five targets or more with a 32-bit depth; its R11G11B10F target of the depth's size is the light
-    // target. A later G-buffer in the frame (a menu's model view) replaces an earlier one.
+    // target. A later G-buffer in the frame (a menu's model view) replaces an earlier one. vk_bokeh.c vk_bokeh_pass and
+    // vk_ao.c vk_ao_pass find it the same way: a change here belongs there too.
     if (ex->pass_ncolor >= 5 && z->image && depth32(z->format) && z->width >= SCENE_MIN_W && z->samples <= 1) {
         for (uint32_t i = 0; i < ex->pass_ncolor; i++) {
             const VkExecTarget *t = &ex->color[i];

@@ -1164,10 +1164,11 @@ static struct {
     VkDescriptorImageInfo out;
 } TD[TD_N];
 
-static void tex_info(VkExec *ex, const GfxShaderRes *r, uint64_t h, int storage, int separate, VkDescriptorImageInfo *out) {
+static void tex_info(VkExec *ex, const GfxShaderRes *r, uint64_t h, int storage, int separate, VkDescriptorImageInfo *out,
+                     VkImage *image_out) {
     int td_on = td_mode();
-    VkImage image;
-    if (!h || storage || !td_on) return tex_info_full(ex, r, h, storage, separate, out, &image);
+    VkImage image, *ip = image_out ? image_out : &image;
+    if (!h || storage || !td_on) return tex_info_full(ex, r, h, storage, separate, out, ip);
     uint32_t gen = vk_texture_slots_gen(), ep = vk_texture_epoch(), sg = vk_sampler_gen();   // before any lookup
     typeof(TD[0]) *m = &TD[(h * 0x9E3779B97F4A7C15ull ^ (uint64_t)r->type << 7 ^ (uint64_t)separate) >> 51];
     if (m->valid && m->h == h && m->type == r->type && m->separate == separate && m->sgen == sg &&
@@ -1177,6 +1178,7 @@ static void tex_info(VkExec *ex, const GfxShaderRes *r, uint64_t h, int storage,
             m->epoch = ep;
         }
         *out = m->out;
+        if (image_out) *image_out = m->image;
         out->imageLayout = m->image && ex->nfbl && in_fbl(ex, m->image) ? VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT
                                                                           : VK_IMAGE_LAYOUT_GENERAL;
         if (td_on == 2) {
@@ -1190,6 +1192,7 @@ static void tex_info(VkExec *ex, const GfxShaderRes *r, uint64_t h, int storage,
     }
     uint64_t tok = token_of(h);   // before the lookup
     tex_info_full(ex, r, h, storage, separate, out, &image);
+    if (image_out) *image_out = image;
     *m = (typeof(*m)){.h = h, .tok = tok, .gen = gen, .epoch = ep, .sgen = sg, .type = r->type,
                       .separate = (uint8_t)separate, .valid = 1, .image = image, .out = *out};
 }
@@ -1580,7 +1583,9 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
                     uint64_t h = 0;
                     if (img) h = slot >= 0 && slot < 32 ? ex->img[st][slot] : 0;
                     else h = slot >= 0 && slot < 128 ? ex->tex[st][slot] : 0;
-                    tex_info(ex, r, h, img, r->separate, &o[k].image);
+                    VkImage im = VK_NULL_HANDLE;
+                    tex_info(ex, r, h, img, r->separate, &o[k].image, &im);
+                    if (vk_ao_swap_image && im == vk_ao_swap_image && !img) vk_ao_swap(&o[k].image);   // Strong (vk_ao.c)
                     o[k].w[2] = (uint32_t)o[k].image.imageLayout;   // zero the tail padding
                 }
                 vk_texture_unlock();
@@ -1854,6 +1859,180 @@ static int pipe_memo_on(void) {
     return PM.on;
 }
 
+// Camera rain droplets (XCX_RAIN_DROPLETS, live, on by default). In rain the game draws round droplets (a 32x32
+// six-frame flip book) in a small volume 1 to 4 m in front of the camera. They follow the view and, on screen, land on
+// whatever is behind them, so they read as big blobs on distant ledges, more so at 1440p and 4K. Off skips those draws;
+// the falling rain and the splashes on the ground near the player are other effects and stay.
+// The draws are recognised by their program, from the FNV-1a hash of its guest shader code (not of our translation,
+// which changes with the translator), and by the 32x32x6 flip book in fragment slot 3: another effect in New LA uses
+// the same program in clear weather with a 16x16x8 book and is left alone.
+static uint64_t guest_fnv(const uint8_t *p, uint32_t n) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (uint32_t i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
+    return h;
+}
+
+// The game's draws the Effects rows look for, recognised by the FNV-1a hash of each program's guest shader code (2.0.0),
+// not of our translation, which changes with the translator. One table and one memo for all of them, so a program is
+// hashed once, whichever row asks first. A miss (another game version) only leaves the game's own draw.
+// - The camera rain droplets (the Camera rain droplets row).
+// - The sky's clouds (the depth of field, vk_bokeh.c vk_bokeh_clouds): one program draws them in their own pass into the
+//   light target. A miss means no cloud mask: the clouds then count as sky and the Sky row decides for them.
+// - Ambient occlusion (vk_ao.c): the occlusion (half size, into an RG8 target) and its two blurs, and the lighting
+//   programs that read it (fragment slot 7) with c3[7].y as its floor: a day set and a night set by the hour, the same
+//   on every continent and indoors (2026-11-22 census and later views); the night's fifth program has another block,
+//   whose [7] changes with the hour, and is left as the game's.
+// - Bloom (bloom_copy): the sum of the bloom's three blur levels (into the 640x360 bloom image at 1440p, before the draw
+//   that adds it to the scene).
+#define FX_AO_VS 0xabbcb083bd1f3d5full        // the full-screen vertex shader of the occlusion and its blurs
+#define FX_BLOOM_VS 0xa48c2f85eb5c9004ull     // and of the bloom sum
+#define FX_LIGHT_VS 0xb660f8fc9937fa19ull     // and of the lighting volumes, by day
+#define FX_NIGHT_VS 0x75a1420393e6fa11ull     // and at night
+static const struct { uint64_t fs; uint32_t len; uint64_t vs; } FX_PROG[] = {
+    {0x8eaffeb44d1e1319ull, 1024, 0xbcfbcf458a0c3bfdull},   // FX_RAIN: the camera rain droplets
+    {0x883703b13fd58ddeull, 512, 0xad39e80aac9a9174ull},    // FX_CLOUDS: the sky's clouds
+    {0x126d0c01aa456aebull, 2304, FX_AO_VS},      // FX_AO: the occlusion
+    {0x573ce30d9479469aull, 1024, FX_AO_VS},      // FX_AO_BLUR1: the blur across
+    {0xb5cc3a5222c072b1ull, 768, FX_AO_VS},       // FX_AO_BLUR2: the blur down
+    {0x6dd829724a6c17f2ull, 512, FX_BLOOM_VS},    // FX_BLOOM: the bloom sum
+    {0x725cff79c5ea7637ull, 3328, FX_LIGHT_VS},   // FX_LIGHT..: the lighting programs, the day set
+    {0xd9b93f8264728846ull, 3584, FX_LIGHT_VS},
+    {0x9a2faefe74f5b3dcull, 3584, FX_LIGHT_VS},
+    {0x8ae61fd1ebd4547aull, 3840, FX_LIGHT_VS},
+    {0xcad7a5fbe9896e3eull, 4352, FX_LIGHT_VS},
+    {0x85e6435e29d64192ull, 3328, FX_NIGHT_VS},   //   and the night set
+    {0xf173f67683d60d85ull, 3328, FX_NIGHT_VS},
+    {0x70a51d62960a0834ull, 3584, FX_NIGHT_VS},
+    {0x3d261aac23257586ull, 3584, FX_NIGHT_VS},
+};
+enum { FX_NONE, FX_RAIN, FX_CLOUDS, FX_AO, FX_AO_BLUR1, FX_AO_BLUR2, FX_BLOOM, FX_LIGHT };   // FX_LIGHT and up: lighting
+
+static int fx_program(VkExec *ex) {   // FX_*; kept per program serial
+    static struct { uint64_t serial; int8_t kind; } memo[4096];
+    uint64_t serial = ex->prog->serial;
+    typeof(memo[0]) *m = &memo[(serial * 0x9E3779B97F4A7C15ull) >> 52];
+    if (serial && m->serial == serial) return m->kind;
+    const uint8_t *ctl, *code;
+    uint32_t len;
+    int kind = FX_NONE;
+    if (find_stage(ex->prog, NVN_STAGE_FS, &ctl, &code, &len)) {
+        uint64_t fh = 0;
+        for (int i = 0; i < (int)(sizeof FX_PROG / sizeof FX_PROG[0]) && !kind; i++) {
+            if (len != FX_PROG[i].len) continue;   // most programs differ in length: no hash for them
+            if (!fh) fh = guest_fnv(code, len);
+            if (fh != FX_PROG[i].fs) continue;
+            const uint8_t *vc;
+            uint32_t vl;
+            if (find_stage(ex->prog, NVN_STAGE_VS, &ctl, &vc, &vl) && guest_fnv(vc, vl) == FX_PROG[i].vs) kind = i + 1;
+        }
+    }
+    if (serial) m->serial = serial, m->kind = (int8_t)kind;
+    return kind;
+}
+
+// 1 when the draw is the camera rain droplets and the setting hides them.
+static int rain_droplets_hidden(VkExec *ex) {
+    static unsigned ver = ~0u;
+    static int off;
+    if (cfg_version() != ver) {
+        ver = cfg_version();
+        int o = !cfg_bool("XCX_RAIN_DROPLETS");
+        if (o != off) rt_log("rain droplets: %s", o ? "hidden" : "shown");
+        off = o;
+    }
+    if (!off || fx_program(ex) != FX_RAIN) return 0;
+    uint64_t h = ex->tex[NVN_STAGE_FS][3];
+    view_t v;
+    int hv = 0;
+    const VkTexImage *t = h ? vk_texture_by_id(NVN_HANDLE_TEX(h), &v, &hv) : NULL;
+    return t && t->width == 32 && t->height == 32 && t->depth == 6;
+}
+
+// The bound fragment c3 as the draw reads it: the game sends these blocks with inline uniform updates, which op_update_ub
+// copies into the buffer's GPU copy, so guest memory may not hold it. From the latest inline update that covers it, else
+// the copy taken at the submit call (vk_usnap), else guest memory. 0: not readable.
+static int fs_c3_read(VkExec *ex, void *dst, uint32_t n) {
+    const p_bind_buf *u = &ex->ubo[NVN_STAGE_FS][0];
+    const uint8_t *snap;
+    VkMemSpan ms;
+    if (!u->addr || (u->size && u->size < n)) return 0;
+    if (upd_read(ex, u->addr, dst, n)) return 1;
+    if ((snap = vk_usnap_bytes(u->addr, n))) return memcpy(dst, snap, n), 1;
+    if (vk_mem_resolve(u->addr, n, &ms)) return memcpy(dst, (const void *)(uintptr_t)u->addr, n), 1;
+    return 0;
+}
+
+// The occlusion draw's projection, from its fragment c3 (rows 0-3, column-major): the depth column's a and b, then the
+// x and y scale. 0 when the block is not readable.
+static int ao_projection(VkExec *ex, float proj[4]) {
+    float c3[16];
+    if (!fs_c3_read(ex, c3, sizeof c3)) return 0;
+    proj[0] = c3[10], proj[1] = c3[14], proj[2] = c3[0], proj[3] = c3[5];
+    return 1;
+}
+
+// Bloom (XCX_BLOOM = off | soft | original | strong | intense, live; the menu lists them by amount): the bloom sum's
+// fragment shader weighs its three levels by c3[1].xyz (0.2, 0.1, 0.1 in the field); Soft binds a copy of c3 with them
+// halved, Strong with them 1.5 times, Intense twice, Off at 0, so the draw that adds the bloom to the scene adds less,
+// more or nothing. Original binds nothing. Strong and Intense were picked from pictures of New LA at night and a
+// Primordia sunset and then in game (2026-11-25): Intense gives big halos at night and can wash a bright sunset sky
+// out, which is why Strong stays too.
+static float bloom_scale(void) {
+    static unsigned ver = ~0u;
+    static float scale = 1;
+    if (cfg_version() == ver) return scale;
+    ver = cfg_version();
+    const char *m = cfg_value("XCX_BLOOM");
+    float s = !strcmp(m, "soft")      ? 0.5f
+              : !strcmp(m, "strong")  ? 1.5f
+              : !strcmp(m, "intense") ? 2.0f
+              : !strcmp(m, "off")     ? 0.0f
+                                      : 1.0f;
+    if (s != scale)
+        rt_log("bloom: %s", s == 1      ? "original"
+                            : s > 1.5f  ? "intense (2x)"
+                            : s > 1     ? "strong (1.5x)"
+                            : s > 0     ? "soft (half)"
+                                        : "off");
+    scale = s;
+    return scale;
+}
+
+static int bloom_copy(VkExec *ex, float scale, VkDescriptorBufferInfo *out) {
+    enum { N = 2 * 16 };   // the shader reads c3[0..1]
+    float c3[8];
+    if (!fs_c3_read(ex, c3, N)) return 0;
+    static int told;
+    if (!told) told = 1, rt_log("bloom: the bloom sum found (the game's weights %.3f %.3f %.3f)", c3[4], c3[5], c3[6]);
+    for (int i = 4; i < 7; i++) c3[i] *= scale;
+    VkBuffer b;
+    VkDeviceSize o;
+    memcpy(scratch(ex, N, &b, &o), c3, N);
+    *out = (VkDescriptorBufferInfo){b, o, N};
+    return 1;
+}
+
+// The lighting programs' floor for the occlusion (vk_ao_floor): a copy of their whole fragment c3 with [7].y scaled.
+static int light_copy(VkExec *ex, float scale, VkDescriptorBufferInfo *out) {
+    float c3[128];
+    uint32_t n = ex->ubo[NVN_STAGE_FS][0].size;
+    if (n > sizeof c3) {   // a block bigger than any lighting program's we have seen: that program keeps the game's floor
+        static int big;
+        if (!big) big = 1, rt_log("ambient occlusion: a lighting block of %u bytes is over %u: the game's floor for it", n,
+                                  (unsigned)sizeof c3);
+        return 0;
+    }
+    if (n < 8 * 16 || !fs_c3_read(ex, c3, n)) return 0;
+    static int told;
+    if (!told) told = 1, rt_log("ambient occlusion: the lighting found (the game's floor %.3f, now %.3f)", c3[29], c3[29] * scale);
+    c3[29] *= scale;
+    VkBuffer b;
+    VkDeviceSize o;
+    memcpy(scratch(ex, n, &b, &o), c3, n);
+    *out = (VkDescriptorBufferInfo){b, o, n};
+    return 1;
+}
+
 // Pass, shaders, pipeline, fixed state and resources for a draw. 0: the draw is skipped.
 static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (ex->render_disabled) return 0;
@@ -1865,6 +2044,8 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         if (ex->in_pass && (w > ex->pass_w || h > ex->pass_h)) vk_exec_pass_end(ex);
         if (!ex->in_pass) ex->rt_resolved = 0;
     }
+    // the depth of field copies the light target before the clouds go on (it may end the open pass)
+    if (ex->prog && vk_bokeh_wants_clouds() && fx_program(ex) == FX_CLOUDS) vk_bokeh_clouds(ex);
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
     VkRect2D sc = vk_exec_scissor(ex);
@@ -1900,6 +2081,26 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         if (fs_wait) fs = shader_for(ex, NVN_STAGE_FS, &has_fs, NULL, 1);
     }
     if (!vs || (has_fs && !fs)) return 0;
+    if (has_fs && rain_droplets_hidden(ex)) return 0;   // the camera rain droplets, when the setting hides them
+    int fx_ovr = 0;   // the Effects rows: a c3 copy bound for this draw (Bloom's, the lighting's floor)
+    VkDescriptorBufferInfo fx_info = {0};
+    if (has_fs) {
+        float bs = bloom_scale();
+        if (bs != 1 || vk_ao_active()) {
+            int k = fx_program(ex);
+            if (k == FX_AO) {
+                float proj[4] = {0};
+                if (ao_projection(ex, proj) && vk_ao_draw(ex, 1, proj)) return 0;
+            } else if (k == FX_AO_BLUR1 || k == FX_AO_BLUR2) {
+                if (vk_ao_draw(ex, k == FX_AO_BLUR1 ? 2 : 3, NULL)) return 0;
+            } else if (k == FX_BLOOM && bs != 1) {
+                fx_ovr = bloom_copy(ex, bs, &fx_info);
+            } else if (k >= FX_LIGHT) {
+                float fl = vk_ao_floor();
+                if (fl != 1) fx_ovr = light_copy(ex, fl, &fx_info);
+            }
+        }
+    }
     if (vk_dlss_skip_draw(ex)) return 0;   // the game's FXAA scaling, whose target DLSS wrote (vk_dlss.c)
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
@@ -1971,12 +2172,19 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         ex->recorded++;
         B.st = s, B.st_valid = 1;
     }
+    vk_bokeh_draw(ex);         // the scene projection, while far bokeh is on (vk_bokeh.c)
     vk_dlss_draw(ex, count);   // the scene camera and the jitter (vk_dlss.c)
     vk_mvsurvey_draw(ex);
     vk_mvprev_draw(ex);
     record_fixed(ex);
     repeat_stats(ex, info);
+    if (fx_ovr) {   // the copy in place of c3 for this draw only; both builds around it run in full
+        memset(mo_ovr, 0, sizeof mo_ovr);
+        mo_ovr[NVN_STAGE_FS][3] = fx_info;
+        mo_ovr_on = 1, B.res_valid = 0;
+    }
     bind_resources(ex, info);
+    if (fx_ovr) mo_ovr_on = 0, B.res_valid = 0;   // off again: the entries are unused until the next override sets them
     if (fbl & ex->fb_dirty) feedback_barrier(ex);
     feedback_written(ex, &s);
     bind_vertex_buffers(ex);
@@ -2271,7 +2479,7 @@ static int mo_desc(VkExec *ex, const VkPipeInfo *info, MoDraw *q) {
             vk_texture_lock();
             for (uint32_t k = 0; k < cnt; k++) {
                 int slot = r->slot + (int)k;
-                tex_info(ex, r, slot >= 0 && slot < 128 ? ex->tex[st][slot] : 0, 0, r->separate, &o[k].image);
+                tex_info(ex, r, slot >= 0 && slot < 128 ? ex->tex[st][slot] : 0, 0, r->separate, &o[k].image, NULL);
             }
             vk_texture_unlock();
         } else {

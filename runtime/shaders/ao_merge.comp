@@ -1,0 +1,21 @@
+#version 450
+// Ambient occlusion at Strong (vk_ao.c): the game's occlusion target also carries a mask in g that a small box draw near
+// the player writes after the occlusion (the lighting reads both channels). Strong's full-size image takes that g from
+// the game's half-size target, linearly filtered, before the lighting pass samples the full-size image in its place.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 3) uniform sampler2D game_tex;   // the game's target, linear filter
+layout(binding = 6, rgba8) uniform image2D final_img;
+layout(push_constant) uniform P {
+    vec4 proj;
+    vec4 look;
+    vec2 size;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.size.x) || p.y >= int(pc.size.y)) return;
+    vec2 uv = (vec2(p) + 0.5) / pc.size;
+    vec4 f = imageLoad(final_img, p);
+    f.g = textureLod(game_tex, uv, 0.0).g;
+    imageStore(final_img, p, f);
+}
