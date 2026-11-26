@@ -41,7 +41,8 @@ static int g_rows, g_cursor_row;
 static ImGuiID g_cursor_id, g_cursor_last;
 
 // The description pane: this frame's hovered and selected rows, the page's first row, and the last one shown.
-struct Desc { char text[512]; };
+// 1024 bytes: the longest Russian descriptions are over 500, and a cut value or label is added under them whole
+struct Desc { char text[1024]; };
 static Desc g_hover, g_focus, g_first, g_shown;
 
 // disabled: the note of a row opt_disable_next greyed out, else NULL.
@@ -123,7 +124,54 @@ struct RowView {
     bool is_default;     // the value is the setting's default: the "default" mark, the value not highlighted
     bool arrows;         // a stepper: < value >, the arrows click too
     const char *note;    // under the value instead of the "default" mark; NULL for none
+    bool column;         // the value sits in the fixed value column (steppers and toggles), else right-aligned
 };
+
+// The value column of a stepper or toggle row of width w: the same width on every row, so the arrows of all rows line up
+// and stay put while the value changes.
+static float value_column(float w, float fs) { return floorf(fmaxf(w * 0.32f, fs * 6.0f)); }
+
+// The size (at most fs, at least min_scale x fs) at which t fits in room, and its width there (*tw: still more than
+// room when it doesn't fit at min_scale). Smaller in steps: the width does not scale exactly with the size (glyph
+// advances are rounded per size), so one proportional guess can come out a few pixels too wide.
+static float fit_size(ImFont *font, float fs, float room, const char *t, float min_scale, float *tw) {
+    float size = fs;
+    *tw = font->CalcTextSizeA(size, FLT_MAX, 0, t).x;
+    while (*tw > room && size > fs * min_scale) {
+        size = fmaxf(size * fminf(0.97f, room / *tw), fs * min_scale);
+        *tw = font->CalcTextSizeA(size, FLT_MAX, 0, t).x;
+    }
+    return size;
+}
+
+// t in [x0, x0 + room] on the line at y (font size fs), centred (a value) or left-aligned (a label): too wide for the
+// room, it is drawn smaller, down to 75 %, and below that cut short with "...". Returns true when it was cut, so the
+// row can show it whole in the description pane.
+static bool shrink_text(ImDrawList *dl, float x0, float room, float y, float fs, ImU32 col, const char *t, bool centred) {
+    ImFont *font = ImGui::GetFont();
+    float tw, size = fit_size(font, fs, room, t, 0.75f, &tw);
+    float ty = y + (fs - size) * 0.6f;   // a smaller size sits on about the same baseline
+    if (tw <= room) {
+        dl->AddText(font, size, ImVec2(centred ? x0 + (room - tw) * 0.5f : x0, ty), col, t);
+        return false;
+    }
+    float dots = font->CalcTextSizeA(size, FLT_MAX, 0, "...").x;
+    if (room < dots) return true;   // not even the dots fit (a very narrow window): nothing, the pane shows it
+    // the cut: as much as fits before the dots (one measurement that stops there), back to a whole UTF-8 character and
+    // without trailing spaces
+    const char *end = t;
+    font->CalcTextSizeA(size, room - dots, 0, t, NULL, &end);
+    char buf[256];
+    size_t n = (size_t)(end - t);
+    if (n > sizeof buf - 4) n = sizeof buf - 4;
+    while (n > 0 && ((unsigned char)t[n] & 0xC0) == 0x80) n--;
+    while (n > 0 && t[n - 1] == ' ') n--;
+    memcpy(buf, t, n);
+    memcpy(buf + n, "...", 4);
+    tw = font->CalcTextSizeA(size, FLT_MAX, 0, buf).x;
+    dl->AddText(font, size, ImVec2(centred ? x0 + (room - tw) * 0.5f : x0, ty), col, buf);
+    return true;
+}
 
 // One row: draws it, handles A / click and left / right while selected. Returns 2 (A / click), -1 / +1 (left / right) or
 // 0; always 0 for a row the environment fixes (greyed out, still selectable so its description shows).
@@ -191,36 +239,54 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     float ty = p.y + fs * 0.25f, ny = p.y + fs * 1.3f;   // the label line and the note line under it
     float right = p.x + w - pad;                         // the value's right edge
     float value_left = right;
-    if (v.arrows && v.value[0]) {   // < value >, drawn (the font has no arrow glyphs); a click on one steps
-        float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
-        float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(v.value).x - gap - aw;
-        ImU32 ac = off ? kGrey : hov || foc ? kAccent : IM_COL32(160, 178, 190, 255);
-        dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
-        dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
-        if (clicked && !off) {
-            float mx = ImGui::GetIO().MousePos.x;
-            if (mx >= lx - gap && mx <= lx + aw + gap) step = -1;
-            else if (mx >= rx - gap && mx <= rx + aw + gap) step = 1;
+    ImU32 vc = off ? kGrey : v.is_default ? IM_COL32(195, 212, 222, 255) : IM_COL32(255, 255, 255, 255);
+    if (v.column && v.value[0]) {
+        // < value >, or a toggle's value without the arrows, in the fixed column (value_column): the arrows are drawn
+        // (the font has no arrow glyphs) at the same place on every row, and a click on one steps
+        float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f, col = value_column(w + indent, fs);   // a sub-row's too
+        float rx = right - aw, vr = rx - gap, vl = vr - col, lx = vl - gap - aw;
+        if (v.arrows) {
+            ImU32 ac = off ? kGrey : hov || foc ? kAccent : IM_COL32(160, 178, 190, 255);
+            dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
+            dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
+            if (clicked && !off) {
+                float mx = ImGui::GetIO().MousePos.x;
+                if (mx >= lx - gap && mx <= lx + aw + gap) step = -1;
+                else if (mx >= rx - gap && mx <= rx + aw + gap) step = 1;
+            }
         }
-        right = rx - gap;
-        value_left = lx;
-    }
-    if (v.value[0]) {
+        if (shrink_text(dl, vl, col, ty, fs, vc, v.value, true)) {   // cut short: the description pane shows it whole
+            Desc *shown[] = {hov ? &g_hover : NULL, foc ? &g_focus : NULL};
+            for (Desc *d : shown) {
+                if (!d) continue;
+                size_t n = strlen(d->text);
+                snprintf(d->text + n, sizeof d->text - n, "\n\n%s", v.value);
+            }
+        }
+        if (v.note || v.is_default) {   // under the value, centred with it
+            const char *t = v.note ? v.note : menu_text(UI_MENU_DEFAULT_MARK);
+            float tw = font->CalcTextSizeA(small, FLT_MAX, 0, t).x;
+            dl->AddText(font, small, ImVec2(vl + (col - tw) * 0.5f, ny), v.note ? IM_COL32(220, 170, 100, 255) : kDim, t);
+        }
+        // a toggle's label may run up to its value's text: no arrows there, and On / Off is short
+        value_left = v.arrows ? lx : vl + (col - fminf(col, ImGui::CalcTextSize(v.value).x)) * 0.5f;
+    } else if (v.value[0]) {   // a button's value, right-aligned
         float vx = right - ImGui::CalcTextSize(v.value).x;
-        dl->AddText(ImVec2(vx, ty), off ? kGrey : v.is_default ? IM_COL32(195, 212, 222, 255) : IM_COL32(255, 255, 255, 255),
-                    v.value);
-        if (!v.arrows) value_left = vx;
+        dl->AddText(ImVec2(vx, ty), vc, v.value);
+        value_left = vx;
     }
-    if (v.note || v.is_default) {   // under the value, right-aligned with it
-        const char *t = v.note ? v.note : menu_text(UI_MENU_DEFAULT_MARK);
-        float tw = font->CalcTextSizeA(small, FLT_MAX, 0, t).x;
-        dl->AddText(font, small, ImVec2(right - tw, ny), v.note ? IM_COL32(220, 170, 100, 255) : kDim, t);
+    // the label, as the value: smaller down to 75 % when it is too long for the room before the value, then cut with
+    // "..."; the description pane shows a cut one whole
+    const char *ltext = g_own_label ? g_own_label : menu_text(label);
+    if (shrink_text(dl, p.x + pad, value_left - fs * 0.6f - (p.x + pad), ty, fs,
+                    off ? kGrey : IM_COL32(230, 242, 250, 255), ltext, false)) {
+        Desc *shown[] = {hov ? &g_hover : NULL, foc ? &g_focus : NULL};
+        for (Desc *d : shown) {
+            if (!d) continue;
+            size_t n = strlen(d->text);
+            snprintf(d->text + n, sizeof d->text - n, "\n\n%s", ltext);
+        }
     }
-    // the label and its note, clipped before the value
-    ImVec4 clip(p.x, p.y, value_left - fs * 0.6f, p.y + h);
-    dl->AddText(font, fs, ImVec2(p.x + pad, ty), off ? kGrey : IM_COL32(230, 242, 250, 255),
-                g_own_label ? g_own_label : menu_text(label), NULL, 0,
-                &clip);
     const char *note = disabled        ? disabled
                      : off             ? menu_text(UI_MENU_SET_BY_ENV)
                      : m && !m->live ? menu_text(UI_MENU_AFTER_RESTART)
@@ -262,7 +328,7 @@ bool opt_toggle(const char *key, UiTextId label, UiTextId desc, bool inverted) {
     const CfgMeta *m = cfg_meta(key);
     bool set = cfg_bool(key) != 0, def = m && strcmp(m->def, "0") != 0;
     bool on = set != inverted;   // what the row shows
-    RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), set == def, false, NULL};
+    RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), set == def, false, NULL, true};
     if (!row(key, label, desc, v)) return false;   // any step flips it
     apply(key, set ? "0" : "1");
     return true;
@@ -271,7 +337,7 @@ bool opt_toggle(const char *key, UiTextId label, UiTextId desc, bool inverted) {
 bool opt_row_text(const char *id, const char *label, const char *desc, bool on) {
     g_own_label = label;
     g_own_desc = desc;
-    RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), false, false, NULL};
+    RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), false, false, NULL, true};
     int step = row(id, UI_MENU_ON, UI_MENU_ON, v);
     g_own_label = g_own_desc = NULL;
     return step != 0;   // any step flips it
@@ -285,7 +351,7 @@ void opt_text_raw(const char *text) {
 }
 
 bool opt_button(const char *id, UiTextId label, UiTextId desc, const char *value) {
-    RowView v = {value ? value : "", false, false, NULL};
+    RowView v = {value ? value : "", false, false, NULL, false};
     return row(id, label, desc, v) == 2;   // A or a click; left and right do nothing
 }
 
@@ -313,7 +379,7 @@ bool opt_choice_list(const char *key, UiTextId label, const char *const *values,
     int def = -1;
     for (int i = 0; m && i < n; i++)
         if (!strcmp(values[i], m->def)) def = i;
-    RowView v = {cur >= 0 ? names[cur] : now, cur == def, true, note};
+    RowView v = {cur >= 0 ? names[cur] : now, cur == def, true, note, true};
     int step = row(key, label, desc, v);
     if (!step || n <= 0) return false;
     int nv;
@@ -349,7 +415,7 @@ bool opt_slider(const char *key, UiTextId label, float lo, float hi, UiTextId de
     double v = cfg_double(key), def = m ? strtod(m->def, NULL) : lo;
     char shown[48];
     snprintf(shown, sizeof shown, fmt, v);
-    RowView rv = {shown, fabs(v - def) < step * 0.01, true, NULL};
+    RowView rv = {shown, fabs(v - def) < step * 0.01, true, NULL, true};
     int s = row(key, label, desc, rv);
     if (!s) return false;
     int steps = g_held && (hi - lo) > 40 * step ? 10 : 1;   // held: ten steps at a time over a long range
@@ -370,11 +436,7 @@ bool opt_slider(const char *key, UiTextId label, float lo, float hi, UiTextId de
 // a long name ("Нажатие правого стика", "Стрелка вправо") fits; under 65 % it is clipped instead.
 static void fit_text(ImDrawList *dl, float x0, float x1, float y, float h, ImU32 col, const char *t, bool centred) {
     ImFont *font = ImGui::GetFont();
-    float fs = ImGui::GetFontSize(), room = x1 - x0, tw = font->CalcTextSizeA(fs, FLT_MAX, 0, t).x;
-    if (tw > room) {
-        fs = fmaxf(fs * room / tw, fs * 0.65f);
-        tw = font->CalcTextSizeA(fs, FLT_MAX, 0, t).x;
-    }
+    float room = x1 - x0, tw, fs = fit_size(font, ImGui::GetFontSize(), room, t, 0.65f, &tw);
     float x = centred && tw < room ? x0 + (room - tw) * 0.5f : x0;
     ImVec4 clip(x0, y, x1, y + h);
     dl->AddText(font, fs, ImVec2(x, y + (h - fs) * 0.5f), col, t, NULL, 0, &clip);
