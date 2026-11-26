@@ -409,7 +409,8 @@ static struct Size *size_for(VkCommandBuffer cb, uint32_t w, uint32_t h, uint32_
     VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                           VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (!image2d(ow, oh, VK_FORMAT_R16G16B16A16_SFLOAT, u, &e->out, &e->out_mem, &e->out_view) ||
-        !image2d(w, h, VK_FORMAT_R16G16_SFLOAT, u, &e->mv, &e->mv_mem, &e->mv_view) ||
+        // the per-object motion pass (vk_exec_draw.c vk_mvobj_execute) renders into mv
+        !image2d(w, h, VK_FORMAT_R16G16_SFLOAT, u | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &e->mv, &e->mv_mem, &e->mv_view) ||
         !image2d(w, h, VK_FORMAT_R16G16_SFLOAT, u, &e->cam, &e->cam_mem, &e->cam_view) ||
         !image2d(w, h, VK_FORMAT_R8_UNORM, u, &e->mask, &e->mask_mem, &e->mask_view) ||
         !image2d(ow, oh, VK_FORMAT_R8G8B8A8_UNORM, u, &e->keep, &e->keep_mem, &e->keep_view)) {

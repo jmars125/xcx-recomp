@@ -83,8 +83,9 @@ static Arena *arena_get(uint64_t need) {
     a = calloc(1, sizeof *a);
     if (!a) rt_fatal("vk_usnap: out of memory");
     a->size = need < ARENA_MIN ? ARENA_MIN : (need + (1u << 20) - 1) & ~(uint64_t)((1u << 20) - 1);
+    // TRANSFER_SRC: vk_dlss.c camera_history copies the camera block out of an arena.
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = a->size,
-                             .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT};
+                             .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT};
     // Device-local through the BAR when the device has it (the GPU reads constants on every draw), else host memory.
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                   .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
