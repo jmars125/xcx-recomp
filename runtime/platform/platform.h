@@ -42,6 +42,8 @@ uint32_t plat_thread_prefer_fast_cores(void);
 // Nothing on Linux.
 void plat_power_full_speed(void);
 uint64_t plat_thread_cpu_ns(uint32_t tid);  // CPU time of the thread with id tid (plat_thread_id) so far; 0 unknown
+uint64_t plat_thread_busy_ns(uint32_t tid); // the same, exact enough for one frame (Windows: cycle count; Linux: the
+                                            // thread's CPU clock); 0 unknown. One caller thread (no lock)
 // The logical processors the process may use (bit n = processor n, the first 64), into *all, and the lowest of each
 // physical core among them into *first; returns the number of physical cores, 0 when unknown.
 int plat_cpu_cores(uint64_t *all, uint64_t *first);

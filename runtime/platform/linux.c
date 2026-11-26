@@ -186,6 +186,15 @@ uint64_t plat_thread_cpu_ns(uint32_t tid) {
     return ns;
 }
 
+// The thread's own CPU clock (the clock id pthread_getcpuclockid makes from a tid: CPUCLOCK_PERTHREAD | CPUCLOCK_SCHED).
+// Unlike schedstat, which moves only at a tick or a switch, the kernel brings a running thread's time up to date first.
+uint64_t plat_thread_busy_ns(uint32_t tid) {
+    struct timespec ts;
+    if (tid && clock_gettime((clockid_t)((~(uint32_t)tid << 3) | 6u), &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    return plat_thread_cpu_ns(tid);
+}
+
 // ---- thread interruption: a signal handshake in place of Windows' SuspendThread / Get/SetThreadContext.
 // The caller moves the handle from IDLE to REQ and signals the thread. The thread's handler stores where it was and
 // moves REQ to STOPPED, then spins until the caller moves it on to GO (with the redirect in to), changes its own

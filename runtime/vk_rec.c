@@ -13,6 +13,7 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "prof.h"
 #include "vk.h"
 #include "platform/platform.h"
 
@@ -39,7 +40,7 @@ enum {
     R_SetDepthWriteEnable, R_SetFrontFace, R_SetPrimitiveRestartEnable, R_SetPrimitiveTopology,
     R_SetRasterizerDiscardEnable, R_SetScissorWithCount, R_SetStencilCompareMask, R_SetStencilOp, R_SetStencilReference,
     R_SetStencilTestEnable, R_SetStencilWriteMask, R_SetViewportWithCount, R_WriteTimestamp, R_WriteTimestamp2,
-    R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
+    R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb, R_UpdateTpl,
 };
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
@@ -51,6 +52,7 @@ static void exec_packet(uint32_t op, void *p);
 static void rec_main(void *arg) {
     (void)arg;
     plat_thread_priority(rec_prio);
+    prof_rec_tid = plat_thread_id();   // XCX_PROFILE_REPLAY samples it too (prof_win.c)
     uint64_t t = 0;
     for (;;) {
         uint64_t h = __atomic_load_n(&head, __ATOMIC_ACQUIRE);
@@ -479,6 +481,18 @@ void rec_push_tpl(PFN_vkCmdPushDescriptorSetWithTemplateKHR fn, VkCommandBuffer 
     pub();
 }
 
+typedef struct { PFN_vkUpdateDescriptorSetWithTemplate fn; VkDevice dev; VkDescriptorSet set; VkDescriptorUpdateTemplate tpl;
+                 const void *data; } A_UpdateTpl;
+void rec_update_tpl(PFN_vkUpdateDescriptorSetWithTemplate fn, VkCommandBuffer cb, VkDevice dev, VkDescriptorSet set,
+                    VkDescriptorUpdateTemplate tpl, const void *data, uint32_t bytes) {
+    if (!OWNED(cb)) { fn(dev, set, tpl, data); return; }
+    A_UpdateTpl *a = put(R_UpdateTpl, sizeof *a + bytes);
+    uint8_t *at = (uint8_t *)(a + 1);
+    *a = (A_UpdateTpl){fn, dev, set, tpl, NULL};
+    a->data = tail_copy(&at, data, bytes);
+    pub();
+}
+
 typedef struct { PFN_vkCmdPushDescriptorSetKHR fn; VkPipelineBindPoint bp; VkPipelineLayout l; uint32_t set, n;
                  VkWriteDescriptorSet *w; } A_Push;
 void rec_push(PFN_vkCmdPushDescriptorSetKHR fn, VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipelineLayout layout,
@@ -617,6 +631,7 @@ static void exec_packet(uint32_t op, void *p) {
     case R_PipelineBarrier2: vkCmdPipelineBarrier2(cb, p); break;
     case R_BeginRendering: vkCmdBeginRendering(cb, p); break;
     case R_PushTpl: { A_PushTpl *a = p; a->fn(cb, a->tpl, a->l, a->set, a->data); break; }
+    case R_UpdateTpl: { A_UpdateTpl *a = p; a->fn(a->dev, a->set, a->tpl, a->data); break; }
     case R_Push: { A_Push *a = p; a->fn(cb, a->bp, a->l, a->set, a->n, a->w); break; }
     case R_VertexInput: { A_VertexInput *a = p; a->fn(cb, a->nb, a->b, a->na, a->v); break; }
     case R_Bool: { A_Bool *a = p; a->fn(cb, a->v); break; }

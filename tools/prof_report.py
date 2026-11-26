@@ -6,7 +6,7 @@ The map is the lld one from the link (build/<version>/xcx.map); its addresses ar
 runtime image base, so ASLR does not matter. Symbols in the map are labels without sizes: a Rip belongs to the nearest
 symbol at or below it.
 
-A profile taken with XCX_PROFILE_RENDER=1 or XCX_PROFILE_CHAINS=1 also has call chains: the report then adds the inclusive time per
+A profile taken with XCX_PROFILE_RENDER, XCX_PROFILE_MAIN, XCX_PROFILE_REPLAY or XCX_PROFILE_CHAINS=1 also has call chains: the report then adds the inclusive time per
 function (a function counted once per chain), and for each module outside the exe the exe functions that call into it
 and the longest common chains down to it.
 """

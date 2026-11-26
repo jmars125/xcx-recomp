@@ -99,8 +99,10 @@ static int nspare_pool, nspare_chunk;
 // State of the command buffer being recorded that the Vulkan command buffer itself holds.
 static struct {
     VkPipeline pipe[2];                  // bound per bind point: 0 graphics, 1 compute
-    VkPipeState st;                      // the state vk_pipeline_set_dynamic last recorded
-    int st_valid;
+    VkPipeState st;                      // the state of the last draw whose dynamic state was recorded
+    int st_valid;                        // cleared when a graphics pipeline is bound
+    VkPipeState dyn;                     // the state vk_pipeline_set_dynamic(_delta) last recorded
+    int dyn_valid;                       // not cleared by a pipeline bind: dynamic state stays (vk_pipeline.c set_dynamic)
     VkBuffer vb[17];                     // vertex buffers last bound
     VkDeviceSize vo[17], vsz[17], vstr[17];
     int vcls[17];                        // their pool class and pool record, for the census
@@ -137,6 +139,7 @@ static struct { uint32_t n[2], pn[2]; uint8_t sig[2][DS_SIG_BYTES], psig[2][DS_S
 static struct {
     int on;
     uint64_t draws, bind[2], desc[2], push, push_skip, set_new, set_reuse, ac_miss, same_prog, same_all, bind_skip;
+    uint64_t sm_hit, pm_hit, pmt_hit, dyn_set, sm_same, pm_same;   // shader memo and pipeline memo hits, dynamic state recorded
 } BS = {-1};
 
 // The inputs of the last graphics bind_resources (bind_sig) and what its build counted for the traffic census, which a
@@ -1312,6 +1315,9 @@ static void bind_stats(const VkPipeInfo *info) {
                "same program and state as the draw before %.3f, also same buffers %.3f; descriptor builds skipped %.3f",
                BS.push / d, BS.push_skip / d, BS.set_new / d, BS.set_reuse / d, BS.ac_miss / d, BS.same_prog / d,
                BS.same_all / d, BS.bind_skip / d);
+        rt_log("vk_exec: per draw: shader memo hits %.3f (misses with the same shaders %.3f), pipeline memo hits %.3f "
+               "(misses with the same pipeline %.3f), recent-state table hits %.3f, dynamic state recorded %.3f",
+               BS.sm_hit / d, BS.sm_same / d, BS.pm_hit / d, BS.pm_same / d, BS.pmt_hit / d, BS.dyn_set / d);
     }
 }
 
@@ -1486,13 +1492,14 @@ static int bind_sig(const VkExec *ex, const VkPipeInfo *info) {
     return !diff && !bd;
 }
 
-// Writes allocated set s from its packed descriptors d: through the layout's update template, or with the write
-// structs w[i0..i1) when it has none.
-static void write_set(const VkPipeInfo *info, uint32_t s, VkDescriptorSet set, const VkDescSlot *d, VkWriteDescriptorSet *w,
-                      uint32_t i0, uint32_t i1) {
+// Writes allocated set s from its packed descriptors d (bytes of them): through the layout's update template, made by
+// the recorder thread ahead of the bind that follows in cb (rec_update_tpl), or with the write structs w[i0..i1) when
+// it has none.
+static void write_set(VkCommandBuffer cb, const VkPipeInfo *info, uint32_t s, VkDescriptorSet set, const VkDescSlot *d,
+                      uint32_t bytes, VkWriteDescriptorSet *w, uint32_t i0, uint32_t i1) {
     if (i1 == i0) return;
     if (info->tpl[s]) {
-        vk_pipeline_update_tpl_fn()(vk_ctx()->device, set, info->tpl[s], d);
+        rec_update_tpl(vk_pipeline_update_tpl_fn(), cb, vk_ctx()->device, set, info->tpl[s], d, bytes);
         return;
     }
     for (uint32_t k = i0; k < i1; k++) w[k].dstSet = set;
@@ -1641,14 +1648,14 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
             }
         } else if (!gfx || s > 1) {
             VkDescriptorSet set = alloc_set(ex, s ? info->set_layout1 : info->set_layout);
-            write_set(info, s, set, ds, w, i0, i1);
+            write_set(ex->cb, info, s, set, ds, dbytes, w, i0, i1);
             vkCmdBindDescriptorSets(ex->cb, info->bind_point, info->layout, s, 1, &set, 0, NULL);
         } else {
             VkDescriptorSetLayout sl = s ? info->set_layout1 : info->set_layout;
             VkDescriptorSet set = B.ds_last[s];
             if (!set || B.ds_last_layout[s] != sl || DS.n[s] != dbytes || memcmp(DS.sig[s], ds, dbytes)) {
                 set = alloc_set(ex, sl);
-                write_set(info, s, set, ds, w, i0, i1);
+                write_set(ex->cb, info, s, set, ds, dbytes, w, i0, i1);
                 B.ds_last[s] = set, B.ds_last_layout[s] = sl, DS.n[s] = dbytes;
                 memcpy(DS.sig[s], ds, dbytes);
                 BS.set_new++;
@@ -1849,6 +1856,33 @@ static int shader_memo_on(void) {
 
 static struct { int on, valid; VkPipeState s; const VkPipeInfo *info; } PM = {-1};
 
+// Behind PM, the pipelines of recent states (PMT, direct-mapped; a collision replaces): draws alternate between a few
+// states (a shadow tile's casters, a G-buffer's materials), so about half of the draws missed the previous-draw memo
+// and went through vk_pipeline_graphics_async's key, hash and lock for a pipeline found before. An entry holds the
+// whole state and is compared whole, so it answers exactly as PM does; pipelines and their infos live until shutdown.
+// The slot is picked from the fields that most often tell states apart.
+#define PMT_N 1024
+static struct { int valid; VkPipeState s; const VkPipeInfo *info; } PMT[PMT_N];
+
+static uint32_t pmt_idx(const VkPipeState *s) {
+    uint64_t ds, bl;
+    memcpy(&ds, &s->ds, 8), memcpy(&bl, &s->blend[0], 8);
+    uint64_t h = (uintptr_t)s->vs * 0x9E3779B97F4A7C15ull ^ (uintptr_t)s->fs * 0xC2B2AE3D27D4EB4Full;
+    h ^= (ds ^ bl * 0x165667B19E3779F9ull ^ ((uint64_t)(uint32_t)s->color_fmt[0] << 32 | (uint32_t)s->depth_fmt) ^
+          (uint64_t)s->prim << 56 ^ (uint64_t)s->chmask.mask << 24 ^ (uint64_t)s->vattr[0] << 40 ^ s->vstream[0].stride) *
+         0xFF51AFD7ED558CCDull;
+    return (uint32_t)(h >> 54) & (PMT_N - 1);
+}
+
+// XCX_DYN_DELTA=0: every draw whose state differs from the previous draw's records all of its dynamic state; on, only
+// the commands whose values changed since the last ones recorded in this command buffer (about half of the draws
+// change state, mostly one or two of the 20-odd commands).
+static int dyn_delta_on(void) {
+    static int on = -1;
+    if (on < 0) on = cfg_bool("XCX_DYN_DELTA");
+    return on;
+}
+
 static int pipe_memo_on(void) {
     if (PM.on < 0) PM.on = cfg_bool("XCX_PIPE_MEMO");
     return PM.on;
@@ -1875,6 +1909,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     uint32_t gen = memo ? vk_texture_slots_gen() : 0;   // before shader_for, whose lookups may bump it
     if (memo && SM.valid && memo_match(ex, gen, &SM.k)) {
         vs = SM.vs, fs = SM.fs, has_vs = 1, has_fs = SM.has_fs;
+        BS.sm_hit++;
         if (memo == 2) {
             int hv, hf, wv, wf;
             const GfxShader *v2 = shader_for(ex, NVN_STAGE_VS, &hv, &wv, 0), *f2 = shader_for(ex, NVN_STAGE_FS, &hf, &wf, 0);
@@ -1882,9 +1917,11 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
                 rt_fatal("vk_exec: shader memo of program %llu differs from the lookup", (unsigned long long)ex->prog->serial);
         }
     } else {
+        const GfxShader *pvs = SM.vs, *pfs = SM.fs;
         SM.valid = 0;
         vs = shader_for(ex, NVN_STAGE_VS, &has_vs, &vs_wait, 0);
         fs = shader_for(ex, NVN_STAGE_FS, &has_fs, &fs_wait, 0);
+        if (vs == pvs && fs == pfs) BS.sm_same++;
         if (memo && vs && !vs_wait && !fs_wait && (!has_fs || fs))
             memo_key(ex, gen, &SM.k), SM.vs = vs, SM.fs = fs, SM.has_fs = has_fs, SM.valid = 1;
     }
@@ -1933,9 +1970,16 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     VkPipeline p;
     const char *why = NULL;
     uint64_t w0 = 0;
+    uint32_t pi = 0;
     if (pipe_memo_on() && PM.valid && !memcmp(&PM.s, &s, sizeof s)) {
         info = PM.info, pending = 0;
+        BS.pm_hit++;
         p = __atomic_load_n(&info->pipeline, __ATOMIC_ACQUIRE);
+    } else if (pipe_memo_on() && PMT[pi = pmt_idx(&s)].valid && !memcmp(&PMT[pi].s, &s, sizeof s)) {
+        info = PMT[pi].info, pending = 0;
+        BS.pmt_hit++;
+        p = __atomic_load_n(&info->pipeline, __ATOMIC_ACQUIRE);
+        PM.s = s, PM.info = info, PM.valid = p != VK_NULL_HANDLE;
     } else {
         w0 = t0 ? t0 : wait_ms ? kern_now_ns() : 0;   // the clock is read only for draws that may wait
         p = vk_pipeline_graphics_async(&s, &info, &pending, wait_ms);
@@ -1950,8 +1994,12 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
             if (!w0) w0 = kern_now_ns();
             p = vk_pipeline_graphics_async(&s, &info, &pending, ONESHOT_WAIT_MS);
         }
+        if (PM.valid && info == PM.info) BS.pm_same++;
         PM.valid = !pending && p && info;
-        if (PM.valid) PM.s = s, PM.info = info;
+        if (PM.valid) {
+            PM.s = s, PM.info = info;
+            if (pipe_memo_on()) PMT[pi].s = s, PMT[pi].info = info, PMT[pi].valid = 1;
+        }
     }
     uint64_t waited = w0 ? kern_now_ns() - w0 : 0;
     static int wait_logs;
@@ -1967,7 +2015,10 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (!p || !info) return warn_once(W_PIPELINE, "a graphics pipeline could not be created: draws with it are skipped"), 0;
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     if (!B.st_valid || memcmp(&B.st, &s, sizeof s)) {
-        vk_pipeline_set_dynamic(ex->cb, &s);
+        if (B.dyn_valid && dyn_delta_on()) vk_pipeline_set_dynamic_delta(ex->cb, &s, &B.dyn);
+        else vk_pipeline_set_dynamic(ex->cb, &s);
+        B.dyn = s, B.dyn_valid = 1;
+        BS.dyn_set++;
         ex->recorded++;
         B.st = s, B.st_valid = 1;
     }

@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <windows.h>
+#include <intrin.h>
 #include <bcrypt.h>
 #include <pdh.h>
 #include <pdhmsg.h>
@@ -106,6 +107,36 @@ uint64_t plat_thread_cpu_ns(uint32_t tid) {
              100;
     if (th) CloseHandle(th);
     return ns;
+}
+
+// GetThreadTimes advances in clock ticks (~15.6 ms), too coarse for one frame. QueryThreadCycleTime counts the
+// thread's CPU cycles; on the invariant time-stamp counter every x86-64-v3 CPU has, those are counter ticks, turned
+// into ns with the counter's rate, measured once against the performance counter over 20 ms (flight_init calls this
+// first for that). Handles stay open in a small table without a lock: the flight recorder (render thread) is the one
+// caller.
+uint64_t plat_thread_busy_ns(uint32_t tid) {
+    static struct { uint32_t tid; HANDLE h; } tab[8];
+    static double ns_per_cycle;
+    if (!tid) return 0;
+    if (!ns_per_cycle) {
+        LARGE_INTEGER f, a, b;
+        QueryPerformanceFrequency(&f);
+        QueryPerformanceCounter(&a);
+        uint64_t c0 = __rdtsc();
+        do QueryPerformanceCounter(&b); while ((double)(b.QuadPart - a.QuadPart) < f.QuadPart * 0.02);
+        uint64_t c1 = __rdtsc();
+        ns_per_cycle = (double)(b.QuadPart - a.QuadPart) * 1e9 / (double)f.QuadPart / (double)(c1 - c0);
+    }
+    HANDLE h = NULL;
+    for (int i = 0; i < 8 && !h; i++) {
+        if (tab[i].tid == tid) h = tab[i].h;
+        else if (!tab[i].tid) {
+            if (!(h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid))) return 0;
+            tab[i].tid = tid, tab[i].h = h;
+        }
+    }
+    ULONG64 cyc = 0;
+    return h && QueryThreadCycleTime(h, &cyc) ? (uint64_t)(cyc * ns_per_cycle) : 0;
 }
 
 // ---- thread interruption: SuspendThread, Get/SetThreadContext, ResumeThread.

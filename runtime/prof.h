@@ -4,6 +4,7 @@
 
 extern volatile uint32_t prof_render_tid;   // the thread that presents (perf_present)
 extern volatile uint32_t prof_main_tid;     // the guest main thread (perf_main_thread)
+extern volatile uint32_t prof_rec_tid;      // the recorder thread (vk_rec.c rec_main), sampled with the replay
 extern volatile uint32_t prof_replay_tid;   // the asynchronous replay (perf_replay_thread): its waits hold up the frame too
 
 // The sampler; perf.c's weak versions do nothing.

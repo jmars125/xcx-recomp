@@ -77,11 +77,12 @@
 # New GPU memory pools start zero-filled, as Switch memory does.
 # fix_zero = 1
 # Optimisations, 0 turns each off: skip bindings that did not change, remember shader lookups, reuse the previous
-# draw's pipeline when its state repeats, remember texture descriptors between draws, update descriptors in bulk,
-# skip push constants that did not change.
+# draw's pipeline (or a recent one) when its state repeats, record only the dynamic state that changed, remember
+# texture descriptors between draws, update descriptors in bulk, skip push constants that did not change.
 # bind_skip = 1
 # shader_memo = 1
 # pipe_memo = 1
+# dyn_delta = 1
 # tex_memo = 1
 # desc_template = 1
 # push_skip = 1

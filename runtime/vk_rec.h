@@ -26,6 +26,11 @@ void rec_stats_log(void);             // XCX_TRACE=perf: packets, bytes, drains 
 // Extension commands called through device function pointers.
 void rec_push_tpl(PFN_vkCmdPushDescriptorSetWithTemplateKHR fn, VkCommandBuffer cb, VkDescriptorUpdateTemplate tpl,
                   VkPipelineLayout layout, uint32_t set, const void *data, uint32_t bytes);   // data: bytes read by tpl
+// vkUpdateDescriptorSetWithTemplate of a set that cb binds later, made by the recorder ahead of that bind when it records
+// cb (the driver's write is a large part of a draw's descriptor work); a set's host access is the recorder's alone
+// from here until cb completes. Otherwise at once.
+void rec_update_tpl(PFN_vkUpdateDescriptorSetWithTemplate fn, VkCommandBuffer cb, VkDevice dev, VkDescriptorSet set,
+                    VkDescriptorUpdateTemplate tpl, const void *data, uint32_t bytes);   // data: bytes read by tpl
 void rec_push(PFN_vkCmdPushDescriptorSetKHR fn, VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipelineLayout layout,
               uint32_t set, uint32_t n, const VkWriteDescriptorSet *w);
 void rec_vertex_input(PFN_vkCmdSetVertexInputEXT fn, VkCommandBuffer cb, uint32_t nb,

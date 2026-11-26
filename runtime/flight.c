@@ -19,6 +19,7 @@
 #include "vk.h"
 #include "vk_exec.h"
 #include "platform/platform.h"
+#include "prof.h"
 
 #define FLIGHT_POST 30                 // presents recorded after the trigger before the dump starts
 #define FLIGHT_SPIKE_GAP_NS 10000000000ull
@@ -36,6 +37,7 @@ _Static_assert(PERF_CNT_N == 12, "count_names follows the PERF_CNT_* list");
 typedef struct {
     uint64_t frame, t_ns;
     uint32_t interval_us, blocked_us[PERF_N], n[C_N];
+    uint32_t busy_us[2];   // CPU time of the replay and recorder threads since the previous present
 } Rec;
 
 typedef struct {
@@ -58,6 +60,7 @@ static int n_at;
 static char base_dir[PLAT_PATH_MAX];
 static uint64_t prev_cnt[PERF_CNT_N], prev_xlated;
 static VkExecFrame prev_exec;
+static uint64_t prev_busy[2];
 static volatile uint64_t cost_ns, cost_max_ns;   // render-thread time in flight_frame, for the dump log line
 
 static unsigned env_u(const char *name, unsigned def) {
@@ -90,6 +93,7 @@ void flight_init(void) {
     if (!plat_full_path(tmp, base_dir, sizeof base_dir)) snprintf(base_dir, sizeof base_dir, "%s", tmp);
     thumbs_on = env_u("XCX_FLIGHT_THUMBS", 1) != 0;
     if (thumbs_on) vk_thumbs_enable(ring_n);
+    plat_thread_busy_ns(plat_thread_id());   // its one-time calibration (20 ms) here, not in a recorded frame
     flight_on = 1;
     rt_log("flight: on: last %d frames, %s; dump on F8, on a frame over %llu ms (one per 10 s)%s, to %s", ring_n,
            thumbs_on ? "thumbnails 320x180" : "no thumbnails", (unsigned long long)(spike_ns / 1000000),
@@ -273,13 +277,13 @@ static void dump_main(void *arg) {
     fprintf(f, "frame\tt_ms\tinterval_ms");
     for (int k = 0; k < PERF_N; k++) fprintf(f, "\t%s", blocked_names[k]);
     for (int k = 0; k < C_N; k++) fprintf(f, "\t%s", count_names[k]);
-    fprintf(f, "\tthumb\n");
+    fprintf(f, "\treplay_cpu_ms\trec_cpu_ms\tthumb\n");
     for (int i = 0; i < j->n; i++) {
         const Rec *r = &j->r[i];
         fprintf(f, "%llu\t%.1f\t%.2f", (unsigned long long)r->frame, r->t_ns / 1e6, r->interval_us / 1000.0);
         for (int k = 0; k < PERF_N; k++) fprintf(f, "\t%.2f", r->blocked_us[k] / 1000.0);
         for (int k = 0; k < C_N; k++) fprintf(f, "\t%u", r->n[k]);
-        fprintf(f, "\t%d\n", have ? have[i] : 0);
+        fprintf(f, "\t%.2f\t%.2f\t%d\n", r->busy_us[0] / 1000.0, r->busy_us[1] / 1000.0, have ? have[i] : 0);
     }
     fclose(f);
     rt_log("flight: dump %s: %s at frame %llu (%.1f ms), frames %llu-%llu, %d thumbnails, written in %llu ms; "
@@ -341,6 +345,16 @@ void flight_frame(uint64_t frame, uint64_t now_ns, uint64_t interval_ns, const u
     gfx_shader_counts(&keys, &xlated);
     r->n[C_XLATED] = (uint32_t)(xlated - prev_xlated);
     prev_xlated = xlated;
+    // The draw path's own CPU time (prof.h's thread ids): the thread that replays (the replay thread with replay_async,
+    // else the render thread, which then also does its own work) and the recorder (0 without it). With the replay ahead
+    // of the render thread drain_ms is 0, so this is what tells the cost per draw in an ordinary frame. The replay
+    // thread's time lags a frame behind the counts.
+    uint32_t tids[2] = {prof_replay_tid ? prof_replay_tid : prof_render_tid, prof_rec_tid};
+    for (int k = 0; k < 2; k++) {
+        uint64_t b = plat_thread_busy_ns(tids[k]);
+        r->busy_us[k] = prev_busy[k] && b >= prev_busy[k] ? (uint32_t)((b - prev_busy[k]) / 1000) : 0;
+        prev_busy[k] = b;
+    }
     for (int k = 0; k < PERF_CNT_N; k++) {
         uint64_t v = (uint64_t)__atomic_load_n(&counts[k], __ATOMIC_RELAXED);
         r->n[C_PERF0 + k] = (uint32_t)(v - prev_cnt[k]);

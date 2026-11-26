@@ -2,11 +2,12 @@
 // A host thread wakes every 1 ms and, for every other thread, suspends it, reads Rip and resumes it. The sampler never
 // allocates or takes a lock between SuspendThread and ResumeThread and never runs guest code. The profile is text:
 //   xcx-prof 1 / base <hex> / period_us / samples N / thread <tid> <samples> <in-exe samples> / module <base> <size> <path> /
-//   rip <hex> <count> (the top PROF_TOP Rips) / stack <count> <rip> <caller> ... (XCX_PROFILE_RENDER or
-//   XCX_PROFILE_CHAINS only, the top PROF_STACKS call chains)
-// With XCX_PROFILE_RENDER (the render thread) or XCX_PROFILE_CHAINS=1 (every thread, chains of all threads summed: for
-// short frame ranges, as each sample copies a stack) the sampler also copies up to STK_COPY bytes of the suspended
-// thread's stack and, after
+//   rip <hex> <count> (the top PROF_TOP Rips) / stack <count> <rip> <caller> ... (XCX_PROFILE_RENDER, XCX_PROFILE_MAIN,
+//   XCX_PROFILE_REPLAY or XCX_PROFILE_CHAINS only, the top PROF_STACKS call chains)
+// With XCX_PROFILE_RENDER (the render thread), XCX_PROFILE_REPLAY (the draw path: the replay thread, or the render
+// thread without replay_async, and the recorder thread) or XCX_PROFILE_CHAINS=1 (every thread, chains of all threads
+// summed: for short frame ranges, as each sample copies a stack) the sampler also copies up to STK_COPY bytes of the
+// suspended thread's stack and, after
 // ResumeThread, unwinds the copy with the .pdata tables (RtlVirtualUnwind), so it takes no lock while the thread is
 // suspended. The unwind stops at the first frame outside the copy; deeper callers are cut.
 // XCX_PROFILE_SLOW=<ms> keeps every thread's chains of the last half second in a ring (a thread outside the exe, mostly
@@ -61,7 +62,9 @@ static volatile LONG stop, written;
 static uintptr_t exe_lo, exe_hi;
 static int only_render;             // XCX_PROFILE_RENDER=1: sample the render thread only
 static int only_main;               // XCX_PROFILE_MAIN=1: sample the guest main thread only
-static int chains;                  // call chains are kept: XCX_PROFILE_RENDER or XCX_PROFILE_CHAINS
+static int only_replay;             // XCX_PROFILE_REPLAY set: sample the draw path's threads only (the replay, or the
+                                    // render thread without replay_async, and the recorder)
+static int chains;                  // call chains are kept: XCX_PROFILE_RENDER, _MAIN, _REPLAY or XCX_PROFILE_CHAINS
 static volatile uint64_t cur_frame; // last presented frame
 static uint64_t frame_lo, frame_hi; // XCX_PROFILE_FRAMES=<lo>-<hi>: sample only while presents lo..hi-1 are pending
 static int64_t world_lo, world_hi;  // XCX_PROFILE_FRAMES=w<lo>-<hi>: only while the world clock is in [lo, hi) s (us)
@@ -233,7 +236,8 @@ static DWORD WINAPI sampler_main(void *arg) {
         uint64_t now = slow_ns ? kern_now_ns() : 0;
         for (int i = 0; i < n_threads; i++) {
             ThreadSlot *t = &threads[i];
-            if ((only_render && t->tid != render_tid) || (only_main && t->tid != main_tid)) continue;
+            if ((only_render && t->tid != render_tid) || (only_main && t->tid != main_tid) ||
+                (only_replay && t->tid != (replay_tid ? replay_tid : render_tid) && t->tid != prof_rec_tid)) continue;
             uint64_t cyc = 0;
             if (slow_ns && t->depth && QueryThreadCycleTime(t->h, &cyc) && cyc == t->cycles) {   // still waiting
                 Sample *s = &ring[ring_n++ & (SLOW_RING - 1)];
@@ -336,10 +340,11 @@ int prof_sampler_start(void) {
     }
     only_render = cfg_get("XCX_PROFILE_RENDER") != NULL;
     only_main = !only_render && cfg_get("XCX_PROFILE_MAIN") != NULL;
+    only_replay = !only_render && !only_main && cfg_get("XCX_PROFILE_REPLAY") != NULL;
     const char *ch = cfg_get("XCX_PROFILE_CHAINS");
     const char *sl = cfg_get("XCX_PROFILE_SLOW");
     slow_ns = sl && atoi(sl) > 0 ? (uint64_t)atoi(sl) * 1000000ull : 0;
-    chains = only_render || only_main || slow_ns || (ch && *ch && strcmp(ch, "0"));
+    chains = only_render || only_main || only_replay || slow_ns || (ch && *ch && strcmp(ch, "0"));
     const char *fr = cfg_get("XCX_PROFILE_FRAMES");
     double wl, wh;
     if (fr && fr[0] == 'w' && sscanf(fr + 1, "%lf-%lf", &wl, &wh) == 2 && wl >= 0 && wl < wh)
