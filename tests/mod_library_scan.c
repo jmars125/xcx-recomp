@@ -25,6 +25,7 @@ int main(int argc, char **argv) {
     rescan();
     for (int i = 0; i < view.nnotes; i++) printf("note %d %s\n", view.notes[i].error, view.notes[i].text);
     for (int i = 0; i < view.count; i++) printf("row %s %s %s\n", view.rows[i].id, view.rows[i].kind, view.rows[i].name);
+    printf("hidden %d\n", view.hidden);
     if (argc > 2) {
         char out[4200] = "";
         romfs_mods_set(argv[1], 1);

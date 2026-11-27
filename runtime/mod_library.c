@@ -37,6 +37,8 @@ typedef struct { char name[32]; char sha256[65]; uint64_t size; } LuaFile;
 typedef struct {
     ModLibRow row;
     char url[400], sha256[65], path[128];
+    char download[16], archive[16];   // "manual" / "zip", "rar": entries of index format 3 this list can't install
+    int has_parts;
     int nfiles;
     LuaFile files[LUA_FILES];
 } Entry;
@@ -59,7 +61,8 @@ static void set_message(int error, const char *fmt, const char *a, const char *b
 
 static int valid_id(const char *id) {
     size_t n = strlen(id);
-    if (!n || n > 64 || !islower((unsigned char)id[0])) return 0;
+    // no dot at the end: Windows drops it, so "a." would be the folder of mod "a"
+    if (!n || n > 64 || !islower((unsigned char)id[0]) || id[n - 1] == '.') return 0;
     for (size_t i = 0; i < n; i++)
         if (!islower((unsigned char)id[i]) && !isdigit((unsigned char)id[i]) && !strchr("._-", id[i])) return 0;
     return 1;
@@ -218,6 +221,8 @@ static void entry(Json *j, Entry *e) {
         STR("id", r->id) STR("kind", r->kind) STR("name", r->name) STR("author", r->author)
         STR("description", r->description) STR("notes", r->notes) STR("homepage", r->homepage)
         STR("version", r->version) STR("url", e->url) STR("sha256", e->sha256) STR("path", e->path)
+        STR("download", e->download) STR("archive", e->archive)
+        else if (!strcmp(key, "parts")) { e->has_parts = 1; skip(j, 2); }
         else if (!strcmp(key, "size")) { if (!number(j, &r->size)) skip(j, 2); }
         else if (!strcmp(key, "files")) lua_files(j, e);
         else skip(j, 2);
@@ -226,12 +231,17 @@ static void entry(Json *j, Entry *e) {
     if (!eat(j, '}')) j->bad = 1;
 }
 
-// Whether an entry is complete enough to install, by the rules of installer/mods.py.
+// Whether an entry is complete enough to install, by the rules of installer/mods.py. This list downloads one zip per
+// mod and unpacks it itself (mod_zip.c), so it refuses what only XCX Setup installs: a mod downloaded from its own
+// page ("download": "manual"), a mod in parts, and an archive other than zip. The library keeps those out of
+// index.json (format 2) and lists them in index-3.json, which this list doesn't read; the check is for an index
+// given by hand (XCX_MOD_INDEX) or a mistake in the library.
 static int usable(const Entry *e) {
     const ModLibRow *r = &e->row;
     if (!valid_id(r->id)) return 0;
     if (!strcmp(r->kind, "romfs"))
-        return valid_sha(e->sha256) && r->size && (!strncmp(e->url, "https://", 8) ||
+        return !e->download[0] && !e->has_parts && (!e->archive[0] || !strcmp(e->archive, "zip")) &&
+               valid_sha(e->sha256) && r->size && (!strncmp(e->url, "https://", 8) ||
                (!strncmp(e->url, "file:", 5) && getenv("XCX_MOD_TEST_FILES")));
     if (!strcmp(r->kind, "lua")) {
         if (!e->nfiles || e->nfiles > LUA_FILES || !e->path[0] || strstr(e->path, "..")) return 0;
@@ -619,12 +629,12 @@ static void normalise(void) {
     plat_mutex_unlock(&lock);
 }
 
-typedef struct { ModLibRow *rows; int n, cap; } Scan;
+typedef struct { ModLibRow *rows; int n, cap, over; } Scan;   // over: mods past cap, not listed
 
 static int scan_entry(const char *name, int kind, uint64_t size, void *ctx) {
     (void)size;
     Scan *s = ctx;
-    if (kind != PLAT_FS_DIR || !valid_id(name) || s->n >= s->cap) return 1;
+    if (kind != PLAT_FS_DIR || !valid_id(name)) return 1;
     char dir[4200], path[4300];
     join(dir, sizeof dir, root(), name);
     ModLibRow r = {0};
@@ -634,6 +644,10 @@ static int scan_entry(const char *name, int kind, uint64_t size, void *ctx) {
     snprintf(path, sizeof path, "%s/mod.ini", dir);
     if (!r.kind[0] && plat_fs_kind(path) == PLAT_FS_FILE) strcpy(r.kind, "lua");
     if (!r.kind[0]) return 1;
+    if (s->n >= s->cap) {   // counted, so the tab can say some are not listed
+        s->over++;
+        return 1;
+    }
     snprintf(r.name, sizeof r.name, "%s", name);
     snprintf(path, sizeof path, "%s/library.ini", dir);
     uint64_t sz = 0;
@@ -642,6 +656,9 @@ static int scan_entry(const char *name, int kind, uint64_t size, void *ctx) {
         ini_value(ini, "name", r.name, sizeof r.name);
         ini_value(ini, "author", r.author, sizeof r.author);
         ini_value(ini, "version", r.version, sizeof r.version);
+        ini_value(ini, "group", r.group, sizeof r.group);
+        ini_value(ini, "group_name", r.group_name, sizeof r.group_name);
+        if (!valid_id(r.group)) r.group[0] = 0;
         free(ini);
     }
     r.installed = 1;
@@ -658,12 +675,16 @@ static int by_name(const void *a, const void *b) {
 // The view's rows from the index and the folder: library entries first, then mods only on disk.
 static void rescan(void) {
     static ModLibRow have[MODLIB_ROWS];
-    Scan s = {have, 0, MODLIB_ROWS};
+    Scan s = {have, 0, MODLIB_ROWS, 0};
     if (root()) plat_fs_list(root(), scan_entry, &s);
     static ModLibRow rows[MODLIB_ROWS];
-    int n = 0;
+    int n = 0, hidden = s.over;
     plat_mutex_lock(&lock);
-    for (int i = 0; i < index_count && n < MODLIB_ROWS; i++) {
+    for (int i = 0; i < index_count; i++) {
+        if (n >= MODLIB_ROWS) {
+            hidden++;
+            continue;
+        }
         ModLibRow r = index_entries[i].row;
         for (int k = 0; k < s.n; k++)
             if (!strcmp(have[k].id, r.id)) {
@@ -674,11 +695,16 @@ static void rescan(void) {
             }
         rows[n++] = r;
     }
-    for (int k = 0; k < s.n && n < MODLIB_ROWS; k++)
-        if (have[k].id[0]) rows[n++] = have[k];
+    for (int k = 0; k < s.n; k++)
+        if (have[k].id[0]) {
+            if (n < MODLIB_ROWS) rows[n++] = have[k];
+            else hidden++;
+        }
     qsort(rows, (size_t)n, sizeof *rows, by_name);
     memcpy(view.rows, rows, (size_t)n * sizeof *rows);
     view.count = n;
+    if (hidden && hidden != view.hidden) rt_log("mod library: %d mods not listed (the list holds %d)", hidden, MODLIB_ROWS);
+    view.hidden = hidden;
     publish_locked();
     plat_mutex_unlock(&lock);
 }

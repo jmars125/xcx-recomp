@@ -14,7 +14,8 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     runtime/   libxcxrt.a and libxcxrt-v2.a (build_game.py --make-runtime-lib with llvm/, --cpu x86-64-v3 and -v2), the
                runtime headers, romfs.c, patches.c, ov_zstd.c and mod_menu_adapter.c (compiled per install),
                deps/ (headers and import libraries of SDL3, Opus, libvpx, Vulkan and VMA)
-    bin/       xcx_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
+    bin/       xcx_xlate.exe (+ .id), hactool.exe, xcx-unpack.exe (tools/build_unpack.py), SDL3.dll (upstream),
+               libopus-0.dll, ninja.exe
     recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, docs/mods/, public API references and examples/mods/hello/
     VERSION    the repository's VERSION plus the commit, 0.1.0+973c626 (VERSION alone outside a git checkout); the
                installer's release string
@@ -493,6 +494,17 @@ def build_launcher(out, llvm):
          ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'XCX-Setup.exe'], env=env)
 
 
+def build_unpack_tool(out, llvm):
+    """bin/xcx-unpack.exe, the mod manager's RAR reader (tools/build_unpack.py), and libarchive's licence. Built even
+    with --from: an earlier release may have none."""
+    import build_unpack
+    exe = build_unpack.build(llvm / 'bin' / 'clang.exe', out / 'bin' / 'xcx-unpack.exe',
+                             env=clean_env(llvm / 'bin'))
+    build_unpack.smoke(exe)
+    build_unpack.copy_license(out / 'licenses')
+    print(f'xcx-unpack: {exe.stat().st_size} bytes, reads the RAR5 test archives and refuses a symlink')
+
+
 # ---- checks ----------------------------------------------------------------------------------------------------------
 
 def check_folder(out):
@@ -613,6 +625,7 @@ def main():
     runtime_lib(out, llvm)
     build_sources(out)
     build_launcher(out, llvm)
+    build_unpack_tool(out, llvm)
     if not args.src:
         collect_licenses(out)
     check_folder(out)

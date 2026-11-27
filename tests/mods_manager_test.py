@@ -35,7 +35,9 @@ NOT_MODS = ('Readme Only/readme.txt', 'Two/a/romfs/x', 'Two/b/romfs/y', 'Other/0
 
 
 def clang():
-    found = shutil.which('clang') or ('C:/msys64/ucrt64/bin/clang.exe' if os.name == 'nt' else None)
+    # XCX_CLANG may be a path or a name on PATH (CI's Linux job gives just 'clang')
+    found = shutil.which(os.environ.get('XCX_CLANG', '')) or os.environ.get('XCX_CLANG') or shutil.which('clang') or \
+        ('C:/msys64/ucrt64/bin/clang.exe' if os.name == 'nt' else None)
     return found if found and Path(found).is_file() else None
 
 
@@ -65,22 +67,22 @@ class ModsTest(unittest.TestCase):
 
     def test_layouts(self):
         # romfs/<path>, romfs/mod/<path> (the XCXDE mod loader) and a top folder; exefs is left out
-        mods.add_zip(self.dest, self.zip(['romfs/chr/np/a.wimdo', 'exefs/subsdk9']), 'plain')
+        mods.add_archive(self.dest, self.zip(['romfs/chr/np/a.wimdo', 'exefs/subsdk9']), 'plain')
         self.assertEqual(self.files('plain'), ['chr/np/a.wimdo'])
-        mods.add_zip(self.dest, self.zip(['My Mod/romfs/mod/bdat/common.bdat', 'My Mod/readme.txt']), 'loader')
+        mods.add_archive(self.dest, self.zip(['My Mod/romfs/mod/bdat/common.bdat', 'My Mod/readme.txt']), 'loader')
         self.assertEqual(self.files('loader'), ['bdat/common.bdat'])
 
     def test_rejects(self):
         for names, error in ((['readme.txt'], 'mods.zip_no_romfs'), (['../romfs/x'], 'mods.zip_unsafe'),
                              (['romfs/A.bin', 'romfs/a.bin'], 'mods.zip_duplicate')):
             with self.assertRaises(mods.ModError) as e:
-                mods.add_zip(self.dest, self.zip(names), 'bad')
+                mods.add_archive(self.dest, self.zip(names), 'bad')
             self.assertEqual(e.exception.id, error)
             self.assertFalse((self.dest / 'mods' / 'bad').exists())
 
     def test_info_for_the_game(self):
         # <id>/library.ini, shared with the game's F1 menu (runtime/mod_library.c)
-        mods.add_zip(self.dest, self.zip(['romfs/x.bin']), 'named', name='Potato\nTatsu')
+        mods.add_archive(self.dest, self.zip(['romfs/x.bin']), 'named', name='Potato\nTatsu')
         info = mods.read_info(self.dest / 'mods' / 'named')
         self.assertEqual((info['name'], info['kind'], info['source']), ('Potato Tatsu', 'romfs', 'zip'))
         self.assertEqual(self.files('named'), ['x.bin'])
@@ -91,15 +93,17 @@ class ModsTest(unittest.TestCase):
     def test_ids_from_file_names(self):
         path = Path(self.tmp.name) / 'Tatsu Potato v1.zip'
         make_zip(path, ['romfs/x.bin'])
-        self.assertEqual(mods.add_zip(self.dest, path), 'tatsu-potato-v1')
+        self.assertEqual(mods.add_archive(self.dest, path), 'tatsu-potato-v1')
 
     def test_lists(self):
         for mid in ('one', 'two'):
-            mods.add_zip(self.dest, self.zip(['romfs/x.bin']), mid)
+            mods.add_archive(self.dest, self.zip(['romfs/x.bin']), mid)
         lst = self.dest / 'mods' / 'romfs-enabled.txt'
         mods.set_enabled(self.dest, 'one', True)
         mods.set_enabled(self.dest, 'two', True)
-        self.assertEqual(lst.read_text(), 'two\none\n')   # the one turned on last wins
+        self.assertEqual(lst.read_text(), 'one\ntwo\n')   # the one turned on later goes last, at the lowest priority
+        mods.set_enabled(self.dest, 'one', True)
+        self.assertEqual(lst.read_text(), 'one\ntwo\n')   # turning on a mod that is on keeps its place
         mods.set_enabled(self.dest, 'two', False)
         self.assertEqual(lst.read_text(), 'one\n')
         mods.remove(self.dest, 'one')
@@ -145,16 +149,33 @@ class ModsTest(unittest.TestCase):
         self.assertTrue((self.dest / 'mods' / 'Two' / 'a' / 'romfs' / 'x').is_file())   # left as it was
 
     @unittest.skipUnless(clang(), 'needs clang (MSYS2 UCRT64)')
+    def scan_exe(self):
+        """tests/mod_library_scan.c built against runtime/mod_library.c (through romfs_mods.c's include of it)."""
+        exe = Path(self.tmp.name) / 'mod_library_scan.exe'
+        plat = 'win32' if os.name == 'nt' else 'linux'
+        libs = ['-lwinmm', '-lbcrypt'] if os.name == 'nt' else ['-lpthread', '-lm', '-ldl']
+        rt = ROOT / 'runtime'
+        stub = []
+        if os.name != 'nt':
+            # linux.c's one SDL call (the clipboard), declared and defined here: the test needs no SDL3 package
+            sdl = Path(self.tmp.name) / 'sdl'
+            (sdl / 'SDL3').mkdir(parents=True)
+            (sdl / 'SDL3' / 'SDL_clipboard.h').write_text(
+                '#include <stdbool.h>\nbool SDL_SetClipboardText(const char *t);\n')
+            (sdl / 'sdl_stub.c').write_text(
+                '#include <SDL3/SDL_clipboard.h>\nbool SDL_SetClipboardText(const char *t) { (void)t; return false; }\n')
+            # sha256.c asks __builtin_cpu_supports("sha"), which Ubuntu 24.04's clang 18 doesn't know ("invalid cpu
+            # feature string"); the release builds with its own newer clang. The scan needs no SHA instructions, so it takes the C path.
+            stub = [f'-I{sdl}', str(sdl / 'sdl_stub.c'), '-D__builtin_cpu_supports(feature)=0']
+        subprocess.run([clang(), '-O1', '-w', '-std=gnu11', f'-I{rt}', f'-I{rt / "platform"}', *stub,
+                        str(ROOT / 'tests/mod_library_scan.c'), str(rt / 'romfs_mods.c'), str(rt / f'platform/{plat}.c'),
+                        str(rt / 'platform/common.c'), str(rt / 'sha256.c'), *libs, '-o', str(exe)], check=True)
+        return exe
+
     def test_game_reads_the_folder_the_same_way(self):
         # runtime/mod_library.c, normalise, on one copy and normalise here on another: the same files end up in the
         # same places, the same folders are named, and romfs_mods.c finds a moved mod's file once it is on
-        exe = Path(self.tmp.name) / 'mod_library_scan.exe'
-        plat = 'win32' if os.name == 'nt' else 'linux'
-        libs = ['-lwinmm', '-lbcrypt'] if os.name == 'nt' else ['-lpthread', '-lm']
-        rt = ROOT / 'runtime'
-        subprocess.run([clang(), '-O1', '-w', f'-I{rt}', f'-I{rt / "platform"}', str(ROOT / 'tests/mod_library_scan.c'),
-                        str(rt / 'romfs_mods.c'), str(rt / f'platform/{plat}.c'), str(rt / 'platform/common.c'),
-                        str(rt / 'sha256.c'), *libs, '-o', str(exe)], check=True)
+        exe = self.scan_exe()
         self.put(*HAND_PLACED, *NOT_MODS)
         game = Path(self.tmp.name) / 'game'
         shutil.copytree(self.dest / 'mods', game)
@@ -177,11 +198,22 @@ class ModsTest(unittest.TestCase):
         self.assertEqual(lookup[1], '1')
         self.assertTrue(lookup[2].replace(chr(92), '/').endswith('/unburger-patch/romfs/bdat/a.bdat'))
 
+    def test_mods_past_the_game_list_are_counted(self):
+        # the game's list holds MODLIB_ROWS (64) rows; the rest are not dropped without a word: the tab says how many
+        exe = self.scan_exe()
+        game = Path(self.tmp.name) / 'many'
+        for i in range(70):
+            (game / f'mod{i:02d}' / 'romfs' / 'bdat').mkdir(parents=True)
+        out = subprocess.run([str(exe)], env=dict(os.environ, XCX_MOD_DIR=str(game)), capture_output=True, text=True,
+                             encoding='utf-8', check=True).stdout.splitlines()
+        self.assertEqual(sum(line.startswith('row ') for line in out), 64)
+        self.assertIn('hidden 6', out)
+
     def test_zip_for_another_game(self):
         with self.assertRaises(mods.ModError) as e:
-            mods.add_zip(self.dest, self.zip(['atmosphere/contents/0100000000010000/romfs/x.bin']), 'other')
+            mods.add_archive(self.dest, self.zip(['atmosphere/contents/0100000000010000/romfs/x.bin']), 'other')
         self.assertEqual(e.exception.id, 'mods.zip_other_game')
-        mods.add_zip(self.dest, self.zip(['atmosphere/contents/0100453019AA8000/romfs/x.bin']), 'ours')
+        mods.add_archive(self.dest, self.zip(['atmosphere/contents/0100453019AA8000/romfs/x.bin']), 'ours')
         self.assertEqual(self.files('ours'), ['x.bin'])
 
     def test_slug(self):

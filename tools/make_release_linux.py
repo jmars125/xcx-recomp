@@ -18,7 +18,8 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
                runtime headers, romfs.c, patches.c, ov_zstd.c and mod_menu_adapter.c (compiled per install),
                xcx.png (the window icon), deps/ (Vulkan headers 1.4.363, VMA, zstd
                built static; SDL3, Opus and libvpx come from the sysroot)
-    bin/       xcx_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)
+    bin/       xcx_xlate (+ .id), hactool, ninja, xcx-unpack (tools/build_unpack.py), libSDL3.so.0 (the sysroot's;
+               the game finds it beside itself)
     recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example, docs/mods/, public API references and examples/mods/hello/, VERSION
     AppRun, xcx-setup.desktop, xcx-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
@@ -198,6 +199,10 @@ def build_bin(out, llvm, sysroot):
     run([sys.executable, ROOT / 'tools' / 'build_xlate.py', '--out', xl, '--llvm', llvm, '--sysroot', sysroot])
     shutil.copy2(xl / 'xcx_xlate', b / 'xcx_xlate')
     shutil.copy2(xl / 'xcx_xlate.id', b / 'xcx_xlate.id')
+    import build_unpack   # bin/xcx-unpack, the mod manager's RAR reader, against the release's glibc
+    exe = build_unpack.build(llvm / 'bin' / 'clang', b / 'xcx-unpack',
+                             ['--target=x86_64-linux-gnu', f'--sysroot={sysroot}', '-fuse-ld=lld'])
+    build_unpack.smoke(exe)
     sdl = (sysroot / 'usr' / 'lib' / 'x86_64-linux-gnu' / 'libSDL3.so.0').resolve()
     shutil.copy2(sdl, b / 'libSDL3.so.0')
 
@@ -383,6 +388,8 @@ def build_python(out, llvm, sysroot):
 
 def collect_licenses(out, sysroot):
     lic = out / 'licenses'
+    import build_unpack
+    build_unpack.copy_license(lic)
     lic.mkdir(parents=True, exist_ok=True)
     doc = sysroot / 'usr' / 'share' / 'doc'
     pairs = [
